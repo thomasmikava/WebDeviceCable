@@ -1,0 +1,19 @@
+WebDeviceCable WDC monogram
+Mode: built-in image_gen tool, revised from the initial W-only image.
+Asset: webdevicecable-logo-wdc.png
+Format: transparent RGBA PNG.
+Concept: W above D and C, with consistent heavy rounded geometry.
+
+Exact generation prompt:
+
+Use case: logo-brand
+Asset type: revised PNG logo for WebDeviceCable, vector-friendly and recognizable at small sizes.
+Input image: style reference only. The earlier logo showed only W; redesign it to prominently contain all THREE letters W, D, and C.
+Primary request: create one bold compact geometric WDC monogram. Use a square, balanced arrangement: a broad W in the upper half, D and C clearly readable side by side in the lower half, read in order W then D then C. Make the three letters form one cohesive visual identity with consistent heavy weight, softly rounded corners, generous counters, and clean open gaps. Each letter must remain unmistakably recognizable; no overlapping or hiding letters. Give the C a wide open mouth so it cannot read as an O, and give the D a large simple counter.
+Project context: a local cable connecting web apps with programs on the user's own device. Suggest the cable through the continuous, thick rounded geometry of the lettering, while prioritizing clear WDC readability. Remove the two large plug illustrations from the reference so all three letters have space.
+Style/medium: extremely simple flat vector-like logo, crisp geometric contours, few smooth paths, one fully opaque solid near-black ink #101213, no variation within the fill. It must be easy to recreate as SVG.
+Composition: exactly one centered isolated monogram on a square canvas, even clear space on all sides, approximately 80% canvas coverage. Strong recognizable overall silhouette.
+Text (verbatim): "WDC". Exactly these three uppercase Latin letters: W, D, C. No other text.
+Backdrop: genuinely transparent background and transparent letter counters.
+Constraints: all three letters should read at 32x32 pixels; bold shapes and generous negative space; no thin strokes, no ornamental details.
+Avoid: lone W, missing D or C, extra letters, regular font wordmark, interlocking illegible glyphs, overlapping strokes, separate cable or plug pictograms, gradients, translucent ink, highlights, shadows, glow, texture, 3D, mockups, enclosing tile, borders, AI sparkles, watermark, presentation sheets, multiple variations.

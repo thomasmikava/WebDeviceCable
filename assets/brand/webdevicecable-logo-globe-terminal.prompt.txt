@@ -1,0 +1,22 @@
+WebDeviceCable half-globe / half-terminal logo
+Mode: built-in image_gen tool.
+Asset: webdevicecable-logo-globe-terminal.png
+Format: transparent RGBA PNG.
+Concept: one circular outline enclosing a sparse half-globe grid on the left and a terminal prompt on the right, with horizontal WDC underneath.
+
+Exact generation prompt:
+
+Use case: logo-brand
+Asset: a simple, distinctive circular logo symbol with WDC underneath, for WebDeviceCable.
+Meaning: the web and the local terminal meet on the user's device.
+Primary design: ONE perfect circular emblem, split vertically into a LEFT HALF-GLOBE and a RIGHT HALF-TERMINAL. The user specifically wants a half-globe/half-terminal idea with an overall circular silhouette.
+Left hemisphere: a minimal globe grid, reduced to one broad curved meridian and one horizontal equator inside the left half of the outer circle. At most these two grid lines plus a simple central diameter. Thick clean strokes, generous open cells; no continents.
+Right hemisphere: a simple terminal prompt ">_" inside the right half of the SAME circle. Use a large bold chevron and a short sturdy underscore, leaving substantial negative space. The circle's right boundary is the terminal's outer boundary; do not add a rectangular window or screen around it.
+Unification: the globe and terminal share one uninterrupted circular outer ring and one consistent structural weight. They should read as two halves of a single designed symbol, with balanced visual mass and a clear web-to-local-program meaning. Keep the construction strikingly economical: circle, two globe grid strokes, center split, terminal prompt. No other graphics. Do not draw a detailed spherical globe.
+Style: flat, geometric, precise, confident brand symbol; broad negative spaces, bold uniform strokes with clean rounded ends, no fine detail. Very easy to recreate as SVG.
+Layout: circular symbol centered above the horizontal uppercase initials "WDC". All three letters equal cap height and weight. Heavy clean geometric sans lettering. WDC is secondary, approximately 22% of the circle's height, optical width approximately equal to circle diameter. Use a clear gap between circle and letters. Complete composition centered within a square canvas with balanced margins. The circular SYMBOL must remain truly circular.
+Palette: one fully opaque solid near-black #101213, no gradients or fill variations.
+Background: genuinely transparent everywhere outside the mark and inside the negative spaces.
+Text (verbatim): "WDC" under the emblem; terminal prompt ">_" inside the right semicircle. No other text.
+Small-size requirement: circular symbol clear at 32x32 pixels, whole logo clear at 48x48 pixels. Large globe cells and a strong terminal chevron; thin grid lines are forbidden.
+Avoid: separate globe and terminal icons, two circles, rectangular screens, laptops, cables or plugs, browser toolbar details, tiny dots, dense latitude/longitude mesh, continents, shading, three-dimensional sphere, chain links, arrows between icons, extra letter monogram, decorative details, gradients, texture, glow, shadows, 3D, mockups, presentation sheet, multiple alternatives, watermark.

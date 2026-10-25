@@ -1,0 +1,21 @@
+WebDeviceCable browser-connector logo with WDC underneath
+Mode: built-in image_gen tool.
+Asset: webdevicecable-logo-symbol-wdc.png
+Format: transparent RGBA PNG.
+Concept: a tab-shaped connector with a terminal chevron and a returning local cable; equal-height horizontal WDC lettering below. The complete logo has an approximately square footprint.
+
+Exact generation prompt:
+
+Use case: logo-brand
+Asset: one finished PNG logo for WebDeviceCable.
+Meaning: web applications connect directly to local installed programs through a cable-like bridge on the user's own computer.
+Design a memorable compact SYMBOL ABOVE a horizontal WDC line. Overall lockup fits a square. The symbol must work alone as an app icon. WDC is supporting lettering, not the symbol.
+Core concept: "the browser connector". Invent one unified chunky browser-tab-shaped cable plug. A simple browser/tab silhouette contains one large clear terminal chevron cut out of it, representing the local program. Its lower-right edge flows seamlessly into a short thick returning cable which curls around once and ends in a simplified rectangular plug docking back into the side of the browser shape. This returning local connection is the signature. Make the browser frame, terminal opening, and cable return one designed emblem with a strong asymmetrical yet balanced silhouette, not a scene or a diagram. A browser, a local terminal, and a cable are fused into ONE recognizable object.
+Simplify aggressively: use one broad raised tab at the top to suggest web, one broad terminal chevron ">" as negative space, one thick cable bend and one bold rectangular connector terminal. No browser toolbar dots or small UI lines. No second box, screen, monitor, or separate device illustration. No pin holes.
+Structure: geometric industrial logo, bold solid masses, generous negative spaces, consistent thick weight and small rounded corners. The cable should be compact, structurally clear and easy to trace into SVG. The browser upper block and cable lower return together make a compact almost-square icon, slightly wider than tall.
+Layout: symbol centered above the exact lettering "WDC" on one horizontal baseline. Symbol occupies about 65% of total height, WDC about 22%, with an intentional clear gap. Symbol and lettering have matching optical widths. All three letters equal cap height and weight, heavy clean geometric sans. Whole lockup approximately equal width and height, balanced clear space on all sides.
+Palette: one fully opaque solid near-black #101213 only.
+Background: genuinely transparent background and negative spaces.
+Text (verbatim): "WDC" under symbol. No project name or other text. The chevron inside the symbol is a single geometric terminal opening, not extra lettering.
+Requirements: meaningful strong silhouette at 32px for symbol, complete logo readable at 48x48px, very few clean contours, original ownable emblem, refined proportions.
+Avoid: two boxes connected by a cable, eyeglasses or chain links, generic infinity logo, mere plug icon, ordinary browser icon with a separate decorative cable, realistic illustration, thin lines, small details, clouds, AI sparkles, monogram symbol, giant W, stacked initials, gradients, texture, shadows, glow, translucent ink, 3D, mockups, border or enclosing tile, multiple variations, watermark.

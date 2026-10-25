@@ -1,0 +1,19 @@
+WebDeviceCable logo generation
+Mode: built-in image_gen tool
+Asset: webdevicecable-logo.png
+Format: transparent RGBA PNG, 1254 x 1254 pixels
+Concept: a bold W-shaped cable with simplified plugs at both ends.
+Visual check: viewed at 16, 24, 32, 48, and 128 CSS pixels on white and on the existing UI accent. The W silhouette remains readable at small sizes; plug details are clearer at 32 pixels and above.
+
+Exact generation prompt:
+
+Use case: logo-brand
+Asset type: standalone PNG logo symbol for the open-source project WebDeviceCable, suitable for app icons and small UI headers; vector-friendly master.
+Project context: WebDeviceCable is a small local bridge that pairs web applications with programs installed on the user's own computer. The product metaphor is a direct cable from the web to a device.
+Primary request: design one distinctive, extremely simple emblem: a single bold cable forming an unmistakable compact uppercase W silhouette, with its two upper endpoints terminating in simplified chunky cable plugs. Fuse the W and cable idea into one coherent symbol, not a W plus an unrelated icon. The cable has consistent heavy weight, well-balanced angular bends softened by small radii, and broad open negative spaces. Both plug terminals must be reduced to very simple flat geometric silhouettes without internal contacts, holes, or tiny details. The result should feel ownable and memorable, visibly a W and a cable in the same glance.
+Style/medium: precise flat vector-like brand mark, geometric, confident, minimal.
+Composition/framing: exactly one centered isolated symbol on a square transparent canvas; symbol occupies approximately 80% of width and height with balanced clear space; strong compact silhouette.
+Color palette: one solid near-black ink #101213 only, with genuine transparency around and within the emblem.
+Text: no text or wordmark.
+Constraints: the symbol must remain recognizable at 24x24 and 32x32 pixels, have few clean contours that can easily be traced into SVG later, and work identically in monochrome. Use thick structural forms and generous negative space. No fine lines.
+Avoid: gradients, shading, highlights, glow, shadows, textures, photorealism, 3D, mockups, presentation sheets, multiple alternatives, borders, enclosing app tile, decorative circuitry, browser window illustrations, screens, clouds, globes, AI sparkles, chains or infinity symbols, extra letters, watermark.

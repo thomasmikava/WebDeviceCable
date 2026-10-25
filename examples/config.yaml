@@ -1,0 +1,18 @@
+# Copy into the WebDeviceCable data directory as config.yaml, then restart.
+# Settings > Commands > Configuration shows the path.
+bridge:
+  allowWebCommandEditing: false
+
+# Replace my-tool with an installed executable. No shell is invoked implicitly.
+actions:
+  - id: greet
+    title: Say hello
+    exec: [my-tool, "--message", "{{ .Arguments.message }}"]
+    timeout: 30
+    maxConcurrent: 1
+    arguments:
+      - name: message
+        title: Message
+        type: ascii_sentence
+        default: Hello
+        rejectNull: true

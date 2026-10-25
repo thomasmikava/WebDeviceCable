@@ -1,0 +1,16 @@
+WebDeviceCable globe / terminal / cable logo
+Mode: built-in image_gen tool, editing the approved half-globe / half-terminal logo.
+Asset: webdevicecable-logo-globe-terminal-cable.png
+Format: transparent RGBA PNG.
+Concept: a fuller half-globe grid and a terminal prompt share a circular cable perimeter, with a plug at the lower right. Horizontal WDC lettering remains underneath.
+
+Exact edit prompt:
+
+Use case: logo-brand / precise-object-edit
+Edit target: the supplied WebDeviceCable logo. This direction is approved. Refine it with a fuller globe grid and a cable connector. Preserve the core design.
+KEEP: the overall circular symbol, left globe / right terminal split, central diameter, bold terminal ">_" on the right, the horizontal "WDC" lettering underneath, monochrome near-black #101213, square composition, generous negative space, and the existing balanced proportions. Keep the WDC lettering unchanged.
+CHANGE 1 — globe grid: make the LEFT hemisphere read more clearly as a globe. Add one additional well-spaced curved meridian, and broad gently curved latitude segments above and below the existing equator. Use a sparse conventional globe grid: two curved interior meridians, one equator, one upper and one lower latitude. All lines have the same strong structural weight as the existing logo. Keep large open cells; no dense mesh, tiny slivers, continents, or realistic spherical shading.
+CHANGE 2 — cable: integrate a clearly recognizable cable plug into the LOWER-RIGHT circular rim. The outer circular ring itself becomes a cable. Open a short section around the 4:30 position and terminate one end as a bold, very simple cable plug: one shoulder/body and one projecting rectangular tongue, facing the other end of the circular cable across a clear small gap. The plug and ring should feel like one continuous routed cable, not a separate icon stuck on top. The connector follows the circular tangent, with its body tucked into the circular footprint so the emblem still reads as a circle. Make the plug large enough to read at icon size, but subordinate to the globe and terminal. No tiny pins, holes, internal contacts, or extra loop.
+Result: a circular half-globe / half-terminal emblem whose perimeter is a cable with a visible plug, above WDC. The three project ideas are integrated into one simple symbol.
+Style: flat precise vector-like design, few clean geometric contours, consistent bold strokes, fully opaque solid ink, genuine transparent background and counters. Easy to recreate as SVG.
+Avoid: changing the lettering, enlarging any letter, replacing the approved circular design, separate computer or browser pictures, separate extra symbol, long protruding cable tails, additional decorative lines, thin details, gradients, texture, glow, shadows, 3D, mockup, presentation sheet, watermark.

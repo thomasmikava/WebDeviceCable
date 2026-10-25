@@ -1,0 +1,14 @@
+[
+  {
+    "file": "chatgpt-icon.png",
+    "sourcePage": "https://help.openai.com/en/articles/8142208-chatgpt-ios-and-android-app-faq",
+    "sourceAsset": "https://images.ctfassets.net/j22is2dtoxu1/intercom-img-b10ab9f4d70661d93db667c0/9716417ee02ffe9988beb6aeb2507856/openai-logo_2B-282-29.png",
+    "sha256": "e799e2fa0d4149a2ec28fc595c8bfb4990bcbb478649791b42acff7cde6e805e"
+  },
+  {
+    "file": "claude-icon.png",
+    "sourcePage": "https://claude.com",
+    "sourceAsset": "https://assets.claude.com/95a868946ac8a31e5ff832e2899f294aa368b836.png?w=32&h=32",
+    "sha256": "4004381309500f25e49a1ae639912ce307ea81da74cc383954a1ac8b9d343fe6"
+  }
+]

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>WebDeviceCable</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body>
+<a class="skip-link" href="#main-content" hidden>Skip to content</a>
+<div id="locked" class="locked" hidden><span class="brand-logo" aria-hidden="true"></span><h1>Open WebDeviceCable to connect.</h1><p>Launch it from your applications, or run <code>webdevicecable open</code>.</p></div>
+<div id="shell" hidden>
+  <header><a class="brand" href="#apps"><span class="brand-logo" aria-hidden="true"></span> WebDeviceCable</a><div class="header-right"><span id="runner-state" class="runner-status" data-status="ready">Device ready</span></div></header>
+  <div class="layout">
+    <nav aria-label="Navigation"><a href="#apps" data-view="apps"><span data-icon="bridge"></span>Connections <span id="connection-request-count" class="count" hidden></span></a><a href="#activity" data-view="activity"><span data-icon="inbox"></span>Requests <span id="approval-count" class="count" hidden></span></a><a href="#commands" data-view="commands"><span data-icon="terminal"></span>Commands</a><a href="#settings" data-view="settings"><span data-icon="settings"></span>Settings</a></nav>
+    <main id="main-content" tabindex="-1">
+      <section data-page="apps">
+        <div class="page-heading"><h1>Connections</h1><button id="connect-app" class="button primary"><span data-icon="plus"></span>Connect app</button></div>
+        <section id="connection-requests" hidden aria-labelledby="connection-requests-title"><div class="section-heading"><h2 id="connection-requests-title">Connection requests</h2></div><div id="connection-request-list"></div></section>
+        <div id="apps-section-heading" class="section-heading"><h2>Connected apps <span id="app-list-count" class="subtle-count"></span></h2></div>
+        <div id="app-list" class="connections-list"></div>
+        <div id="apps-empty" class="connection-empty" hidden>
+          <div class="connection-illustration" aria-hidden="true"><span data-icon="app"></span><span data-icon="bridge"></span><span class="brand-logo"></span></div>
+          <h2>No apps connected</h2><p>Start a connection from the app you want to use.</p>
+          <button id="connect-first" class="button primary">Connect an app<span data-icon="arrow-right"></span></button>
+        </div>
+        <section class="local-clients" aria-labelledby="local-clients-title"><h2 id="local-clients-title">On this device</h2><div id="native-list" class="native-strip"></div></section>
+      </section>
+      <section data-page="activity" hidden>
+        <div class="page-heading"><h1>Requests</h1><button id="clear-history" class="text-button">Clear history</button></div>
+        <div id="job-list">
+          <section id="permission-section" class="request-section" hidden><div class="section-heading"><h2>Access requests</h2></div><div id="permission-list"></div></section>
+          <section id="approvals-section" class="request-section" hidden><div class="section-heading"><h2>Needs your approval</h2><span id="pending-count" class="section-count"></span></div><div id="approval-jobs"></div></section>
+          <section id="running-section" class="request-section" hidden><div class="section-heading"><h2>In progress</h2></div><div id="running-jobs"></div></section>
+          <section id="active-sessions" class="request-section" hidden><div class="section-heading"><h2>Sessions</h2></div><div id="session-list" class="session-list"></div></section>
+          <section id="history-section" class="request-section" hidden><div class="section-heading"><h2>History</h2></div><div id="history-jobs"></div></section>
+          <div id="requests-empty" class="quiet-empty" hidden><span data-icon="inbox"></span><h2>No requests yet</h2><p>Requests from your apps will appear here.</p></div>
+        </div>
+      </section>
+      <section data-page="commands" hidden>
+        <div class="page-heading"><h1>Commands</h1><button id="add-command" class="button primary" hidden><span data-icon="plus"></span>Add command</button></div>
+        <div id="command-list" class="list"></div>
+        <div id="commands-empty" class="empty"><span class="empty-icon"><span data-icon="terminal"></span></span><h2>No commands yet</h2><p id="commands-empty-hint">Add an action in config.yaml, then restart.</p><button id="add-first-command" class="button primary" hidden><span data-icon="plus"></span>Add command</button></div>
+        <details class="setting-details config-details"><summary>Configuration<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><code id="config-path"></code><div class="actions"><button id="copy-config-path" class="button secondary">Copy path</button></div><p id="command-editor-hint"></p></div></details>
+      </section>
+      <section data-page="settings" hidden>
+        <div class="page-heading"><h1>Settings</h1></div>
+        <div class="settings-grid">
+          <section aria-labelledby="sharing-title"><div class="section-heading"><h2 id="sharing-title">Share with apps</h2></div><div class="settings-list">
+            <div class="setting-row"><div><strong>Program names</strong></div><button id="share-names" data-sharing="names" class="toggle" role="switch" aria-checked="true" aria-label="Share app and command names"><span></span></button></div>
+            <div class="setting-row"><div><strong>Versions</strong></div><button id="share-versions" data-sharing="versions" class="toggle" role="switch" aria-checked="true" aria-label="Share versions"><span></span></button></div>
+            <div class="setting-row"><div><strong>Model & reasoning</strong></div><button id="share-models" data-sharing="models" class="toggle" role="switch" aria-checked="true" aria-label="Share model details"><span></span></button></div>
+            <div class="setting-row"><div><strong>Diagnostic errors</strong><small>May contain private details.</small></div><button id="share-rawErrors" data-sharing="rawErrors" class="toggle" role="switch" aria-checked="false" aria-label="Share diagnostic errors"><span></span></button></div>
+          </div></section>
+          <section class="device-settings" aria-labelledby="device-settings-title"><div class="section-heading"><h2 id="device-settings-title">This device</h2></div><div class="settings-list">
+            <div class="setting-row"><div><strong>Accept requests</strong></div><button id="toggle-runner" class="toggle" role="switch" aria-checked="true" aria-label="Accept requests"><span></span></button></div>
+            <div class="setting-row test-setting"><div><strong>Connection test</strong><small>No AI is called.</small></div><button id="run-test" class="button secondary">Run test</button></div>
+          </div></section>
+        </div>
+        <section class="provider-section" aria-labelledby="providers-title"><div class="section-heading"><h2 id="providers-title">Installed AI clients</h2><button id="check-clients" class="text-button">Check again</button></div><div id="provider-list" class="provider-list"></div></section>
+        <div class="settings-reference">
+          <details><summary>Permissions<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><p><strong>Restricted</strong> — supplied inputs and outputs only. The default for new apps.</p><p><strong>Commands</strong> — individually granted per app, using your account’s file and network permissions.</p><p><strong>Folders</strong> — select access in each connection’s Folder access. Changes ask first unless you enable automation.</p></div></details>
+          <details><summary>Privacy & local data<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><p>Sign-in stays in the installed clients. Personal provider privacy settings apply. No paid API fallback or remote relay.</p><p>Closing a requesting app tab cancels its jobs within 12 seconds. Network loss or tab suspension can do the same. This panel can close independently.</p><p>Sharing switches omit structured metadata; program output can still identify its source. Diagnostics are off by default, bounded and redacted when shared.</p><p>Finished records discard their inputs. Sessions retain context until ended. Clearing history removes terminal output and WDC files, keeping minimal replay receipts. Native clients may keep their own cache.</p></div></details>
+        </div>
+        <div class="settings-footer"><button id="sign-out" class="text-button">Lock panel</button></div>
+      </section>
+    </main>
+    <footer><span><span data-icon="lock"></span>On this computer</span><span>0.1.0 preview</span></footer>
+  </div>
+</div>
+<dialog id="connect-dialog" aria-labelledby="connect-title">
+  <div class="dialog-heading"><h2 id="connect-title">Connect an app</h2><button id="close-connect" class="icon-button" aria-label="Close"><span data-icon="close"></span></button></div>
+  <div id="connect-start"><div class="dialog-body pairing-start"><div class="connection-illustration" aria-hidden="true"><span data-icon="app"></span><span data-icon="bridge"></span><span class="brand-logo"></span></div><h3>Start in your app</h3><p>Open your app and choose its WebDeviceCable connection option.</p><p class="muted">Its request will appear in Connections for you to approve.</p></div><div class="dialog-actions pairing-actions"><button id="show-invitation-form" class="text-button" type="button">Use an invitation instead<span data-icon="arrow-right"></span></button><button id="done-connect-start" class="button primary" type="button">Got it</button></div></div>
+  <form id="invite-form" hidden>
+    <div class="dialog-body">
+    <button id="back-connect" class="text-button back-button" type="button"><span data-icon="arrow-left"></span>Back</button>
+    <label>App name<input name="name" placeholder="Writer" autofocus maxlength="100" required autocomplete="off"></label>
+    <label>Website<input name="origin" type="url" placeholder="https://writer.example" required autocomplete="off"></label>
+    <label>Account ID<input name="appUser" placeholder="Provided by the app" maxlength="200" required autocomplete="off"><span class="field-hint">Use the exact ID supplied by the app.</span></label>
+    <details class="advanced"><summary>Connection options<span data-icon="chevron" class="chevron"></span></summary><label>App ID<input name="appId" placeholder="writer.example" maxlength="100" autocomplete="off"></label><label>Requests<select name="automatic"><option value="false">Ask me each time</option><option value="true">Allow automatically</option></select></label><div class="permission-line">Access <span id="invite-access-label" class="tag">Restricted</span></div></details>
+    <details id="invite-commands-section" class="advanced" hidden><summary>Command access<span data-icon="chevron" class="chevron"></span></summary><div id="invite-commands"></div><label id="invite-command-consent" class="check-line consent-line" hidden><input type="checkbox" name="commandConsent"><span>Allow selected commands to run with my account permissions, including file and network access.</span></label></details>
+    </div>
+    <div class="dialog-actions"><button class="button primary" type="submit">Create invitation</button></div>
+  </form>
+  <div id="invite-result" hidden><div class="dialog-body"><div class="success-icon"><span data-icon="check"></span></div><div class="invite-code"><code id="invite-token"></code><button id="copy-invite" class="button secondary">Copy</button></div><p id="invite-copy-hint" class="muted">Paste it into your app. Expires in 5 minutes.</p></div><div class="dialog-actions"><button id="done-connect" class="button primary">Done</button></div></div>
+</dialog>
+<dialog id="command-dialog" aria-labelledby="command-title">
+  <div class="dialog-heading"><h2 id="command-title">Add command</h2><button id="close-command" class="icon-button" aria-label="Close command editor"><span data-icon="close"></span></button></div>
+  <form id="command-form">
+    <div class="dialog-body">
+    <label>Name<input name="title" maxlength="100" autocomplete="off" autofocus required placeholder="Say hello"></label>
+    <label>Program<input name="program" required placeholder="/path/to/my-tool" autocomplete="off"></label>
+    <label class="argument-field">Arguments<span class="field-hint">One per line</span><textarea name="argv" rows="3" placeholder="--message&#10;{{ .Arguments.message }}" spellcheck="false"></textarea></label>
+    <details class="advanced"><summary>Inputs<span data-icon="chevron" class="chevron"></span></summary><div id="command-inputs"></div><button id="add-command-input" type="button" class="button secondary"><span data-icon="plus"></span>Add input</button></details>
+    <details class="advanced"><summary>Options<span data-icon="chevron" class="chevron"></span></summary><label>Command ID<input name="id" maxlength="64" placeholder="Created automatically" autocomplete="off"></label><label>Version (optional)<input name="version" maxlength="100" placeholder="Provided by you" autocomplete="off"></label><label class="check-line"><input type="checkbox" name="session"><span>Keep session between messages<small>Requires the WDC JSONL interface.</small></span></label><label id="session-idle-field" hidden>Idle limit in seconds (0 follows the tab)<input name="idleTimeout" type="number" min="0" max="600" value="0"></label><div class="form-columns"><label>Timeout (seconds)<input name="timeout" type="number" min="1" max="600" value="30" required></label><label>Parallel runs<input name="maxConcurrent" type="number" min="1" max="4" value="1" required></label></div></details>
+    </div>
+    <div class="dialog-actions"><button class="button primary" type="submit">Save command</button></div>
+  </form>
+</dialog>
+<dialog id="command-access-dialog" aria-labelledby="command-access-title">
+  <div class="dialog-heading"><h2 id="command-access-title">Command access</h2><button id="close-command-access" class="icon-button" aria-label="Close command access"><span data-icon="close"></span></button></div>
+  <form id="command-access-form"><div class="dialog-body"><p id="command-access-context" class="dialog-context"></p><div id="command-access-list"></div><label id="access-command-consent" class="check-line consent-line" hidden><input type="checkbox" name="commandConsent"><span>Allow selected commands to run with my account permissions, including file and network access.</span></label></div><div class="dialog-actions"><button class="button primary" type="submit">Save access</button></div></form>
+</dialog>
+<dialog id="routing-dialog" aria-labelledby="routing-title">
+  <div class="dialog-heading"><h2 id="routing-title">Program settings</h2><button id="close-routing" class="icon-button" aria-label="Close program settings"><span data-icon="close"></span></button></div>
+  <form id="routing-form"><div class="dialog-body"><p id="routing-context" class="dialog-context"></p><div id="routing-default"></div><div id="routing-groups"></div></div><div class="dialog-actions"><button id="routing-command-access" class="text-button" type="button">Command access</button><button class="button primary" type="submit">Save changes</button></div></form>
+</dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title"></h2><button id="close-confirm" class="icon-button" aria-label="Close confirmation"><span data-icon="close"></span></button></div><div class="dialog-body"><p id="confirm-description" class="muted"></p></div><div class="dialog-actions"><button id="cancel-confirm" class="button secondary">Cancel</button><button id="accept-confirm" class="button primary"></button></div></dialog>
+<div id="notice" class="toast" role="status" hidden><span id="notice-text"></span><button id="dismiss-notice" class="icon-button" aria-label="Dismiss"><span data-icon="close"></span></button></div>
+</body></html>

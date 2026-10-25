@@ -1,0 +1,21 @@
+{
+  "name": "webdevicecable",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build:sdk": "tsc -p sdk/tsconfig.json",
+    "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",
+    "test:sdk": "node --test sdk/client.test.mjs sdk/storage.test.mjs",
+    "test:e2e": "node scripts/e2e.mjs && node scripts/commands-e2e.mjs && node scripts/launch-e2e.mjs",
+    "theme:generate": "node scripts/generate-theme.mjs",
+    "theme:check": "node scripts/generate-theme.mjs --check",
+    "package:sdk": "npm run build:sdk && node scripts/sdk-package.mjs",
+    "test:package": "node scripts/sdk-package-test.mjs",
+    "check:sdk-drift": "node scripts/sdk-drift.mjs"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.6",
+    "typescript": "^5.9.3"
+  },
+  "type": "module"
+}

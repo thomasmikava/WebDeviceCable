@@ -1,0 +1,112 @@
+{
+  "reference": "webdevicecable-logo-globe-terminal-cable.png",
+  "svg": "webdevicecable-logo-globe-terminal-cable.svg",
+  "resolution": [
+    1254,
+    1254
+  ],
+  "pixels_compared": 1572516,
+  "method": "All source and SVG pixels compared by alpha coverage; foreground masks thresholded at 0.5. RGB noise is excluded. Background area is not used to inflate the foreground IoU.",
+  "regions": {
+    "whole_logo": {
+      "foreground_iou": 0.927069,
+      "dice": 0.962155,
+      "different_mask_pixels": 26773,
+      "mean_absolute_coverage_error": 0.018614
+    },
+    "symbol": {
+      "foreground_iou": 0.918467,
+      "dice": 0.957501,
+      "different_mask_pixels": 22057,
+      "mean_absolute_coverage_error": 0.031432
+    },
+    "globe_half": {
+      "foreground_iou": 0.917709,
+      "dice": 0.957089,
+      "different_mask_pixels": 14955,
+      "mean_absolute_coverage_error": 0.039614
+    },
+    "terminal_half": {
+      "foreground_iou": 0.977814,
+      "dice": 0.988783,
+      "different_mask_pixels": 545,
+      "mean_absolute_coverage_error": 0.007593
+    },
+    "cable_plug": {
+      "foreground_iou": 0.811488,
+      "dice": 0.895935,
+      "different_mask_pixels": 3039,
+      "mean_absolute_coverage_error": 0.079637
+    },
+    "wordmark": {
+      "foreground_iou": 0.951166,
+      "dice": 0.974972,
+      "different_mask_pixels": 4716,
+      "mean_absolute_coverage_error": 0.028715
+    }
+  },
+  "geometry": {
+    "cx": 512.0,
+    "cy": 430.0,
+    "radius": 313.5,
+    "ring": 46.0,
+    "ring_start": 50.0,
+    "ring_end": 25.0,
+    "meridian_rx": 182.25,
+    "meridian_ry": 291.5,
+    "grid": 33.0,
+    "meridian_stroke": 34.0,
+    "latitude_stroke": 29.25,
+    "latitude_cx": 391.75,
+    "latitude_y": 243.0,
+    "latitude_rx": 202.0,
+    "latitude_ry": 67.0,
+    "chevron_x": 591.5,
+    "chevron_tip": 665.75,
+    "chevron_y": 426.0,
+    "chevron_half_height": 70.0,
+    "chevron_stroke": 44.25,
+    "underscore_x1": 679.0,
+    "underscore_x2": 751.5,
+    "underscore_y": 498.0,
+    "underscore_stroke": 38.25,
+    "plug_angle": 44.75,
+    "plug_width": 65.25,
+    "plug_shift_x": -1.5,
+    "plug_shift_y": -5.5,
+    "plug_length": 69.25,
+    "tongue_length": 35.5,
+    "tongue_width": 39.5,
+    "type_shift_x": 0.0,
+    "type_shift_y": 0.0,
+    "c_cx": 745.5,
+    "c_cy": 870.75,
+    "c_rx": 97.5,
+    "c_ry": 84.25,
+    "c_inner_rx": 46.5,
+    "c_inner_ry": 41.75,
+    "c_opening": 23.0
+  },
+  "intentional_corrections": [
+    "A true circular SVG arc replaces the slightly irregular generated ring; centered at x=512 in a 1024-unit viewBox.",
+    "Latitude ellipses are exact mirror images around the equator, and the meridian is an exact ellipse.",
+    "The W is mirror-symmetric. W and D share a cap line and baseline; C uses a conventional optical overshoot.",
+    "The plug tongue is attached to its body. One visible mating gap is retained at the cable end, rather than reproducing two disconnected pieces or closing the gap to optimize pixel overlap.",
+    "All fills and strokes are uniformly opaque #101213; generated color/alpha noise and stray faint pixels are discarded."
+  ],
+  "geometry_checks": {
+    "circular_arc_has_equal_x_y_radii": true,
+    "symbol_centered_horizontally": true,
+    "latitude_arcs_mirrored": true,
+    "lettering_outlined_no_font_dependency": true,
+    "no_embedded_raster": true,
+    "transparent_background": true,
+    "circle_center": [
+      512.0,
+      430.0
+    ],
+    "cable_centerline_radius": 313.5,
+    "outer_radius": 336.5,
+    "inner_radius": 290.5
+  }
+}

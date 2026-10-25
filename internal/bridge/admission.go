@@ -1,0 +1,103 @@
+package bridge
+
+// Admission is called with the app lock held. Receipts are checked before route
+// resolution so retrying an old key can never execute a newly selected program.
+func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, error) {
+	if err := validateRequest(&in); err != nil {
+		return nil, false, fail(400, "invalid_job", err.Error())
+	}
+	key := digest(p.ID + ":" + in.IdempotencyKey)
+	hash := requestHash(in)
+	receipt, consumed, err := a.receipt(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if consumed {
+		if receipt.Hash != hash {
+			return nil, false, fail(409, "idempotency_conflict", "This key was already used for a different request.")
+		}
+		job := findJob(&a.state, receipt.JobID)
+		if job == nil {
+			return nil, false, fail(410, "history_deleted", "This request was already consumed; its history was erased.")
+		}
+		if !terminal(job.Status) && job.LeaseID != lease {
+			return nil, false, fail(409, "other_tab", "The original requesting tab owns this in-progress request.")
+		}
+		return job, true, nil
+	}
+	var pinned *ExecutionPlan
+	if in.ConversationID != "" {
+		conversation, err := a.usableConversation(p, in.ConversationID, lease)
+		if err != nil {
+			return nil, false, err
+		}
+		in.Mode = conversation.Mode
+		if in.Mode == "" {
+			in.Mode = "restricted"
+		}
+		pinned = conversation.Plan
+	}
+	plan, title, err := a.prepareJob(p, &in, pinned)
+	if err != nil {
+		return nil, false, err
+	}
+	if plan.Kind == "command" && a.actions[plan.Action].Session != nil && in.ConversationID == "" {
+		return nil, false, fail(400, "session_required", "This command needs a session. Use the SDK session() helper.")
+	}
+	if len(in.Inputs) > 0 {
+		if _, err := a.selectedInputs(p, lease, in.Inputs); err != nil {
+			return nil, false, err
+		}
+	}
+	if plan.Kind == "command" && len(in.Inputs) > 0 && !a.actions[plan.Action].Files {
+		return nil, false, fail(403, "files_not_granted", "This command has not enabled file transfers.")
+	}
+	imageInput := false
+	for _, id := range in.Inputs {
+		if input := a.inputs[id]; input != nil && (input.MediaType == "image/png" || input.MediaType == "image/jpeg") {
+			imageInput = true
+		}
+	}
+	if plan.Kind == "image-edit" && !imageInput {
+		return nil, false, fail(400, "image_required", "Image editing needs a supplied PNG or JPEG.")
+	}
+	job := &Job{ID: secret(), PairingID: p.ID, Request: in, RequestHash: hash, LeaseID: lease, Status: "awaiting_approval", Billing: "none", Revision: 1, CreatedAt: a.now(), Plan: plan, ActionHash: plan.ActionHash, ActionTitle: title}
+	for _, id := range in.Inputs {
+		if input := a.inputs[id]; input != nil {
+			job.InputNames = append(job.InputNames, input.Name)
+		}
+	}
+	if p.Automatic {
+		job.Status = "queued"
+	}
+	if err := a.update(func(s *State) error {
+		if len(s.Jobs) >= maxJobs {
+			oldest := -1
+			for i, previous := range s.Jobs {
+				if terminal(previous.Status) && (oldest < 0 || previous.CreatedAt.Before(s.Jobs[oldest].CreatedAt)) {
+					oldest = i
+				}
+			}
+			if oldest < 0 {
+				return fail(429, "job_limit", "Too many active requests. Wait for a request to finish.")
+			}
+			s.Jobs = append(s.Jobs[:oldest], s.Jobs[oldest+1:]...)
+		}
+		// Reserve first. A failed job-state save consumes the key rather than
+		// risking execution again after a crash or ambiguous submission.
+		if err := a.reserveReceipt(key, Receipt{JobID: job.ID, Hash: hash}); err != nil {
+			return err
+		}
+		s.Jobs = append(s.Jobs, job)
+		if c := s.Conversations[in.ConversationID]; c != nil {
+			c.LastJobID = job.ID
+			c.Turns++
+			job.Turn = c.Turns
+			c.UpdatedAt = a.now()
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
+	}
+	return findJob(&a.state, job.ID), false, nil
+}

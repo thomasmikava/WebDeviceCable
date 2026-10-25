@@ -1,0 +1,21 @@
+WebDeviceCable square connection monogram
+Mode: built-in image_gen tool.
+Asset: webdevicecable-logo-square.png
+Format: transparent RGBA PNG.
+Concept: equal-scale W, D, and C arranged in a square. The cable from D terminates in a plug facing C, with C doubling as the receiving socket.
+
+Exact generation prompt:
+
+Use case: logo-brand
+Asset: a distinctive compact square PNG logo for WebDeviceCable.
+Project concept: a physical local cable joining a web app to a program on the user's own computer. It is about direct connection and pairing.
+Critical shape constraint: the LOGO ITSELF must have a square footprint, width approximately equal to height. Do not put a wide wordmark on a square canvas. Fill a compact square with the design.
+Design idea: an integrated WDC cable-and-connector monogram on a simple two-by-two construction grid. Upper-left: W. Upper-right: D. Lower-left: C. Lower-right: the cable from D bends downward into a simple plug that faces left toward the open mouth of C; C itself doubles as the receiving socket. A generous visible pairing gap between plug and C is the signature visual idea. The plug is part of the routed cable, not a fourth character or a separate icon pasted next to text. The whole mark should feel like a single clever compact connection mechanism.
+Letter equality: W, D, and C have exactly the same cap height, comparable width and equal heavy stroke weight. All three are equally important. W must not span the width, dominate, or be larger. The two top letters occupy equal cells; the C below is exactly the same scale. Read in normal row order: W D C.
+Letter structure: custom geometric cable-like forms, broad negative spaces, simple industrial bends with a small consistent radius. D has a large clear counter. C has a broad unmistakable open right side, with the simple plug approaching it. Keep every letter easy to identify. Join the upper W and D with a very short clean cable connection if it preserves readability.
+Connector: one bold solid plug body with a single simple projecting tongue, no pin holes, no tiny contacts, no realistic details. Its pairing with C should read at a glance.
+Style: precise flat two-dimensional monochrome silhouette, confident original brand mark, few clean paths, SVG-trace friendly. Fully opaque solid near-black #101213 only.
+Composition: one square balanced logo, centered with even clear space, about 82% of square canvas width and height. Genuinely transparent background and counters.
+Text: only the three uppercase letters W, D, C incorporated into the design. No wordmark or other text.
+Small-size goal: recognizable at 32x32 and 48x48 pixels. Strong silhouette and generous gaps.
+Avoid: elongated wordmark, horizontal WDC row, big W above smaller DC, regular font initials, three disconnected plain glyphs, four letters, tiny decoration, literal screen drawings, clouds, AI sparkles, chains, infinity symbols, gradients, translucent ink, shading, texture, 3D, drop shadows, enclosing tile or border, mockups, multiple alternatives, watermark.
