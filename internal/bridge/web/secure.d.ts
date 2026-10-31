@@ -54,6 +54,8 @@ export declare class SecureTransport {
     private keys;
     private pairingId;
     readonly endpoint: string;
+    /** Discard ephemeral state; the next handshake must still verify the original pin. */
+    reset(): void;
     private channel?;
     private opening?;
     constructor(identity: RunnerIdentity, origin: string, keys: {

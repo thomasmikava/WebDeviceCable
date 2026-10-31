@@ -87,15 +87,18 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			defer a.mu.Unlock()
 			id := r.Header.Get("X-Bridge-Session")
 			if id == "" {
-				return fail(401, "session_required", "Open the control panel using webdevicecable open.")
+				return fail(401, "session_required", "Open the control panel using WebDeviceCable open.")
 			}
 			s, ok := a.sessions[id]
 			if !ok || a.now().After(s.Expires) {
 				delete(a.sessions, id)
-				return fail(401, "session_expired", "Open the control panel using webdevicecable open.")
+				return fail(401, "session_expired", "Open the control panel using WebDeviceCable open.")
 			}
 			if r.Method != "GET" && (r.Header.Get("Origin") != origin || !equal(r.Header.Get("X-Bridge-CSRF"), s.CSRF)) {
 				return fail(403, "csrf_denied", "Control changes require the session CSRF token and exact origin.")
+			}
+			if a.updating && r.Method != "GET" && !strings.HasPrefix(r.URL.Path, "/api/updates") {
+				return fail(503, "bridge_updating", "WebDeviceCable is updating. Reconnect in a moment.")
 			}
 			return fn(w, r)
 		})
@@ -108,16 +111,22 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			if e != nil {
 				return e
 			}
+			if a.updating {
+				w.Header().Set("Retry-After", "3")
+				return fail(503, "bridge_updating", "WebDeviceCable is updating. Reconnect in a moment.")
+			}
 			return fn(w, r, p)
 		})
 	}
 	a.launchRoutes(mux, wrap, origin)
+	a.updateRoutes(mux, control, wrap)
 	a.permissionRoutes(mux, paired, control)
 	a.commandRoutes(mux, control)
 	a.pairingRequestRoutes(mux, control, origin)
 	a.preferenceRoutes(mux, paired, control)
 	a.conversationRoutes(mux, paired, control)
 	a.nativeFileRoutes(mux, paired, control)
+	a.relayRoutes(mux, control, origin)
 	mux.HandleFunc("POST /api/runtime", wrap(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
 			Nonce string `json:"nonce"`
@@ -134,7 +143,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("POST /api/session", wrap(func(w http.ResponseWriter, r *http.Request) error {
 		if r.Header.Get("Origin") != origin || !equal(bearer(r), a.adminKey) {
-			return fail(401, "invalid_control_key", "Use the private link printed by webdevicecable open.")
+			return fail(401, "invalid_control_key", "Use the private link printed by WebDeviceCable open.")
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -183,7 +192,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			copy.Plan = j.Plan
 			jobs = append(jobs, copy)
 		}
-		writeJSON(w, 200, map[string]any{"providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.state.Conversations, "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
+		writeJSON(w, 200, map[string]any{"updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.state.Conversations, "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/providers/check", control(func(w http.ResponseWriter, r *http.Request) error {
@@ -403,11 +412,23 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/capabilities", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		writeJSON(w, 200, map[string]any{"protocolVersion": 2, "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.capabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(LeaseTTL.Seconds()), "remoteAccess": false})
+		writeJSON(w, 200, map[string]any{"protocolVersion": 2, "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.capabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/actions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		writeJSON(w, 200, map[string]any{"actions": a.actionCapabilities(p)})
+		return nil
+	}))
+	mux.HandleFunc("POST /v2/admission", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
+		var in AdmissionRequest
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		status, err := a.preflight(p, in)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, status)
 		return nil
 	}))
 	mux.HandleFunc("POST /v2/jobs/lookup", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -443,7 +464,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			return fail(429, "lease_limit", "Too many active tabs.")
 		}
 		id := secret()
-		l := Lease{PairingID: p.ID, ExpiresAt: a.now().Add(LeaseTTL)}
+		l := Lease{PairingID: p.ID, ExpiresAt: a.now().Add(pairingLeaseTTL(p))}
 		a.leases[id] = l
 		writeJSON(w, 201, map[string]any{"lease": id, "expiresAt": l.ExpiresAt, "heartbeatSeconds": 3})
 		return nil
@@ -457,7 +478,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		if !a.state.Enabled || p.Paused {
 			return fail(409, "paused", "Runner or application is paused.")
 		}
-		l.ExpiresAt = a.now().Add(LeaseTTL)
+		l.ExpiresAt = a.now().Add(pairingLeaseTTL(p))
 		a.leases[id] = l
 		writeJSON(w, 200, map[string]any{"expiresAt": l.ExpiresAt})
 		return nil
@@ -538,6 +559,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("POST /v2/request", wrap(func(w http.ResponseWriter, r *http.Request) error { return a.secureCall(w, r, mux) }))
 	static, _ := fs.Sub(assets, "web")
+	a.resumeRelays(mux, origin)
 	files := http.FileServer(http.FS(static))
 	mux.Handle("GET /", files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

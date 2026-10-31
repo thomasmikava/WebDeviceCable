@@ -1,6 +1,6 @@
 # Using WebDeviceCable
 
-Bundle `sdk/index.ts` in your application. There are no runtime npm dependencies. Use one `BridgeClient` per requesting browser tab. Your app keeps its own accounts, authorization and output validation.
+Use `@webdevicecable/sdk` in your frontend, import its version-pinned native ESM files by URL, or self-host the three browser modules. See [installation](integrate.md#1-install-and-include-the-sdk) and [npm distribution](npm.md); registry/CDN examples require the corresponding version to be published. Local npm tarballs remain available before publication. ESM, CommonJS frontend tooling and TypeScript are supported, with no runtime npm dependencies. Use one `BridgeClient` per requesting browser tab. Your app keeps its own accounts, authorization and output validation.
 
 ## Quickstart
 

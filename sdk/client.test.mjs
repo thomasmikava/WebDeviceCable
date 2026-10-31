@@ -253,6 +253,41 @@ test('an ambiguous turn is never replayed or replaced implicitly, lookup recover
  }finally{await client?.close().catch(()=>{});restore();}
 });
 
+test('an unreadable submission response retains its operation key for recovery', async () => {
+  const peer = await runner(), restore = peer.install(); let client;
+  try {
+    ({client} = await peer.connect());
+    peer.handler = async context => {
+      if (context.request.path === '/v2/jobs') return json(await context.frame('response', '<html>proxy error</html>', 502));
+    };
+    await assert.rejects(client.submit({kind:'connection-test', idempotencyKey:'unreadable-response'}), error =>
+      error.code === 'submission_unknown' && error.idempotencyKey === 'unreadable-response');
+    assert.equal(peer.calls.filter(call=>call.request.path === '/v2/jobs').length, 1);
+  } finally { await client?.close().catch(()=>{}); restore(); }
+});
+
+test('oversized Unicode tool results return a bounded error instead of stalling the callback', async () => {
+  const peer = await runner(), restore = peer.install(); let client, timer;
+  try {
+    const paired = await peer.pair();
+    let receiveResult;
+    const result = new Promise(resolve=>{receiveResult=resolve;});
+    peer.handler = context => {
+      if (context.request.path === '/v2/tools') return context.json({ok:true});
+      if (context.request.path === '/v2/tool-calls') return context.json({calls:[{id:'unicode-call',name:'read',arguments:{}}]});
+      if (context.request.path.endsWith('/claim')) return context.json({ok:true});
+      if (context.request.path.endsWith('/result')) { receiveResult(JSON.parse(context.request.body)); return context.json({ok:true}); }
+    };
+    client = new BridgeClient({connection:paired.connection, origin:peer.origin, tools:[{
+      id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{}},execute:()=>({text:'🙂'.repeat(12000)}),
+    }]});
+    await client.connect();
+    const received = await Promise.race([result,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Tool callback stalled')),4000);})]);
+    assert.match(received.result.error,/32 KiB/);
+    assert.ok(new TextEncoder().encode(JSON.stringify(received)).length < 32768);
+  } finally { clearTimeout(timer); await client?.close().catch(()=>{}); restore(); }
+});
+
 test('interactive pairing only accepts its own popup, endpoint, nonce and explicit approval',async()=>{
  const peer=await runner(),restore=peer.install();const saved=globalThis.window;
  const listeners=new Set();let popupURL,posted;
@@ -386,4 +421,21 @@ test('permission helper waits for WDC review and reuses remembered access',async
  assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
  assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
  }finally{await client?.close().catch(()=>{});restore();}
+});
+
+test('a signed update interruption never resubmits a job and reconnects with the original pin',async()=>{
+  const peer=await runner(),restore=peer.install();let client;
+  try{
+    const paired=await peer.pair();client=new BridgeClient({connection:paired.connection,origin:peer.origin});await client.connect();
+    peer.handler=c=>c.request.path==='/v2/jobs'?c.json({error:{code:'bridge_updating',category:'unavailable',message:'WebDeviceCable is updating.',retryable:true}},503):undefined;
+    await assert.rejects(client.submit({kind:'text',prompt:'keep private',idempotencyKey:'update-once'}),error=>error.code==='bridge_updating'&&error.retryable===true);
+    assert.equal(peer.calls.filter(c=>c.request.path==='/v2/jobs').length,1);
+    await client.close();peer.handler=undefined;
+    const before=peer.wire.filter(c=>new URL(c.url).pathname==='/v2/channel').length;
+    await client.connect();assert.ok(peer.wire.filter(c=>new URL(c.url).pathname==='/v2/channel').length>before);
+    assert.equal(peer.calls.filter(c=>c.request.path==='/v2/jobs').length,1);
+    assert.equal(paired.connection.identity.publicKey,peer.identity.publicKey);
+    await client.close();const other=await keypair();peer.signingKey=other.privateKey;
+    await assert.rejects(client.connect(),BridgeSecurityError);
+  }finally{await client?.close().catch(()=>{});restore();}
 });

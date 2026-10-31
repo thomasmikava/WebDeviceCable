@@ -1,0 +1,19 @@
+# Updates
+
+Official WebDeviceCable installations enable automatic updates by default. Settings → Updates provides the version, status, Check for updates, Update now and Automatic updates. Checks normally run daily while the app is running. Turning automatic updates off stops scheduled checks and installation; manual checks still work. Updates do not add an OS login service or keep WDC running after you quit it.
+
+Releases are selected from signed metadata using a pinned maintainer key. Windows/Linux downloads verify exact size and SHA-256; Windows additionally verifies Authenticode. macOS binds the expected version, URL and size to Sparkle's signed feed and verifies the archive signature and Apple code signing. There is no unsigned fallback. Wrong platforms, older metadata and downgrades are rejected. Updates requiring an incompatible state/protocol migration are manual.
+
+Automatic installation waits for pending requests, conversation sessions, callbacks, approvals and staged files to finish or expire. An idle conversation still counts as active. Update now can explicitly end this work after confirmation. The runner closes admission before stopping the tray, so the tray's Quit action cannot accidentally interrupt another conversation during an automatic update.
+
+Updates retain the same private state directory, pairing keys, permissions, metadata-sharing preferences and replay receipts. The local panel can resume through a private, single-use two-minute handoff; this file is never sent to websites. SDK clients must reconnect with the same pinned runner identity after their tab lease expires. An uncertain job is never submitted again automatically.
+
+macOS applications update through the existing menu bar launcher. Protected installations may need normal macOS authorization; the update stays ready until you choose to install. Launching the standalone macOS CLI does not create the native updater. Linux installations must be writable by the current user; system/package-manager installations require manual replacement. Windows installations remain per user.
+
+Windows/Linux helpers verify the downloaded archive again, extract into a fresh private directory, prepare complete replacement files, retain old binaries and replace files after the desktop and runner stop. A replacement failure restores files already replaced. A failed new startup preserves private data and recovery files. It does not restore an old state snapshot, which could re-enable replay. The most recent recovery files are under the private data directory's `updates/install-*` directories; old update caches are pruned. Quit WDC before manually reinstalling a previous verified release; preserve the complete state directory and do not restore stale receipts.
+
+Developer previews and forks do not install upstream updates. Ordinary chat continues when the update service is unavailable. Failed network checks back off; Check for updates retries manually. CLI users can run `WebDeviceCable update status`, `check`, or `install`; `install --end-sessions` explicitly authorizes ending work. An installed/running app is required.
+
+The update HTTP interface belongs to the authenticated local control panel: `GET /api/updates`, `PATCH /api/updates` with `{automatic:boolean}`, and `POST /api/updates/check|install` with `{}` or `{endSessions:true}`. The existing control session, CSRF token and exact origin are mandatory. Private native IPC additionally requires the local root credential and rejects browser Origin headers. Paired websites have no update-control API.
+
+During replacement, verified SDK requests receive `bridge_updating` (HTTP 503, category `unavailable`, retryable). Reconnect for a new channel/lease after WDC returns; preserve key pins. Do not repeat an uncertain mutation or silently charge API credits. The updater does not require an integrating website to change its permission grants or implement a second updater.

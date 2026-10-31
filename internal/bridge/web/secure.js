@@ -142,6 +142,8 @@ export class SecureTransport {
     keys;
     pairingId;
     endpoint;
+    /** Discard ephemeral state; the next handshake must still verify the original pin. */
+    reset() { this.channel = undefined; }
     channel;
     opening;
     constructor(identity, origin, keys, pairingId, endpoint) {

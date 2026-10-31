@@ -61,6 +61,11 @@ export interface TokenUsage {
 }
 export interface UploadedInput extends Artifact {
 }
+export interface AdmissionStatus {
+    available: boolean;
+    kind?: 'native' | 'command';
+    code?: string;
+}
 export interface Pairing {
     id: string;
     appId: string;
@@ -210,6 +215,11 @@ export interface ClientOptions {
         appUser: string;
     };
 }
+export interface BridgeTransport {
+    reset(): void;
+    fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
+    close(): Promise<void>;
+}
 export declare class BridgeJobError extends BridgeError {
     job: Job;
     constructor(job: Job);
@@ -230,7 +240,7 @@ export declare class BridgeClient {
     private closed;
     private watchers;
     private onPageHide;
-    constructor(options: ClientOptions);
+    constructor(options: ClientOptions, transport?: BridgeTransport);
     static pair(options: {
         baseURL?: string;
         invitation: string;
@@ -287,6 +297,7 @@ export declare class BridgeClient {
     getSession(id: string): Promise<Conversation>;
     closeSession(id: string): Promise<Conversation>;
     capabilities(): Promise<Capabilities>;
+    preflight(request: Omit<JobRequest, 'idempotencyKey'>, features?: string[]): Promise<AdmissionStatus>;
     /** File bytes stay unchanged and scoped to this requesting tab. */
     upload(file: Blob, name?: string): Promise<UploadedInput>;
     removeInput(id: string): Promise<{

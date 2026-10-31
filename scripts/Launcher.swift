@@ -6,12 +6,24 @@ final class Launcher: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var openingPanel = false
     private var quitting = false
+    private var stoppingForTermination = false
+#if canImport(Sparkle)
+    private var updateDriver: UpdateDriver?
+#endif
     private let processQueue = DispatchQueue(label: "org.webdevicecable.launcher")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
+#if canImport(Sparkle)
+        updateDriver = UpdateDriver(execute: runCapture)
+#endif
+        let background = UserDefaults.standard.bool(forKey: "WDCBackgroundUpdateRelaunch")
+        UserDefaults.standard.removeObject(forKey: "WDCBackgroundUpdateRelaunch")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if !self.receivedURL { self.openPanel() }
+            if !self.receivedURL {
+                if background { self.run(["start", "--no-open"]) { error in if let error = error { self.showError(error) } } }
+                else { self.openPanel() }
+            }
         }
     }
 
@@ -28,6 +40,16 @@ final class Launcher: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openPanel()
         return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if stoppingForTermination || quitting { return .terminateNow }
+        stoppingForTermination = true
+        run(["stop", "--if-running"]) { error in
+            if let error = error { self.stoppingForTermination = false; self.showError(error); sender.reply(toApplicationShouldTerminate: false) }
+            else { sender.reply(toApplicationShouldTerminate: true) }
+        }
+        return .terminateLater
     }
 
     private func installStatusItem() {
@@ -108,8 +130,11 @@ final class Launcher: NSObject, NSApplicationDelegate {
     }
 
     private func run(_ arguments: [String], completion: @escaping (String?) -> Void) {
-        guard let executable = Bundle.main.url(forResource: "webdevicecable", withExtension: nil) else {
-            completion("The bundled WebDeviceCable runner is missing. Reinstall the app and try again.")
+        runCapture(arguments) { _, error in completion(error) }
+    }
+    private func runCapture(_ arguments: [String], completion: @escaping (Data?, String?) -> Void) {
+        guard let executable = Bundle.main.url(forResource: "WebDeviceCable", withExtension: nil) ?? Bundle.main.url(forResource: "webdevicecable", withExtension: nil) else {
+            completion(nil, "The bundled WebDeviceCable runner is missing. Reinstall the app and try again.")
             return
         }
         // Serialize starts and URL deliveries so rapid clicks cannot race startup.
@@ -118,27 +143,34 @@ final class Launcher: NSObject, NSApplicationDelegate {
             process.executableURL = executable
             process.arguments = arguments
             process.standardInput = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice
+            let output = Pipe()
+            process.standardOutput = output
             let errors = Pipe()
             process.standardError = errors
             do {
                 try process.run()
+                let result = output.fileHandleForReading.readDataToEndOfFile()
                 let data = errors.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 DispatchQueue.main.async {
                     let detail = String(decoding: data.prefix(2000), as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    completion(process.terminationStatus == 0 ? nil :
+                    completion(result, process.terminationStatus == 0 ? nil :
                         (detail.isEmpty ? "Try opening WebDeviceCable again." : detail))
                 }
             } catch {
-                DispatchQueue.main.async { completion(error.localizedDescription) }
+                DispatchQueue.main.async { completion(nil, error.localizedDescription) }
             }
         }
     }
 }
-let app = NSApplication.shared
-let delegate = Launcher()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+@main
+struct WebDeviceCableApplication {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = Launcher()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}

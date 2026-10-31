@@ -4,7 +4,15 @@ export { BridgeError, BridgeSecurityError } from './secure.js';
 const done = (job) => ['completed', 'cancelled', 'timed_out', 'blocked', 'interrupted', 'failed'].includes(job.status);
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function json(response) {
-    const body = await response.json();
+    let body;
+    try {
+        body = await response.json();
+    }
+    catch (error) {
+        if (networkError(error))
+            throw error;
+        throw new BridgeError('invalid_response', 'WDC returned an unreadable response. Check the request status before retrying.', response.status, { category: 'transport' });
+    }
     if (!response.ok)
         throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
     return body;
@@ -66,12 +74,12 @@ export class BridgeClient {
     closed = true;
     watchers = new Set();
     onPageHide = () => { void this.close().catch(() => { }); };
-    constructor(options) {
+    constructor(options, transport) {
         this.options = options;
         const keys = options.connection;
         if (!keys || !/^[a-f0-9]{64}$/.test(keys.pairingId))
             throw new Error('A signed protocol v2 pairing is required. Re-pair this app.');
-        this.transport = new SecureTransport(keys.identity, appOrigin(options.origin), keys, keys.pairingId, options.baseURL);
+        this.transport = transport ?? new SecureTransport(keys.identity, appOrigin(options.origin), keys, keys.pairingId, options.baseURL);
     }
     static async pair(options) {
         return BridgeClient.pairWithKeys(options, await createSigningKeys());
@@ -197,6 +205,7 @@ export class BridgeClient {
             return await this.transport.fetch(path, init, lease);
         }
         catch (error) {
+            this.transport.reset();
             if (networkError(error))
                 throw new BridgeError('connection_failed', 'Cannot reach the local runner. Check that WebDeviceCable is running.', 0, { category: 'transport', retryable: true });
             throw error;
@@ -252,7 +261,7 @@ export class BridgeClient {
                     result = { error: 'The application could not complete this tool call.' };
                 }
                 try {
-                    if (JSON.stringify(result).length > 32768)
+                    if (new TextEncoder().encode(JSON.stringify(result)).length > 32768)
                         result = { error: 'Tool result exceeds the 32 KiB limit. Return a summary or file reference.' };
                 }
                 catch {
@@ -297,6 +306,10 @@ export class BridgeClient {
     getSession(id) { return this.request(`/v2/conversations/${encodeURIComponent(id)}`).then((json)); }
     closeSession(id) { return this.request(`/v2/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((json)); }
     capabilities() { return this.request('/v2/capabilities').then((json)); }
+    async preflight(request, features = []) {
+        await this.connect();
+        return this.request('/v2/admission', { method: 'POST', body: JSON.stringify({ request: { ...request, idempotencyKey: 'preflight-check' }, features }) }).then((json));
+    }
     /** File bytes stay unchanged and scoped to this requesting tab. */
     async upload(file, name = 'input') {
         await this.connect();
@@ -346,6 +359,7 @@ export class BridgeClient {
             return this.connecting;
         if (this.connected)
             return;
+        this.transport.reset();
         if (!this.closed)
             this.stop();
         const generation = ++this.generation;

@@ -7,3 +7,9 @@ node_modules/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Private publisher/update signing material never belongs in source.
+*.p12
+*.pfx
+*.key
+*private*.pem

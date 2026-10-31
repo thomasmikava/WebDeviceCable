@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 // Opt-in native subscription test; no API fallback. Run from the repository root.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -10,7 +11,7 @@ const dir=await mkdtemp(root+'/native-tools-'),workspace=await mkdtemp(root+'/gr
 const provider=process.argv[2]??'codex';assert.ok(['codex','claude'].includes(provider),'Use codex or claude');
 const origin='https://wdc-native.example:8443';let child,client,base,auth;
 try {
- child=spawn(resolve(process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'),['serve','--data-dir',dir,'--port','0'],{stdio:'pipe'});
+ child=spawn(resolve(process.env.WDC_BINARY ?? (existsSync(process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') ? (process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') : (process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'))),['serve','--data-dir',dir,'--port','0'],{stdio:'pipe'});
  for(let i=0;i<150;i++){try{base=JSON.parse(await readFile(dir+'/runner.json','utf8')).url;break}catch{await wait(100)}}assert.ok(base);
  auth=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+await readFile(dir+'/admin.key','utf8')}}).then(r=>r.json());
  async function api(path,body,method='POST'){const r=await fetch(base+'/api'+path,{method,headers:{Origin:base,'Content-Type':'application/json','X-Bridge-Session':auth.session,'X-Bridge-CSRF':auth.csrf},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await r.json();assert.ok(r.ok,JSON.stringify(value));return value;}

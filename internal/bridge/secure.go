@@ -64,19 +64,21 @@ type secureChannel struct {
 	Used      map[string]bool
 }
 type secureRequest struct {
-	Version       int    `json:"v"`
-	Kind          string `json:"kind"`
-	SessionID     string `json:"sessionId"`
-	Nonce         string `json:"nonce"`
-	Timestamp     int64  `json:"timestamp"`
-	Origin        string `json:"origin"`
-	PairingID     string `json:"pairingId"`
-	PublicKey     string `json:"publicKey"`
-	Method        string `json:"method"`
-	Path          string `json:"path"`
-	Authorization string `json:"authorization,omitempty"`
-	Lease         string `json:"lease,omitempty"`
-	Body          string `json:"body"`
+	Version           int    `json:"v"`
+	Kind              string `json:"kind"`
+	SessionID         string `json:"sessionId"`
+	Nonce             string `json:"nonce"`
+	Timestamp         int64  `json:"timestamp"`
+	RelayConnectionID string `json:"relayConnectionId,omitempty"`
+	Deadline          int64  `json:"deadline,omitempty"`
+	Origin            string `json:"origin"`
+	PairingID         string `json:"pairingId"`
+	PublicKey         string `json:"publicKey"`
+	Method            string `json:"method"`
+	Path              string `json:"path"`
+	Authorization     string `json:"authorization,omitempty"`
+	Lease             string `json:"lease,omitempty"`
+	Body              string `json:"body"`
 }
 type secureFrame struct {
 	Version     int    `json:"v"`
@@ -368,6 +370,21 @@ func (a *App) secureCall(w http.ResponseWriter, r *http.Request, mux http.Handle
 		a.mu.Unlock()
 		return fail(401, "stale_request", "Request timestamp is outside the allowed window.")
 	}
+	// Relay messages are signed for one connection and deadline. Direct v2 clients
+	// retain their existing timestamp/nonce binding.
+	var relayBinding *RelayBinding
+	if p := a.state.Pairings[in.PairingID]; p != nil {
+		relayBinding = p.Relay
+	} else if in.Path == "/v2/pairings/claim" {
+		if invitation := a.state.Invitations[digest(in.Authorization)]; invitation != nil {
+			relayBinding = invitation.Pairing.Relay
+		}
+	}
+	if relayBinding != nil && (in.RelayConnectionID != relayBinding.ConnectionID ||
+		in.Deadline <= now.UnixMilli() || in.Deadline > now.Add(time.Minute).UnixMilli()) {
+		a.mu.Unlock()
+		return fail(401, "relay_binding_mismatch", "Relay connection or deadline mismatch.")
+	}
 	if channel.Used[in.Nonce] || len(channel.Used) >= 2048 {
 		a.mu.Unlock()
 		return fail(409, "request_replay", "Request nonce was consumed or channel capacity was reached.")
@@ -392,6 +409,13 @@ func (a *App) secureCall(w http.ResponseWriter, r *http.Request, mux http.Handle
 	defer cancel()
 	inner = inner.WithContext(ctx)
 	sw := &secureWriter{target: w, header: http.Header{}, status: 200, app: a, channel: channel, request: in, requestHash: digest(string(raw)), stream: in.Method == "GET" && strings.HasSuffix(in.Path, "/events"), cancel: cancel}
+	a.mu.Lock()
+	maintenance := a.updating
+	a.mu.Unlock()
+	if maintenance {
+		writeError(sw, fail(503, "bridge_updating", "WebDeviceCable is updating. Reconnect in a moment."))
+		return sw.finish()
+	}
 	mux.ServeHTTP(sw, inner)
 	return sw.finish()
 }

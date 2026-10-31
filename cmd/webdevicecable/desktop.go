@@ -27,7 +27,7 @@ func desktopSession(args []string, newTray func(string, func(), func()) (desktop
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("webdevicecable desktop", flag.ContinueOnError)
+	flags := flag.NewFlagSet("WebDeviceCable desktop", flag.ContinueOnError)
 	dir := flags.String("data-dir", defaultDataDirectory(root), "Private state directory")
 	port := flags.Int("port", 47321, "Loopback port (0 selects an unused port)")
 	noOpen := flags.Bool("no-open", false, "Do not open the control panel on startup")

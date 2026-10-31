@@ -3,20 +3,22 @@ set -eu
 bridge_source=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 bridge_prefix="${PREFIX:-$HOME/.local}"
 mkdir -p "$bridge_prefix/bin"
-if [ -x "$bridge_prefix/bin/webdevicecable" ]; then
-	"$bridge_source/webdevicecable" desktop-stop
-  "$bridge_prefix/bin/webdevicecable" stop || true
+if [ -x "$bridge_prefix/bin/WebDeviceCable" ] || [ -x "$bridge_prefix/bin/webdevicecable" ]; then
+	"$bridge_source/WebDeviceCable" desktop-stop
+  "$bridge_source/WebDeviceCable" stop --if-running
 fi
 bridge_stage=$(mktemp "$bridge_prefix/bin/.webdevicecable-XXXXXX")
 trap 'rm -f "$bridge_stage"' EXIT HUP INT TERM
-install -m 755 "$bridge_source/webdevicecable" "$bridge_stage"
-mv -f "$bridge_stage" "$bridge_prefix/bin/webdevicecable"
-printf 'Installed to %s/bin/webdevicecable\nRun: %s/bin/webdevicecable start\n' "$bridge_prefix" "$bridge_prefix"
+install -m 755 "$bridge_source/WebDeviceCable" "$bridge_stage"
+mv -f "$bridge_stage" "$bridge_prefix/bin/WebDeviceCable"
+# Preserve the previous CLI spelling as an alias, while desktop names use WebDeviceCable.
+ln -sf WebDeviceCable "$bridge_prefix/bin/webdevicecable"
+printf 'Installed to %s/bin/WebDeviceCable\nRun: %s/bin/WebDeviceCable start\n' "$bridge_prefix" "$bridge_prefix"
 
 bridge_apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 mkdir -p "$bridge_apps"
 # Desktop Exec is not shell syntax: escape its quoted argument, including field codes.
-bridge_exec=$(printf '%s' "$bridge_prefix/bin/webdevicecable" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g; s/`/\\`/g; s/\$/\\$/g')
+bridge_exec=$(printf '%s' "$bridge_prefix/bin/WebDeviceCable" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g; s/`/\\`/g; s/\$/\\$/g')
 cat > "$bridge_apps/webdevicecable.desktop" <<EOF
 [Desktop Entry]
 Type=Application

@@ -1,0 +1,102 @@
+name: Publish npm packages
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: true
+        description: Exact version from package.json
+      dist_tag:
+        type: choice
+        options: [latest, next]
+        default: latest
+        description: npm distribution tag (prereleases require next)
+      dry_run:
+        type: boolean
+        default: true
+        description: Build and verify both tarballs without publishing
+permissions:
+  contents: read
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'thomasmikava/WebDeviceCable' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Validate release version and npm tooling
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.dist_tag }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          const valid = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/;
+          if (!valid.test(version) || version !== process.env.RELEASE_VERSION) throw new Error('Input version must match the package.json release version.');
+          if (version.includes('-') && process.env.RELEASE_TAG !== 'next') throw new Error('Publish prereleases under next.');
+          const source = execFileSync('git', ['rev-parse', `refs/tags/npm-v${version}^{commit}`], { encoding: 'utf8' }).trim();
+          if (source !== process.env.GITHUB_SHA) throw new Error('The npm release tag must point at this source commit.');
+          const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) throw new Error('Trusted publishing needs npm >=11.5.1; use a current Node 24 runner.');
+          JS
+      - run: npm ci --ignore-scripts
+      - run: npm run check:sdk-drift
+      - run: npm run test:sdk
+      - run: npm run test:package
+      - name: Review publish contents without contacting the registry
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.dist_tag }}
+        run: |
+          npm publish "./dist/webdevicecable-sdk-${RELEASE_VERSION}.tgz" --dry-run --offline --access public --tag "$RELEASE_TAG" --ignore-scripts
+          npm publish "./dist/webdevicecable-relay-${RELEASE_VERSION}.tgz" --dry-run --offline --access public --tag "$RELEASE_TAG" --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: dist/webdevicecable-*.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [sdk, relay]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: artifacts
+      - name: Publish the verified tarball via npm trusted publishing
+        env:
+          PACKAGE: ${{ matrix.package }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.dist_tag }}
+        run: npm publish "./artifacts/webdevicecable-${PACKAGE}-${RELEASE_VERSION}.tgz" --access public --tag "$RELEASE_TAG" --provenance --ignore-scripts

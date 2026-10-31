@@ -1,0 +1,13 @@
+.git
+.cache
+.local
+.tools
+node_modules
+dist
+*.key
+*.pem
+*.p12
+*.pfx
+.env*
+
+**/node_modules

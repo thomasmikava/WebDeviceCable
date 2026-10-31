@@ -6,7 +6,7 @@
 - **Workspace:** selected folders through WDC’s rooted file dispatcher; native shell stays disabled. Separate **Commands** mode runs configured executables with explicit OS-account permissions, without a Restricted-mode isolation claim.
 - Runner and native controls enforce scopes independently of prompts/UI; unsupported modes fail closed.
 - Pairings default to approval per job; automation requires consent. Command grants pin definition hashes; edits require renewed grants and cancel affected work.
-- Each requesting app tab maintains its own authenticated lease; expiry cancels only its jobs. The control panel need not stay open.
+- Each direct tab or owned backend operation maintains its own authenticated lease; expiry cancels only its jobs. The control panel need not stay open.
 
 ## Pairing and local data
 - Bind revocable app signing keys to app ID, exact origin, device and app user; keep both sides' private keys separate and never expose provider tokens.
@@ -14,9 +14,9 @@
 - Users inspect scopes, approve app-initiated pairing in the authenticated local panel, pause/revoke access, end leased sessions and erase terminal history; routing never grants commands.
 - Isolate app sessions, files, configuration and tools; never inherit unrelated hooks/integrations.
 - Treat prompts, attachments and tool results as untrusted; they cannot grant permissions.
-- Bind only to loopback; enforce exact Host, authenticated API access and browser Origin checks.
+- Desktop listener and administration bind only to loopback; enforce exact Host, authenticated API access and browser Origin checks.
 - Bundle assets locally; origin-scoped control sessions and CSRF headers protect writes. Command editing requires a file-only startup flag; the web UI never writes config.yaml and paired apps cannot edit commands.
-- Use restrictive local storage permissions, bounded request sizes, atomic persistence and one writer per data directory.
+- Use restrictive local storage permissions, bounded request sizes, atomic persistence and one writer per data directory; updates require pinned release signatures, owner-only controls and drained work.
 - Minimize content/logging; never log credentials; redact native-client diagnostic output and erase terminal prompts.
 - Keep provider authentication in unmodified official clients; never read/copy credential files or use undocumented inference endpoints.
 - Reject API-key-only authentication rather than silently charging an API account.

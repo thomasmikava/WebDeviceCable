@@ -31,6 +31,7 @@ export interface Job {
 export interface Artifact {id:string;name:string;mediaType:string;size:number;sha256:string}
 export interface TokenUsage {inputTokens:number;cachedInputTokens:number;outputTokens:number;reasoningOutputTokens:number;totalTokens:number}
 export interface UploadedInput extends Artifact {}
+export interface AdmissionStatus { available: boolean; kind?: 'native' | 'command'; code?: string }
 export interface Pairing {
   id: string; appId: string; appUser: string; name: string; origin: string;
   deviceId: string; automatic: boolean; paused: boolean; revoked: boolean; mode: 'restricted' | 'commands'; actions?: Record<string, string>;
@@ -46,7 +47,12 @@ export interface Capabilities {appToolPermissions?:'application';fileTransfer:bo
 const done = (job: Job) => ['completed', 'cancelled', 'timed_out', 'blocked', 'interrupted', 'failed'].includes(job.status);
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function json<T>(response: Response): Promise<T> {
-  const body = await response.json();
+  let body;
+  try { body = await response.json(); }
+  catch (error) {
+    if (networkError(error)) throw error;
+    throw new BridgeError('invalid_response', 'WDC returned an unreadable response. Check the request status before retrying.', response.status, {category:'transport'});
+  }
   if (!response.ok) throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
   return body as T;
 }
@@ -63,6 +69,11 @@ export interface AppTool extends AppToolDefinition {execute:(args:Record<string,
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {tools:Record<string,AppToolDefinition&{hash:string}>;grants:Record<string,{hash:string;automatic:boolean}>;folders:{id:string;name:string;write:boolean;automatic:boolean}[]}
 export interface ClientOptions { tools?: AppTool[]; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
+export interface BridgeTransport {
+  reset(): void;
+  fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
+  close(): Promise<void>;
+}
 export class BridgeJobError extends BridgeError {
   constructor(public job: Job) { super(job.error?.code ?? job.code ?? job.status, job.error?.message ?? job.detail ?? 'The request did not complete.', 0, job.error); this.name = 'BridgeJobError'; }
 }
@@ -88,7 +99,7 @@ function unknownSubmission(error: unknown, key: string): never {
   throw error;
 }
 export class BridgeClient {
-  private transport: SecureTransport;
+  private transport: BridgeTransport;
  private toolHandlers=new Map<string,AppTool>();
  private toolsBusy=false;
  private toolsTimer?:ReturnType<typeof setInterval>;
@@ -102,10 +113,10 @@ export class BridgeClient {
   private closed = true;
   private watchers = new Set<AbortController>();
   private onPageHide = () => { void this.close().catch(() => {}); };
-  constructor(private options: ClientOptions) {
+  constructor(private options: ClientOptions, transport?: BridgeTransport) {
     const keys = options.connection;
     if (!keys || !/^[a-f0-9]{64}$/.test(keys.pairingId)) throw new Error('A signed protocol v2 pairing is required. Re-pair this app.');
-    this.transport = new SecureTransport(keys.identity, appOrigin(options.origin), keys, keys.pairingId, options.baseURL);
+    this.transport = transport ?? new SecureTransport(keys.identity, appOrigin(options.origin), keys, keys.pairingId, options.baseURL);
   }
   static async pair(options: { baseURL?: string; invitation: string; appId: string; appUser: string; origin?: string }): Promise<{ connection: ConnectionKeys; pairing: Pairing }> {
     return BridgeClient.pairWithKeys(options,await createSigningKeys());
@@ -179,7 +190,7 @@ export class BridgeClient {
   }
   private async request(path: string, init: RequestInit = {}, lease = this.lease): Promise<Response> {
     try { return await this.transport.fetch(path, init, lease); }
-    catch (error) { if (networkError(error)) throw new BridgeError('connection_failed', 'Cannot reach the local runner. Check that WebDeviceCable is running.', 0, {category:'transport',retryable:true}); throw error; }
+    catch (error) { this.transport.reset(); if (networkError(error)) throw new BridgeError('connection_failed', 'Cannot reach the local runner. Check that WebDeviceCable is running.', 0, {category:'transport',retryable:true}); throw error; }
   }
   get connected(): boolean { return !this.closed && Date.now() < this.leaseExpiresAt; }
   async registerTools(tools:AppTool[]):Promise<void> {
@@ -204,7 +215,7 @@ export class BridgeClient {
         // Claim once before invoking. An ambiguous claim is never retried or executed.
         try{await this.request(`/v2/tool-calls/${call.id}/claim`,{method:'POST'}).then(json);}catch{continue;}
         let result:unknown;try{result=await tool.execute(call.arguments,{idempotencyKey:call.id,signal:this.lifetime.signal});if(result===undefined)result=null;}catch{result={error:'The application could not complete this tool call.'};}
-        try {if(JSON.stringify(result).length>32768)result={error:'Tool result exceeds the 32 KiB limit. Return a summary or file reference.'};} catch {result={error:'Tool result must be serializable JSON.'};}
+        try {if(new TextEncoder().encode(JSON.stringify(result)).length>32768)result={error:'Tool result exceeds the 32 KiB limit. Return a summary or file reference.'};} catch {result={error:'Tool result must be serializable JSON.'};}
  if(!this.closed)await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result})}).then(json).catch(()=>{});
       }
     }catch{/* The lease and native turn determine cancellation; tool callbacks are never replayed. */}finally{this.toolsBusy=false;}
@@ -229,6 +240,9 @@ export class BridgeClient {
   getSession(id: string): Promise<Conversation> { return this.request(`/v2/conversations/${encodeURIComponent(id)}`).then(json<Conversation>); }
   closeSession(id: string): Promise<Conversation> { return this.request(`/v2/conversations/${encodeURIComponent(id)}`,{method:'DELETE'}).then(json<Conversation>); }
   capabilities(): Promise<Capabilities> { return this.request('/v2/capabilities').then(json<Capabilities>); }
+  async preflight(request: Omit<JobRequest,'idempotencyKey'>, features: string[] = []):Promise<AdmissionStatus>{
+    await this.connect();return this.request('/v2/admission',{method:'POST',body:JSON.stringify({request:{...request,idempotencyKey:'preflight-check'},features})}).then(json<AdmissionStatus>);
+  }
   /** File bytes stay unchanged and scoped to this requesting tab. */
   async upload(file: Blob, name = 'input'): Promise<UploadedInput> {
     await this.connect(); if(file.size<0||file.size>8*1024*1024)throw new BridgeError('invalid_input','Files must be at most 8 MiB.',400);
@@ -253,6 +267,7 @@ export class BridgeClient {
   async connect(): Promise<void> {
     if (this.connecting) return this.connecting;
     if (this.connected) return;
+    this.transport.reset();
     if (!this.closed) this.stop();
     const generation = ++this.generation;
     this.connecting = (async () => { try {

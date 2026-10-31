@@ -10,11 +10,11 @@ Codex and Claude Code support text streaming, continuing sessions, schema-checke
 
 - **macOS:** install the `.pkg`, or drag `WebDeviceCable.app` from the ZIP into Applications. Open WebDeviceCable. Its menu bar icon stays available after you close the browser; click it to reopen the control panel. Right-click for **Quit WebDeviceCable**, which stops the runner.
 - **Windows:** extract the ZIP and double-click `Install.cmd`. Open WebDeviceCable from the Start menu. Its system tray icon reopens the control panel; right-click for Open and Quit. Installation is per user and needs no Node.js or Python.
-- **Linux:** extract the archive, run `./install.sh`, then open WebDeviceCable from the applications menu for its system tray icon. Or run `~/.local/bin/webdevicecable desktop`. The desktop must support StatusNotifier/AppIndicator icons; some GNOME setups need that support enabled. The applications-menu shortcut remains available without a tray host.
+- **Linux:** extract the archive, run `./install.sh`, then open WebDeviceCable from the applications menu for its system tray icon. Or run `~/.local/bin/WebDeviceCable desktop`. The desktop must support StatusNotifier/AppIndicator icons; some GNOME setups need that support enabled. The applications-menu shortcut remains available without a tray host.
 
-The packages are unsigned development previews. macOS notarization, Windows signing, and execution testing on Linux/Windows remain release work. Do not disable OS security protections to install them. You can build from source instead.
+The packages are unsigned development previews. Official releases require macOS/Windows signing and platform validation; current local artifacts are previews. Do not disable OS security protections to install them. You can build from source instead.
 
-`webdevicecable start` launches a detached local runner and opens its control panel. `webdevicecable open` reopens it; `webdevicecable stop` stops it. `serve` runs in the foreground. `--data-dir PATH`, `--port NUMBER`, `--no-open` and `open --print` support development and CLI use. Treat the printed private control link as a password.
+`WebDeviceCable start` launches a detached local runner and opens its control panel. `WebDeviceCable open` reopens it; `WebDeviceCable stop` stops it. `serve` runs in the foreground. `--data-dir PATH`, `--port NUMBER`, `--no-open` and `open --print` support development and CLI use. Treat the printed private control link as a password.
 
 The desktop app keeps a WDC icon in the macOS menu bar or Windows/Linux system tray after the browser closes. Click it to open the panel in your default browser; if your desktop shows a menu first, choose **Open WebDeviceCable**. **Quit WebDeviceCable** stops the runner and cancels outstanding work. Reopening the app reuses the same icon. The bare `start` CLI command runs without a desktop icon; Linux/Windows `desktop-stop` closes the tray app for updates.
 
@@ -22,7 +22,7 @@ In Settings, **Run test** creates a local test request. Approve it in Requests. 
 
 ## Connect an app
 
-Start with the [short integration guide](docs/integrate.md): installation, pairing, saved connections, streaming, cancellation and common errors. The SDK is bundled in each archive and available as a locally built npm tarball (`npm run package:sdk`); nothing is published automatically.
+Start with the [short integration guide](docs/integrate.md): installation, pairing, saved connections, streaming, cancellation and common errors. The browser package is `@webdevicecable/sdk`; backends use the independent `@webdevicecable/relay` package. Both support ESM, CommonJS and TypeScript. Browser ESM files can also be self-hosted or imported by a version-pinned CDN URL once that npm release exists. See [npm distribution and release preparation](docs/npm.md). SDK files are bundled in desktop archives, and `npm run package:sdk` builds both local npm tarballs without publishing.
 
 1. Click **Connect to WebDeviceCable** in the website. The SDK guides the user to open the installed app and puts the request in WDC's Connections page.
 2. Approve the connection in WDC, then choose which program the app may use. Launching never grants access by itself.
@@ -80,14 +80,18 @@ See [provider review](docs/provider-review.md), [protocol](docs/protocol.md), [s
 
 The bundled UI uses a dark palette sampled by `node:crypto.randomInt` within the HSL ranges in `scripts/generate-theme.mjs`. The accent hue spans 0–359°. Candidates are rejected only for contrast failures; the selected palette stays fixed across launches. Run `npm run theme:generate` to sample a new palette, or `npm run theme:check` to verify the current one. No theme-generation code runs on the user’s computer.
 
+## Updates
+
+Official installations check for and install stable updates automatically after requests and sessions finish. Settings → Updates provides manual updating and the automatic-update switch. Updates preserve connections and permissions. Source builds and previews do not install upstream updates. See [updates and recovery](docs/updates.md), [privacy](PRIVACY.md), and [maintainer release steps](docs/releases.md).
+
 ## Develop and validate
 
-Development needs Go 1.25+ and Node.js (only for compiling/testing the small TypeScript SDK). There is no frontend framework, database server, relay or container infrastructure. File-backed state, a small process runner, and four Go dependencies (YAML, file locking, platform support and Linux desktop D-Bus) serve the current scope.
+Development needs Go 1.25+ and Node.js (only for compiling/testing the small TypeScript SDK). The desktop uses file-backed state and has no frontend framework or database server. An optional [self-hosted Docker relay and backend npm client](docs/relay.md) add server-to-desktop transport with SQLite; the direct browser transport remains available.
 
 ```sh
 npm ci --ignore-scripts --cache .cache/npm
 npm run build:sdk
-go build -o dist/webdevicecable ./cmd/webdevicecable
+go build -o dist/WebDeviceCable ./cmd/webdevicecable
 BRIDGE_GO=go scripts/check.sh
 npm run test:e2e                          # real runner + SDK, no model calls
 python3 scripts/package.py                 # six targets; macOS launcher needs Xcode command-line tools
@@ -96,8 +100,12 @@ node examples/server.mjs                   # development example, 127.0.0.1:4732
 
 The generated SDK JavaScript/declarations are checked in so `go build` works without Node.js. To use a different Go executable set `BRIDGE_GO=/absolute/path/to/go`. The check/package scripts keep Go caches and test temporary files under this repository. Tests cover origin/Host/CSRF defenses, cross-app access, consent, leases, revocation, timeouts, restart interruption, duplicate prevention and SSE. Standard checks make no model requests. The opt-in `node scripts/native-e2e.mjs --images` exercises real Codex subscription execution; `node scripts/native-e2e.mjs --claude` exercises real Claude Code streaming, continuation, JSON/files and cancellation; run it deliberately. Set `bridge.disableNative: true` in config.yaml to disable native discovery/execution entirely.
 
-Runtime state normally lives in the OS user config directory under `webdevicecable`. If that directory does not exist and a legacy `ai-bridge` data directory does, the launcher reuses it in place, preserving pairing keys, permissions and history. No files are moved. `--data-dir` always overrides this choice. Development/testing should use `--data-dir "$PWD/.local/dev"`. History retains up to 500 jobs and 20 MiB of response content, evicting the oldest finished job when needed. Minimal replay receipts are stored separately and survive history deletion and upgrades. A second runner cannot write the same directory. Pending jobs become interrupted after restart and are never replayed automatically.
+Runtime state normally lives in the OS user config directory under `WebDeviceCable`. If that directory does not exist and a legacy `ai-bridge` data directory does, the launcher reuses it in place, preserving pairing keys, permissions and history. No files are moved. `--data-dir` always overrides this choice. Development/testing should use `--data-dir "$PWD/.local/dev"`. History retains up to 500 jobs and 20 MiB of response content, evicting the oldest finished job when needed. Minimal replay receipts are stored separately and survive history deletion and upgrades. A second runner cannot write the same directory. Pending jobs become interrupted after restart and are never replayed automatically.
 
 See [operating and releasing WDC](docs/operations.md) for updates, backup/recovery, validation and the remaining release gates.
 
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 MIT licensed. Provider services and native clients retain their own terms and licenses. Bundled provider icons retain their owners’ rights; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Backend integrations: see the [relay deployment and Node package guide](docs/relay.md). One deployment supports multiple websites with dynamic operator registration and separate project credentials. Kings uses its own relay; Rorido remains a direct browser integration.

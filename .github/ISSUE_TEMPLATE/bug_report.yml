@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a reproducible WebDeviceCable problem.
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, use SECURITY.md. Never include control links, invitations, credentials, private prompts or your state directory."
+  - type: input
+    id: environment
+    attributes:
+      label: Version and environment
+      description: WebDeviceCable version, operating system/architecture and browser.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected result and actual result
+      description: Include a minimal example with synthetic data.
+    validations:
+      required: true

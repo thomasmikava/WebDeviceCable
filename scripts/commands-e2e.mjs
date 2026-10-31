@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 // Real runner + WebCrypto SDK + development-only Node helper commands. No AI.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -19,7 +20,7 @@ await writeFile(dir+'/config.yaml',config(false),{mode:0o600});
 let child, base, sessionID, csrf, port = '0'; const clients = [];
 async function boot() {
   base = undefined;
-  child = spawn(resolve(process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'),['serve','--data-dir',dir,'--port',port],{stdio:'pipe'});
+  child = spawn(resolve(process.env.WDC_BINARY ?? (existsSync(process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') ? (process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') : (process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'))),['serve','--data-dir',dir,'--port',port],{stdio:'pipe'});
   let errors = ''; child.stderr.on('data',data=>{errors+=data});
   for(let i=0;i<100;i++){
     try {const info=JSON.parse(await readFile(dir+'/runner.json','utf8'));if(info.pid===child.pid){base=info.url;break}}catch{}

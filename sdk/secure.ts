@@ -95,6 +95,8 @@ async function open(key: CryptoKey, id: string, envelope: Encrypted): Promise<Si
 }
 export class SecureTransport {
   readonly endpoint: string;
+  /** Discard ephemeral state; the next handshake must still verify the original pin. */
+  reset(): void { this.channel = undefined; }
   private channel?: Channel;
   private opening?: Promise<Channel>;
   constructor(private identity: RunnerIdentity, private origin: string, private keys: { privateKey: CryptoKey; publicKey: string }, private pairingId: string, endpoint?: string) {

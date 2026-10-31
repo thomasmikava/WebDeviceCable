@@ -258,7 +258,7 @@ function render() {
   preserveList($('history-jobs'),history.map(job=>jobCard(job,true)));
   $('requests-empty').hidden=!!state.jobs.length || !!state.permissions?.length || Object.values(state.conversations??{}).some(item=>item.status==='open');
   $('clear-history').hidden=!history.length;
-  renderCommands(); renderSessions();
+  renderCommands(); renderSessions(); renderUpdates();
   for (const control of document.querySelectorAll('[data-sharing]')) control.setAttribute('aria-checked',String(state.sharing?.[control.dataset.sharing] ?? control.dataset.sharing !== 'rawErrors'));
   const descriptions = {
     codex: state.providers.find(p => p.id === 'codex')?.reason,
@@ -283,6 +283,15 @@ function openConnect() {
   $('invite-commands-section').hidden=!state.commands.length; commandPicker($('invite-commands'),{},$('invite-command-consent')); $('connect-dialog').showModal();
 }
 $('connect-app').onclick=openConnect; $('connect-first').onclick=openConnect;
+let reviewedRelay;
+$('connect-server').onclick=()=>{reviewedRelay=undefined;$('relay-form').reset();$('relay-review').textContent='';$('relay-submit').textContent='Review connection';$('relay-dialog').showModal();};
+$('close-relay').onclick=()=>$('relay-dialog').close();
+$('relay-form').oninput=()=>{reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').textContent='';};
+$('relay-form').onsubmit=action(async event=>{
+  event.preventDefault();const data=new FormData(event.currentTarget);const input={url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()};
+  if(!reviewedRelay){reviewedRelay=await api('/relay/inspect',{method:'POST',body:JSON.stringify(input)});$('relay-review').textContent=reviewedRelay.name+' · '+reviewedRelay.origin+' · Account '+reviewedRelay.appUser+'. Approve this server to request work from this device?';$('relay-submit').textContent='Approve server connection';return;}
+  await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay})});$('relay-dialog').close();await refresh();
+});
 $('show-invitation-form').onclick=()=>{$('connect-start').hidden=true;$('invite-form').hidden=false;$('connect-title').textContent='Create an invitation';$('invite-form').elements.name.focus();};
 $('back-connect').onclick=()=>{$('invite-form').hidden=true;$('connect-start').hidden=false;$('connect-title').textContent='Connect an app';$('show-invitation-form').focus();};
 $('close-connect').onclick=$('done-connect').onclick=$('done-connect-start').onclick=()=>$('connect-dialog').close();
@@ -303,6 +312,27 @@ $('copy-invite').onclick = action(async () => {
   }
 });
 $('check-clients').onclick = action(() => api('/providers/check', {method:'POST'}));
+$('check-updates').onclick = action(() => api('/updates/check', {method:'POST',body:'{}'}));
+$('automatic-updates').onclick = action(() => api('/updates', {method:'PATCH',body:JSON.stringify({automatic:!state.updates?.automatic})}));
+$('install-update').onclick = action(async () => {
+  const active=state.updates?.stage==='waiting'||state.jobs.some(job=>['awaiting_approval','queued','running'].includes(job.status))||Object.values(state.conversations??{}).some(session=>session.status==='open')||(state.permissions?.length??0)>0;
+  if(active&&!await confirmAction('End sessions and update?','Current requests and conversation context will end. Your connections and permissions stay saved.','End sessions and update',true))return;
+  await api('/updates/install',{method:'POST',body:JSON.stringify({endSessions:active})});
+});
+function renderUpdates(){
+  const update=state.updates;
+  const supported=!!update?.supported,busy=['checking','downloading','installing'].includes(update?.stage);
+  $('automatic-updates').disabled=!supported||update?.stage==='installing';$('automatic-updates').setAttribute('aria-checked',String(!!update?.automatic));
+  $('installed-version').textContent=update?.version&&update.version!=='dev'?update.version:'Development build';
+  $('build-version').textContent=update?.official?`WebDeviceCable ${update.version}`:update?.version&&update.version!=='dev'?`${update.version} preview`:'Development build';
+  const messages={development:'Updates are available in official installations.',application:'Open the WebDeviceCable app to install updates.',idle:'Checks daily. You can check anytime.',checking:'Checking for updates…',current:'WebDeviceCable is up to date.',available:`WebDeviceCable ${update?.available} is available.`,downloading:'Downloading update…',ready:'Update ready to install.',waiting:'Update ready. Waiting for sessions to finish.',authorization:'Update ready. macOS needs your permission to install.',installing:'Updating WebDeviceCable…',manual:'This update needs a manual installation.',error:update?.error??'Couldn’t check for updates. Try again.'};
+  $('update-status').textContent=messages[update?.stage]??messages.development;
+  $('check-updates').disabled=!supported||busy;
+  $('manual-update').hidden=update?.stage!=='manual';
+  $('install-update').hidden=!supported||!['available','ready','waiting','authorization'].includes(update?.stage);$('install-update').textContent=update?.stage==='waiting'?'End sessions and update':'Update now';
+  $('update-progress').hidden=update?.stage!=='downloading';
+  if(update?.size&&update?.downloaded){$('update-progress').max=update.size;$('update-progress').value=update.downloaded;}else{$('update-progress').removeAttribute('value');}
+}
 $('run-test').onclick = action(async () => {
   if (demo && !state.pairings.some(p => p.id === demoPairID && !p.revoked && !p.paused)) { await demo.close().catch(() => {}); demo = null; }
   if (!demo) { const origin = location.origin; const result = await api('/invitations', {method:'POST',body:JSON.stringify({name:'Connection test',appId:'webdevicecable.local-test',origin,appUser:'This computer',mode:'restricted',automatic:false})}); const paired = await BridgeClient.pair({baseURL:origin,invitation:result.invitation,appId:'webdevicecable.local-test',appUser:'This computer',origin}); demoPairID = paired.pairing.id; demo = new BridgeClient({baseURL:origin,connection:paired.connection,origin}); }
@@ -399,9 +429,11 @@ $('command-form').onsubmit = action(async event => {
 $('toggle-runner').onclick = action(() => api('/runner', {method:'PATCH',body:JSON.stringify({enabled:!state.enabled})}));
 $('clear-history').onclick = action(async () => { if (await confirmAction('Clear request history?', 'Finished requests and their output will be removed. Active requests will stay.', 'Clear history', true)) await api('/history', {method:'DELETE'}); });
 $('sign-out').onclick = action(async () => { await api('/session', {method:'DELETE'}); csrf = ''; lock(); });
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => {if(new URLSearchParams(location.hash.slice(1)).has('key'))void boot();else route();});
+let refreshTimer,booting=false;
 document.addEventListener('invalid', event => { let parent = event.target.parentElement; while (parent) { if (parent.tagName === 'DETAILS') parent.open = true; parent = parent.parentElement; } }, true);
 async function boot() {
+  if(booting)return;booting=true;clearInterval(refreshTimer);
   try {
     const key = new URLSearchParams(location.hash.slice(1)).get('key');
     let session;
@@ -409,8 +441,8 @@ async function boot() {
     else session=await api('/session');
     csrf=session.csrf; controlSession=session.session; storeControlSession();
     $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(); initPairingRequest();
-    setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'Runner offline'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
-  } catch { lock(); }
+    refreshTimer=setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'Runner offline'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
+  } catch { lock(); } finally {booting=false;}
 }
 void boot();
 

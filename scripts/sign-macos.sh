@@ -1,16 +1,20 @@
 #!/bin/sh
-# Operator-run release step. No credentials are stored in this repository.
+# Local release signing only. Notarization and final packaging belong to package.py.
 set -eu
 : "${WDC_SIGN_IDENTITY:?Set the Developer ID Application identity}"
 bridge_app="${1:?Usage: sign-macos.sh /path/to/WebDeviceCable.app}"
-codesign --force --options runtime --timestamp --sign "$WDC_SIGN_IDENTITY" "$bridge_app/Contents/Resources/webdevicecable"
-codesign --force --options runtime --timestamp --sign "$WDC_SIGN_IDENTITY" "$bridge_app"
-codesign --verify --deep --strict --verbose=2 "$bridge_app"
-if [ -n "${WDC_NOTARY_PROFILE:-}" ]; then
-  bridge_archive="${bridge_app%/}.notary.zip"
-  ditto -c -k --keepParent "$bridge_app" "$bridge_archive"
-  xcrun notarytool submit "$bridge_archive" --keychain-profile "$WDC_NOTARY_PROFILE" --wait
-  xcrun stapler staple "$bridge_app"
-  xcrun stapler validate "$bridge_app"
-  rm -f "$bridge_archive"
-fi
+python3 - "$bridge_app" "$WDC_SIGN_IDENTITY" <<'PY'
+from pathlib import Path
+import subprocess,sys
+app=Path(sys.argv[1]);identity=sys.argv[2]
+def sign(path):
+    subprocess.run(['codesign','--force','--options','runtime','--timestamp','--preserve-metadata=entitlements','--sign',identity,str(path)],check=True)
+magic={b'\xcf\xfa\xed\xfe',b'\xce\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca',b'\xca\xfe\xba\xbf'}
+for path in sorted(app.rglob('*')):
+    if path.is_file() and not path.is_symlink():
+        with path.open('rb') as handle: header=handle.read(4)
+        if header in magic: sign(path)
+for path in sorted((p for p in app.rglob('*') if p.is_dir() and not p.is_symlink() and p.suffix in ['.app','.xpc','.framework']),key=lambda p:len(p.parts),reverse=True): sign(path)
+sign(app)
+subprocess.run(['codesign','--verify','--deep','--strict','--verbose=2',str(app)],check=True)
+PY

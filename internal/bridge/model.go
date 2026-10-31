@@ -45,6 +45,8 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
+	Relay           *RelayBinding      `json:"relay,omitempty"`
+	Transport       string             `json:"transport,omitempty"`
 	Tools           map[string]AppTool `json:"tools,omitempty"`
 	Folders         []FolderGrant      `json:"folders,omitempty"`
 	ID              string             `json:"id"`
@@ -183,10 +185,18 @@ func publicJob(j *Job) Job {
 }
 func publicPairing(p *Pairing) Pairing {
 	c := *p
+	c.Relay = nil
 	c.CredentialHash = ""
 	c.ClientPublicKey = ""
 	c.NativeAccounts = nil
 	return c
+}
+
+func pairingLeaseTTL(p *Pairing) time.Duration {
+	if p.Transport == "relay" {
+		return 45 * time.Second
+	}
+	return LeaseTTL
 }
 func exactOrigin(raw string) bool {
 	u, e := url.Parse(raw)

@@ -24,7 +24,7 @@ import (
 	"github.com/thomasmikava/WebDeviceCable/internal/bridge"
 )
 
-const version = "0.1.0"
+var version = "dev"
 
 var gui = "false"
 
@@ -39,6 +39,12 @@ func main() {
 	}
 }
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "update" {
+		return updateCLI(args[1:])
+	}
+	if len(args) > 0 && args[0] == "internal-update" {
+		return applyUpdate(args[1:])
+	}
 	if len(args) > 0 && args[0] == "desktop" {
 		return runDesktop(args[1:])
 	}
@@ -69,7 +75,7 @@ func run(args []string) error {
 	if e != nil {
 		return e
 	}
-	flags := flag.NewFlagSet("webdevicecable "+command, flag.ContinueOnError)
+	flags := flag.NewFlagSet("WebDeviceCable "+command, flag.ContinueOnError)
 	dir := flags.String("data-dir", defaultDataDirectory(root), "Private state directory")
 	port := flags.Int("port", 47321, "Loopback port (0 selects an unused port)")
 	noOpen := flags.Bool("no-open", false, "Do not open the control panel")
@@ -105,6 +111,10 @@ func run(args []string) error {
 		defer a.Close()
 		listener, e := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", *port))
 		if e != nil {
+			return e
+		}
+		if e = configuredUpdates(a, *dir, listener.Addr().(*net.TCPAddr).Port); e != nil {
+			listener.Close()
 			return e
 		}
 		fmt.Println("WebDeviceCable listening on http://" + listener.Addr().String())
@@ -159,7 +169,7 @@ func run(args []string) error {
 	case "open":
 		info, e := readRuntime(*dir)
 		if e != nil || !alive(*dir, info) {
-			return errors.New("runner is not running; use webdevicecable start")
+			return errors.New("runner is not running; use WebDeviceCable start")
 		}
 		return openPanel(*dir, info, *printLink)
 	case "stop":
@@ -276,7 +286,7 @@ func openPanel(dir string, info bridge.RuntimeInfo, printLink bool) error {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if e = cmd.Run(); e != nil {
-		return errors.New("could not open the browser; use webdevicecable open --print to copy the private control-panel link")
+		return errors.New("could not open the browser; use WebDeviceCable open --print to copy the private control-panel link")
 	}
 	return nil
 }

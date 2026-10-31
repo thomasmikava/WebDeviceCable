@@ -1,6 +1,6 @@
 # Integrate WebDeviceCable
 
-WDC runs on your user's computer. Your browser app talks directly to it with signed, encrypted requests and streaming responses. You do not need a backend, provider API keys or a relay. End users install one binary; they do not need Node.js or Python.
+WDC runs on your user's computer. Your browser app talks directly to it with signed, encrypted requests and streaming responses. The direct transport needs no backend or relay. For a server-to-desktop integration, use the separate [Node relay package and Docker server](relay.md); provider credentials remain local. End users install one binary; they do not need Node.js or Python.
 
 **Availability:** approved HTTPS and loopback origins can use installed Codex or Claude Code, configured commands, app tools and selected folders. Images are generated/edited through Codex only. File transport accepts arbitrary bytes; the selected program determines what it can read. Native authentication, account policy and isolation checks still apply. Check capabilities; never substitute paid APIs. [Provider conditions](provider-review.md) concern deployment and distribution, rather than an HTTPS-origin ban.
 
@@ -8,13 +8,36 @@ WDC runs on your user's computer. Your browser app talks directly to it with sig
 
 Have the user install WDC ([OS instructions](../README.md#run)). It normally listens at `http://127.0.0.1:47321`; Settings shows native-client readiness. The user signs in using the official installed Codex or Claude Code client. The Connect button can launch installed WDC and the user approves there.
 
-Each WDC archive includes `sdk/`. Copy its three `.js` modules together into your app's static assets and import `./wdc/index.js`. TypeScript declarations are included. Alternatively, install the **local** `webdevicecable-sdk-0.1.0.tgz` archive in your frontend project:
+The browser package is `@webdevicecable/sdk`. After the corresponding npm release is published, install it into your frontend and let your build serve it with the rest of your app:
+
+```sh
+npm install --save-exact @webdevicecable/sdk@0.1.0
+```
+
+```js
+import { BridgeClient, ConnectionStore } from '@webdevicecable/sdk';
+```
+
+Both ESM and CommonJS frontend tooling are supported, with TypeScript declarations. Native browsers use the ESM build. No runtime dependencies or install scripts are required. The package contains only client code; users still install WDC separately.
+
+For a page without a build step, use a version-pinned URL after publication:
+
+```html
+<script type="module">
+  import { BridgeClient, ConnectionStore }
+    from 'https://unpkg.com/@webdevicecable/sdk@0.1.0/index.js';
+</script>
+```
+
+The same files are available from `https://cdn.jsdelivr.net/npm/@webdevicecable/sdk@0.1.0/index.js`. These are native ES modules, not a global script. Pin the full version; both URLs require that version to have been published.
+
+Each WDC archive also includes `sdk/`. Copy `index.js`, `secure.js` and `storage.js` from the same release into your app's static assets and import `./wdc/index.js`. TypeScript declarations are included. Before the first npm release, or for offline use, install the **local** archive instead:
 
 ```sh
 npm install ./webdevicecable-sdk-0.1.0.tgz
 ```
 
-Then import from `@webdevicecable/sdk`. This name does not imply a published registry package. From source, `npm ci --ignore-scripts && npm run package:sdk` builds the archive under `dist/`. There are no runtime dependencies.
+Then import from `@webdevicecable/sdk`. From source, `npm ci --ignore-scripts && npm run package:sdk` builds the archive under `dist/`; it never publishes. See [npm distribution and the release procedure](npm.md) for package ownership, publishing and switching reviewed snapshots. The examples below use self-hosted files; use the package import above when bundling.
 
 ## 2. Pair, save and connect
 
@@ -147,3 +170,7 @@ In WDC, the user opens the connection's **Folder access**, chooses **Add folder*
 A callback is claimed once before it runs. Reconnects never replay it. Use the call ID as your backend idempotency key: a tab can close after a remote mutation succeeds but before its result arrives. Cancellation cannot undo an already-performed external action. Return bounded JSON (32 KiB); use your own file references for larger results. Unknown outcomes are never silently retried.
 
 File-enabled commands use `files:true` in the owner's config.yaml; websites cannot enable it. `upload()` and `artifact()` are unchanged. File bytes are staged unchanged, and unsupported native formats produce an explicit error. WDC does not convert documents, parse PDFs or add OCR. See [command file interface](commands.md#file-transfers).
+
+## WebDeviceCable updates
+
+Official installations update after active sessions finish. A verified `bridge_updating` error means the runner temporarily stopped accepting work. Keep the UI state and reconnect after it returns, using the same stored pairing and pinned identity. Do not resubmit uncertain jobs automatically: use the existing idempotency lookup to resolve their status. Explicitly ended sessions need a new session; never restore a native context silently or switch to paid credits without the app user's choice. Paired apps cannot install updates or change update preferences.

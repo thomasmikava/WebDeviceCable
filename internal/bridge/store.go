@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,13 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/thomasmikava/WebDeviceCable/internal/updates"
 )
 
 type App struct {
+	relayCancels    map[string]context.CancelFunc
+	updater         *updates.Manager
+	updating        bool
 	launchIntents   map[string]*LaunchIntent
 	permissions     map[string]*PermissionRequest
 	config          Config
@@ -76,6 +81,9 @@ func Open(dir string) (*App, error) {
 		}
 	}()
 	if e = a.loadConfig(); e != nil {
+		return nil, e
+	}
+	if e = a.resumePanel(); e != nil {
 		return nil, e
 	}
 	b, e := ReadLocalFile(filepath.Join(abs, "state.json"), 256<<20)
@@ -160,8 +168,14 @@ func Open(dir string) (*App, error) {
 	return a, nil
 }
 func (a *App) Close() error {
+	if a.updater != nil {
+		a.updater.Close()
+	}
 	a.mu.Lock()
 	a.closed = true
+	for _, cancel := range a.relayCancels {
+		cancel()
+	}
 	nativeDone := a.nativeDone
 	runs := []*commandRun{}
 	for _, r := range a.commands {

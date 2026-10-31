@@ -17,31 +17,48 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
-          check-latest: true
+          go-version: 1.27.3
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts --prefix tests/relay-contract
       - run: npm run check:sdk-drift
       - run: scripts/check.sh
+      - run: npm run test:package
       - name: Build local runner
         run: |
           mkdir -p dist
           if [ "$RUNNER_OS" = Windows ]; then
-            go build -trimpath -o dist/webdevicecable.exe ./cmd/webdevicecable
+            go build -trimpath -o dist/WebDeviceCable.exe ./cmd/webdevicecable
           else
-            go build -trimpath -o dist/webdevicecable ./cmd/webdevicecable
+            go build -trimpath -o dist/WebDeviceCable ./cmd/webdevicecable
           fi
+      - name: Docker relay with concurrent direct transport
+        if: runner.os == 'Linux'
+        run: |
+          docker build -f Dockerfile.relay -t wdc-relay:local .
+          WDC_BINARY="$PWD/dist/WebDeviceCable" WDC_RELAY_SDK=dist/relay-client/cjs/relay.js node scripts/relay-e2e.mjs
+          WDC_BINARY="$PWD/dist/WebDeviceCable" WDC_RELAY_SDK=dist/relay-client/relay.js node scripts/relay-e2e.mjs
       - run: npm run test:e2e
       - run: node scripts/cli-e2e.mjs
       - name: Linux desktop tray and runner lifecycle
         if: runner.os == 'Linux'
         run: |
           command -v dbus-daemon
-          WDC_DESKTOP_BINARY="$PWD/dist/webdevicecable" go test -count=1 ./internal/desktop
-      - run: npm run test:package
+          WDC_DESKTOP_BINARY="$PWD/dist/WebDeviceCable" go test -count=1 ./internal/desktop
+      - name: Package this OS (unsigned preview)
+        run: |
+          case "$RUNNER_OS" in
+            macOS) python3 scripts/package.py --target darwin/arm64 ;;
+            Windows) python scripts/package.py --target windows/amd64 ;;
+            Linux) python3 scripts/package.py --target linux/amd64 ;;
+          esac
+      - name: Verify Windows install and Installed Apps removal
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/install-smoke.ps1
       - run: npm audit --ignore-scripts
       - name: Go vulnerability check
         run: |

@@ -18,6 +18,9 @@ func failureFor(status int, code, message string) *Failure {
 	category := "internal"
 	retry := false
 	switch {
+	case code == "bridge_updating":
+		category = "unavailable"
+		retry = true
 	case code == "verification_failed":
 		category = "security"
 	case code == "tab_disconnected" || code == "lease_expired" || code == "lease_closed":

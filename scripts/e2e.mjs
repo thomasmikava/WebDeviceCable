@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 // Development test: real binary + real HTTP + compiled SDK. Never calls providers.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -11,7 +12,7 @@ const dir = await mkdtemp(baseDir + '/e2e-'); const origin = 'http://127.0.0.1:4
 let child, base, sessionID, csrf, port = '0'; const clients = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
 async function boot() {
-  child = spawn(resolve(process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'), ['serve','--data-dir',dir,'--port',port], {stdio:'pipe'});
+  child = spawn(resolve(process.env.WDC_BINARY ?? (existsSync(process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') ? (process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') : (process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'))), ['serve','--data-dir',dir,'--port',port], {stdio:'pipe'});
   for (let i = 0; i < 100; i++) {
     try { const info = JSON.parse(await readFile(dir+'/runner.json','utf8')); if (info.pid === child.pid) { base = info.url; break; } await delay(50); } catch { await delay(50); }
   }

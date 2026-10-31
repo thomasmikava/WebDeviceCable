@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 // Opt-in integration check. --claude selects the installed Claude Code client.
 // Uses existing native subscription auth; never reads provider credentials.
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ async function api(path,body,method='POST'){
 async function approved(session,prompt){const job=await session.send(prompt);assert.equal(job.status,'awaiting_approval');await api(`/jobs/${job.id}/decision`,{approve:true});let final;const output=[];for await(const update of client.stream(job.id)){final=update;if(update.output)output.push(update.output)};assert.equal(final.status,'completed',JSON.stringify(final));return {final,output};}
 let client;
 try{
- child=spawn(resolve('dist/webdevicecable'),['serve','--data-dir',dir,'--port','0'],{stdio:'pipe'});
+ child=spawn(resolve(process.env.WDC_BINARY ?? (existsSync(process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') ? (process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') : (process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'))),['serve','--data-dir',dir,'--port','0'],{stdio:'pipe'});
  for(let i=0;i<100;i++){try{base=JSON.parse(await readFile(dir+'/runner.json','utf8')).url;break}catch{await delay(100)}}assert.ok(base);
  const auth=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:`Bearer ${await readFile(dir+'/admin.key','utf8')}`}});assert.equal(auth.status,200);const control=await auth.json();sessionID=control.session;csrf=control.csrf;
  let state;

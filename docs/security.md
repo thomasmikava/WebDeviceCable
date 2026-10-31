@@ -19,7 +19,7 @@ This is one OS user's runner, not a multi-tenant service or a defense against ma
 
 An app's signing key is authoritative for that pairing and must not be shared between accounts. A backend must not use one user's pairing to fulfill other users' requests. The bridge does not infer user identities from prompts. Native account metadata is checked at dispatch and each turn; an installation-scoped fingerprint is pinned privately to the pairing. A changed account requires reconnecting. API-key-only authentication is rejected.
 
-Browser heartbeats are best effort. Closing, losing network, sleeping or suspending a tab can cancel requests after the documented grace period. The runner does not promise immediate close detection. A malicious app can continue renewing its own lease, so app SDK integration and account scoping must be reviewed. No hosted relay or independent background-job permission is supported.
+Browser heartbeats are best effort. Closing, losing network, sleeping or suspending a tab can cancel requests after the documented grace period. The runner does not promise immediate close detection. A malicious app can continue renewing its own lease, so app SDK integration and account scoping must be reviewed. The optional self-hosted relay uses outbound HTTPS polling and backend-owned leases; see [relay security and recovery](relay.md). Backend authorization never grants local permissions.
 
 Local unauthenticated clients can fetch the static login shell; all private information and mutations require authentication. The listener can still be subjected to local denial of service. This is not an Internet-exposed service. Serving behind a reverse proxy is unsupported.
 
@@ -47,3 +47,13 @@ Configured commands run with OS-account rights, not a Restricted sandbox. Direct
 The OS launch URL contains only an origin, public requesting key and short-lived challenge. A root-authenticated local launcher enables rendezvous; browser Origin, signatures and nonce checks bind the actual request. WDC approval is still mandatory. Invitation replies are signed/encrypted and invitations can be claimed only by the original key. This does not attest the installation against malicious same-user processes.
 
 App tool callbacks are claimed once for their exact pairing/account/lease. WDC never replays an uncertain callback; applications must deduplicate backend mutations using its call ID. Tool-result JSON and attachments are untrusted. Folder access uses identity-checked rooted operations, rejects escaping symlinks and protects WDC/provider configuration roots. Write approvals bind the preview content hash and are rechecked before replacement. Permissions cannot authorize a general shell; configured executables retain separate Commands consent and OS-account permissions.
+
+## Application updates
+
+Official releases use a separate pinned Ed25519 release key, version/target/size/hash checks, Windows Authenticode verification and macOS Sparkle/Apple signature validation. Websites cannot choose feeds, replace trusted keys or invoke owner update routes. Automatic installation drains work before stopping the desktop app; explicit owner cancellation is separate. Updates preserve pairing identities and replay receipts, never restore stale state snapshots, and use bounded private staging. Development builds cannot silently replace themselves with official downloads. The two-minute control-panel handoff is local, private and single-use. See [updates](updates.md), [privacy](../PRIVACY.md) and [release/key handling](releases.md).
+
+## Optional relay
+
+The [relay guide](relay.md) defines pairing, signed connection/deadline binding, streaming integrity, retention and project ownership. Desktop administration remains loopback-only. The relay and authenticated backend are trusted with plaintext requested content; native credentials and desktop private keys stay local.
+
+A shared deployment binds each connection and enrollment to a persisted project identity. A project's credential cannot use or revoke another project's connections, including when both use the same account ID. Operator registration/key rotation/revocation use a separate admin credential that cannot submit inference. Project identities are immutable, credential hashes are persisted, and revocation cancels affected exchanges and connectors. Projects share operator trust and deployment limits; see the relay guide for provisioning and existing-state handling.
