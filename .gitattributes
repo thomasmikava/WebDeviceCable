@@ -1,0 +1,4 @@
+# Generated SDK files and shell scripts must have the same bytes on every OS.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
