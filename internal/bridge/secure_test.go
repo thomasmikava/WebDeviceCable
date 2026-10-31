@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -392,7 +393,9 @@ func TestIdentityPersistenceAndResetInvalidatesPins(t *testing.T) {
 		t.Fatal("identity reset did not revoke prior trust")
 	}
 	info, _ := os.Stat(filepath.Join(f.a.dir, "identity.key"))
-	if info.Mode().Perm()&0077 != 0 {
+	// Windows protects these files with a DACL, checked by the Windows storage
+	// tests. Its emulated Unix mode bits do not describe that access control.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		t.Fatal("signing key exposed by file mode")
 	}
 	state, _ := os.ReadFile(filepath.Join(f.a.dir, "state.json"))
