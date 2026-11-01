@@ -21,3 +21,7 @@ Native provider tests are opt-in and use the operator's subscription. Run them o
 Fork and pull-request builds are unsigned development builds and never install official updates. Fork maintainers must use their own release keys and replace the repository/feed URLs before distributing their own official builds. Never borrow WebDeviceCable's publisher identity.
 
 Keep changes focused and describe the behavior, reproduction and validation. Do not include personal state, control links, invitations, real prompts or secrets in issues, screenshots, tests or pull requests. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Contributions are under the existing MIT license; provider trademarks retain their owners' rights.
+
+## UI palette
+
+`npm run theme:generate` generates a new accessible dark palette; `npm run theme:check` validates its contrast. The generated palette is committed and stays fixed across launches. Theme generation runs only during development.
