@@ -57,6 +57,20 @@ jobs:
             Windows) python scripts/package.py --community --target windows/amd64 ;;
             Linux) python3 scripts/package.py --community --target linux/amd64 ;;
           esac
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const report = JSON.parse(readFileSync('dist/build-manifest.json'));
+          const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          assert.equal(report.sourceCommit, commit);
+          for (const target of report.targets) {
+            const manifest = JSON.parse(readFileSync(`dist/staging/WebDeviceCable-${report.version}-${target.replace('/', '-')}/build-manifest.json`));
+            assert.equal(manifest.sourceCommit, commit);
+            assert.equal(manifest.automaticUpdates, false);
+            assert.equal(manifest.distribution, 'community');
+          }
+          JS
       - name: Verify Windows install and Installed Apps removal
         if: runner.os == 'Windows'
         shell: pwsh

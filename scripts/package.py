@@ -82,7 +82,7 @@ def main():
     if args.community:
         pub=require('WDC_RELEASE_PUBLIC_KEY')
         if len(base64.b64decode(pub,validate=True)) != 32: raise SystemExit('WDC_RELEASE_PUBLIC_KEY must encode 32 bytes.')
-    source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     if args.release:
         pub=require('WDC_RELEASE_PUBLIC_KEY')
         if len(base64.b64decode(pub,validate=True)) != 32: raise SystemExit('WDC_RELEASE_PUBLIC_KEY must encode 32 bytes.')
@@ -118,7 +118,7 @@ def main():
         example=stage/'examples'/'server.mjs';example.write_text(example.read_text().replace('../internal/bridge/web/','../sdk/'))
         shutil.copytree(ROOT/'docs',stage/'docs')
         shutil.copy(ROOT/'examples'/'config.yaml',stage/'config.example.yaml')
-        (stage/'build-manifest.json').write_text(json.dumps(dict(name='WebDeviceCable',version=VERSION,target=target,distribution=distribution,protocolVersion=2,stateVersion=1,sourceCommit=source,automaticUpdates=bool(args.release),releasePublicKey=pub),indent=2)+'\n')
+        (stage/'build-manifest.json').write_text(json.dumps(dict(name='WebDeviceCable',version=VERSION,target=target,distribution=distribution,protocolVersion=2,stateVersion=1,sourceCommit=source_commit,automaticUpdates=bool(args.release),releasePublicKey=pub),indent=2)+'\n')
         if system=='darwin':
             app=stage/'WebDeviceCable.app'/'Contents'
             (app/'MacOS').mkdir(parents=True);(app/'Resources').mkdir()
@@ -173,7 +173,7 @@ def main():
             produced.append(archive)
         print(f'Built WebDeviceCable {target} ({distribution})',flush=True)
     (out/'SHA256SUMS').write_text(checksums(produced+([] if args.community else list(OUT.glob('webdevicecable-sdk-*.tgz')))))
-    report=dict(name='WebDeviceCable',version=VERSION,targets=targets,distribution=distribution,sourceCommit=source,automaticUpdates=bool(args.release),releasePublicKey=pub,artifacts=[p.name for p in produced],toolchain=subprocess.check_output([os.environ.get('BRIDGE_GO','go'),'version'],text=True).strip(),validation='See docs/validation.md and docs/testing.md. Native Windows/Linux provider execution awaits tester feedback.')
+    report=dict(name='WebDeviceCable',version=VERSION,targets=targets,distribution=distribution,sourceCommit=source_commit,automaticUpdates=bool(args.release),releasePublicKey=pub,artifacts=[p.name for p in produced],toolchain=subprocess.check_output([os.environ.get('BRIDGE_GO','go'),'version'],text=True).strip(),validation='See docs/validation.md and docs/testing.md. Native Windows/Linux provider execution awaits tester feedback.')
     (out/'build-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
 
 if __name__=='__main__': main()
