@@ -12,7 +12,7 @@ Codex and Claude Code support text streaming, continuing sessions, schema-checke
 - **Windows:** extract the ZIP and double-click `Install.cmd`. Open WebDeviceCable from the Start menu. Its system tray icon reopens the control panel; right-click for Open and Quit. Installation is per user and needs no Node.js or Python.
 - **Linux:** extract the archive, run `./install.sh`, then open WebDeviceCable from the applications menu for its system tray icon. Or run `~/.local/bin/WebDeviceCable desktop`. The desktop must support StatusNotifier/AppIndicator icons; some GNOME setups need that support enabled. The applications-menu shortcut remains available without a tray host.
 
-The packages are unsigned development previews. Official releases require macOS/Windows signing and platform validation; current local artifacts are previews. Do not disable OS security protections to install them. You can build from source instead.
+The first community test release uses ad-hoc macOS signing, unsigned Windows binaries and manual updates. No paid developer account is needed to build it. See [downloads](https://github.com/thomasmikava/WebDeviceCable/releases), [installation and OS warnings](INSTALL.md) and [the short testing checklist](docs/testing.md). Windows/Linux native-provider checks are part of early-user testing; unsupported clients fail closed. Trusted publisher-signed releases remain a separate distribution option.
 
 `WebDeviceCable start` launches a detached local runner and opens its control panel. `WebDeviceCable open` reopens it; `WebDeviceCable stop` stops it. `serve` runs in the foreground. `--data-dir PATH`, `--port NUMBER`, `--no-open` and `open --print` support development and CLI use. Treat the printed private control link as a password.
 
@@ -22,7 +22,7 @@ In Settings, **Run test** creates a local test request. Approve it in Requests. 
 
 ## Connect an app
 
-Start with the [short integration guide](docs/integrate.md): installation, pairing, saved connections, streaming, cancellation and common errors. The browser package is `@webdevicecable/sdk`; backends use the independent `@webdevicecable/relay` package. Both support ESM, CommonJS and TypeScript. Browser ESM files can also be self-hosted or imported by a version-pinned CDN URL once that npm release exists. See [npm distribution and release preparation](docs/npm.md). SDK files are bundled in desktop archives, and `npm run package:sdk` builds both local npm tarballs without publishing.
+Start with the [short integration guide](docs/integrate.md): installation, pairing, saved connections, streaming, cancellation and common errors. The browser package is `@webdevicecable/sdk`; backends use the independent `@webdevicecable/relay` package. Both support ESM, CommonJS and TypeScript. Browser ESM files can also be self-hosted or imported by a version-pinned CDN URL from the published npm release. See [npm distribution and release preparation](docs/npm.md). SDK files are bundled in desktop archives, and `npm run package:sdk` builds both local npm tarballs without publishing.
 
 1. Click **Connect to WebDeviceCable** in the website. The SDK guides the user to open the installed app and puts the request in WDC's Connections page.
 2. Approve the connection in WDC, then choose which program the app may use. Launching never grants access by itself.
@@ -35,7 +35,7 @@ WDC controls access to local folders and configured programs. Connected apps aut
 Use **one SDK instance per requesting app tab**. The SDK's lease heartbeat keeps that tab's jobs alive. Closing it, a network failure, or browser suspension expires its lease within 12 seconds and cancels only its outstanding jobs. Closing the WebDeviceCable control panel has no effect on other app tabs. Apps must not move tab heartbeats into a backend/service worker that outlives the tab.
 
 ```ts
-import { BridgeClient } from './sdk/index.js'; // compile/bundle sdk/index.ts in your app
+import { BridgeClient } from '@webdevicecable/sdk';
 
 const origin = window.location.origin;
 // Call directly from the website's Connect button handler.
@@ -82,7 +82,7 @@ The bundled UI uses a dark palette sampled by `node:crypto.randomInt` within the
 
 ## Updates
 
-Official installations check for and install stable updates automatically after requests and sessions finish. Settings → Updates provides manual updating and the automatic-update switch. Updates preserve connections and permissions. Source builds and previews do not install upstream updates. See [updates and recovery](docs/updates.md), [privacy](PRIVACY.md), and [maintainer release steps](docs/releases.md).
+Community test installations use manual updates and never check for or install upstream updates automatically; Settings links to downloads. Quit WDC and install the new package over the existing app, preserving private state. Trusted publisher-signed installations check for and install stable updates automatically after requests and sessions finish. Settings → Updates provides manual updating and the automatic-update switch. Updates preserve connections and permissions. Source builds and previews do not install upstream updates. See [updates and recovery](docs/updates.md), [privacy](PRIVACY.md), and [maintainer release steps](docs/releases.md).
 
 ## Develop and validate
 

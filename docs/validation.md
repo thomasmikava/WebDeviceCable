@@ -1,6 +1,19 @@
-# Validation record — 2026-10-26
+# Current delivery checkpoint — 1 November 2026
 
-Local environment: macOS arm64, Go 1.27.3, installed Codex 0.163.0-alpha.10.2 and Claude Code 2.1.308. The release/update changes remain uncommitted. Standard checks use isolated state inside this repository and make no inference requests. The opt-in native checks intentionally used the existing personal native sign-ins and subscription limits.
+The first desktop distribution is a community test prerelease: manual updates, ad-hoc macOS app signatures, unsigned Windows executables and an independently signed checksum manifest. No personal publisher name/email, paid developer account or notarization is used.
+
+- The public `@webdevicecable/sdk` and `@webdevicecable/relay` packages are published at `0.1.0`; anonymous installs and browser CDN imports passed. Kings/Rorido consume pinned registry packages without vendored SDK copies.
+- [GitHub CI on the previous source checkpoint](https://github.com/thomasmikava/WebDeviceCable/actions/runs/41242684509) passed on Linux, Windows and macOS, including race checks, transport/CLI/package tests, official-provider SDK contracts, Windows DACL and install/removal checks, Linux tray lifecycle, Docker relay/direct concurrency and vulnerability checks. Release-preparation changes are rechecked before the draft is delivered.
+- Rorido's 13 workspace typechecks, both production builds, lint with existing warnings, 119 frontend tests and 50 backend unit/real-transport checks passed with the published SDK. Kings' shared/backend typechecks and admin build passed. The installed npm clients passed the concurrent disposable Docker relay/direct harness and non-root Node 22 Alpine production installation.
+- Real Codex/Claude native inference on macOS is recorded below. Native-provider execution on Windows/Linux, clean-machine download approval and deployed-site browser permissions remain intentionally assigned to early testers via [the checklist](testing.md). They are not claimed by passing fixture tests.
+- Community preparation passed local Go format/vet/race checks, all 62 SDK checks, six authenticated-release checks, real HTTP/command/launch/CLI tests and a real Chrome Settings check. The new regression ensures community builds cannot enable automatic updates even with existing automatic preferences or conflicting build flags. Download signing rejects changed bytes/keys, incomplete lists, traversal and manifests claiming automatic updates.
+- Independent security review remains recommended for broader distribution. Provider distribution conditions remain separate from technical execution tests.
+
+The following dated records are historical evidence; their then-pending CI/publication statements do not override this checkpoint.
+
+## Historical validation record — 2026-10-26
+
+Local environment: macOS arm64, Go 1.27.3, installed Codex 0.163.0-alpha.10.2 and Claude Code 2.1.308. Standard checks use isolated state inside this repository and make no inference requests. The opt-in native checks intentionally used the existing personal native sign-ins and subscription limits.
 
 | Check | Result |
 | --- | --- |

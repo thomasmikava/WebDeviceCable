@@ -1,6 +1,6 @@
 # Building and releasing WebDeviceCable
 
-Official distribution is through GitHub downloads. App Store submissions are outside the current scope. Stable macOS/Windows downloads require publisher signing; macOS also requires notarization. Unsigned source builds and previews remain supported. Apple/Microsoft store review is separate from code signing, and an independent security review is recommended rather than required to implement the product.
+Distribution is through GitHub downloads. The first community test release supports manual installation with ad-hoc macOS signatures and unsigned Windows binaries. No paid developer account, personal signing name or email is required. The separate publisher-signed stable channel retains trusted certificates, macOS notarization and automatic updates. Source builds and previews remain supported. Apple/Microsoft store review is separate from code signing, and an independent security review is recommended rather than required to implement the product.
 
 The browser and backend libraries have a separate [npm release procedure](npm.md), including local artifact checks, first publication and the protected publishing workflow. Their version comes from the same root manifest. Building desktop archives or finalizing update metadata never publishes npm packages.
 
@@ -14,6 +14,25 @@ BRIDGE_GO=go python3 scripts/package.py --target darwin/arm64
 ```
 
 Select any of the six documented targets. Windows and Linux can be cross-compiled; the macOS launcher requires a macOS build host. Packages use the WebDeviceCable name. Source/configuration directories and protocol identifiers retain their existing names for compatibility. All output is local under `dist`; no script publishes, uploads a release, commits or installs an application. Preview builds have automatic updates disabled and cannot install official updates.
+
+## Community test release (manual updates)
+
+Keep a persistent Ed25519 private key outside the checkout in a private directory. `keygen` creates it with owner-only permissions and refuses to overwrite it. Commit only its public PEM to `keys/community-release.pub`; this key authenticates download checksums, not an OS publisher identity. Back up the private key privately before relying on it for future releases.
+
+```sh
+node scripts/release.mjs keygen --private-key /private/location/community-release-private.pem
+node scripts/release.mjs public-key --private-key /private/location/community-release-private.pem --pem > keys/community-release.pub
+export WDC_RELEASE_PUBLIC_KEY="$(node scripts/release.mjs public-key --private-key /private/location/community-release-private.pem)"
+BRIDGE_GO=go python3 scripts/package.py --community --out-dir .cache/community-release
+node scripts/release.mjs prepare-community --dir .cache/community-release \
+  --private-key /private/location/community-release-private.pem
+node scripts/release.mjs verify-community --dir .cache/community-release \
+  --public-key keys/community-release.pub
+```
+
+Build all six targets on macOS, where Xcode tools provide both native launcher architectures and `.pkg` creation. Commit the exact source before building/finalizing; archive manifests bind that commit, version, target, manual-update policy and public release key. Community preparation requires all six archives and both macOS installers, rejects mixed builds, and signs the complete checksum list. It never generates `updates.json` or Sparkle feeds. Community binaries remain unable to install official updates, including when saved preferences previously enabled them. macOS signs each executable and the app ad hoc; Windows binaries have no Authenticode signature. No machine-wide certificate trust changes are required or recommended.
+
+Upload only the six runtime archives, two macOS installers, `INSTALL.md`, `build-manifest.json`, `RELEASE_PUBLIC_KEY.pem`, `SHA256SUMS` and `SHA256SUMS.sig` to a **draft prerelease** tagged `vVERSION`. Do not upload staging folders, local caches or private keys. The npm packages are already distributed independently; this release does not republish them. Check the final download list and publish the prerelease when ready to invite testers. Keep Windows/Linux native-provider and clean-machine browser checks explicitly pending for [early-user testing](testing.md). The separate signed stable channel still requires its native acceptance checks below.
 
 ## Signing keys
 

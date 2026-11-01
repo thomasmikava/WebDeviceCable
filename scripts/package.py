@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build WebDeviceCable downloads locally. Never publishes or installs them.
-Preview builds need no publisher credentials. --release signs and verifies each
-native platform before packaging. Finish a combined release with release.mjs.
+Preview builds need no publisher credentials. --community creates manual-update
+test downloads with ad-hoc macOS signing. --release requires trusted publisher
+certificates. Finish a combined release with release.mjs.
 """
 import argparse
 import base64
@@ -69,9 +70,19 @@ def checksums(paths):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target',action='append',choices=TARGETS)
-    parser.add_argument('--release',action='store_true',help='Require publisher signing and update trust configuration')
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument('--release',action='store_true',help='Require publisher signing and update trust configuration')
+    mode.add_argument('--community',action='store_true',help='Manual updates, ad-hoc macOS signing, unsigned Windows binaries')
+    parser.add_argument('--out-dir',type=Path,default=OUT,help='Keep release artifacts in a separate directory')
     args=parser.parse_args()
     targets=args.target or TARGETS
+    out=args.out_dir.resolve()
+    distribution='official' if args.release else 'community' if args.community else 'unsigned-preview'
+    pub=''
+    if args.community:
+        pub=require('WDC_RELEASE_PUBLIC_KEY')
+        if len(base64.b64decode(pub,validate=True)) != 32: raise SystemExit('WDC_RELEASE_PUBLIC_KEY must encode 32 bytes.')
+    source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     if args.release:
         pub=require('WDC_RELEASE_PUBLIC_KEY')
         if len(base64.b64decode(pub,validate=True)) != 32: raise SystemExit('WDC_RELEASE_PUBLIC_KEY must encode 32 bytes.')
@@ -82,7 +93,7 @@ def main():
         if any(t.startswith('windows/') for t in targets):
             require('WDC_WINDOWS_CERTIFICATE')
             if sys.platform!='win32': raise SystemExit('Sign Windows packages on Windows.')
-    OUT.mkdir(exist_ok=True)
+    out.mkdir(parents=True,exist_ok=True)
     cache=ROOT/'.cache';(cache/'tmp').mkdir(parents=True,exist_ok=True)
     run(['npm.cmd' if os.name=='nt' else 'npm','run','build:sdk'])
     run(['node','scripts/sdk-package.mjs'])
@@ -90,7 +101,7 @@ def main():
     for target in targets:
         system,arch=target.split('/')
         stem=f'WebDeviceCable-{VERSION}-{system}-{arch}'
-        stage=OUT/'staging'/stem
+        stage=out/'staging'/stem
         if stage.exists(): shutil.rmtree(stage)
         stage.mkdir(parents=True)
         env=dict(os.environ,GOOS=system,GOARCH=arch,CGO_ENABLED='0',GOCACHE=str(cache/'go-build'),GOMODCACHE=str(cache/'go-mod'),GOPATH=str(cache/'gopath'),TMPDIR=str(cache/'tmp'))
@@ -98,15 +109,16 @@ def main():
         base=[os.environ.get('BRIDGE_GO','go'),'build','-trimpath']
         flags=f'-s -w -X main.version={VERSION}'
         if args.release: flags+=f' -X main.official=true -X main.releasePublicKey={require("WDC_RELEASE_PUBLIC_KEY")}'
+        if args.community: flags+=f' -X main.community=true'
         run(base+['-ldflags='+flags,'-o',binary,'./cmd/webdevicecable'],env)
-        for name in ['LICENSE','THIRD_PARTY_NOTICES.md','README.md','PRIVACY.md','CONTRIBUTING.md','SECURITY.md']:
+        for name in ['LICENSE','THIRD_PARTY_NOTICES.md','README.md','PRIVACY.md','CONTRIBUTING.md','SECURITY.md','INSTALL.md']:
             if (ROOT/name).exists(): shutil.copy(ROOT/name,stage)
         shutil.copytree(OUT/'sdk',stage/'sdk')
         shutil.copytree(ROOT/'examples',stage/'examples',ignore=shutil.ignore_patterns('__pycache__'))
         example=stage/'examples'/'server.mjs';example.write_text(example.read_text().replace('../internal/bridge/web/','../sdk/'))
         shutil.copytree(ROOT/'docs',stage/'docs')
         shutil.copy(ROOT/'examples'/'config.yaml',stage/'config.example.yaml')
-        (stage/'build-manifest.json').write_text(json.dumps(dict(name='WebDeviceCable',version=VERSION,target=target,distribution='official' if args.release else 'unsigned-preview',protocolVersion=2,stateVersion=1,releasePublicKey=os.environ.get('WDC_RELEASE_PUBLIC_KEY','') if args.release else ''),indent=2)+'\n')
+        (stage/'build-manifest.json').write_text(json.dumps(dict(name='WebDeviceCable',version=VERSION,target=target,distribution=distribution,protocolVersion=2,stateVersion=1,sourceCommit=source,automaticUpdates=bool(args.release),releasePublicKey=pub),indent=2)+'\n')
         if system=='darwin':
             app=stage/'WebDeviceCable.app'/'Contents'
             (app/'MacOS').mkdir(parents=True);(app/'Resources').mkdir()
@@ -124,15 +136,21 @@ def main():
             if args.release:
                 run(['sh','scripts/sign-macos.sh',app.parent])
                 run(['codesign','--force','--options','runtime','--timestamp','--sign',require('WDC_SIGN_IDENTITY'),binary])
-            archive=OUT/f'{stem}.zip';zip_stage(stage,archive,True)
+            elif args.community:
+                # Ad-hoc signatures need no name, email, certificate or Apple account.
+                for executable in [binary,app/'Resources'/'WebDeviceCable',app/'MacOS'/'wdc-launcher']:
+                    run(['codesign','--force','--timestamp=none','--sign','-',executable])
+                run(['codesign','--force','--timestamp=none','--sign','-',app.parent])
+                run(['codesign','--verify','--deep','--strict',app.parent])
+            archive=out/f'{stem}.zip';zip_stage(stage,archive,True)
             if args.release:
                 notarize(archive);run(['xcrun','stapler','staple',app.parent]);run(['xcrun','stapler','validate',app.parent]);run(['spctl','--assess','--type','execute','--verbose=2',app.parent]);zip_stage(stage,archive,True)
             produced.append(archive)
             if shutil.which('pkgbuild'):
-                payload=OUT/'staging'/f'{stem}-payload'
+                payload=out/'staging'/f'{stem}-payload'
                 if payload.exists(): shutil.rmtree(payload)
                 (payload/'Applications').mkdir(parents=True);shutil.copytree(app.parent,payload/'Applications'/'WebDeviceCable.app',symlinks=True)
-                pkg=OUT/f'{stem}.pkg';pkg.unlink(missing_ok=True)
+                pkg=out/f'{stem}.pkg';pkg.unlink(missing_ok=True)
                 command=['pkgbuild','--root',str(payload),'--identifier',f'org.webdevicecable.local.{arch}','--version',VERSION,'--install-location','/']
                 if args.release: command+=['--sign',require('WDC_INSTALLER_IDENTITY')]
                 run(command+[str(pkg)])
@@ -145,17 +163,17 @@ def main():
             if args.release:
                 for name in ['WebDeviceCable.exe','WebDeviceCable Launcher.exe','Install.ps1','Uninstall.ps1']:
                     run(['powershell.exe','-NoProfile','-File','scripts/sign-windows.ps1','-Path',stage/name,'-CertificateThumbprint',require('WDC_WINDOWS_CERTIFICATE')])
-            archive=OUT/f'{stem}.zip';zip_stage(stage,archive,False);produced.append(archive)
+            archive=out/f'{stem}.zip';zip_stage(stage,archive,False);produced.append(archive)
         else:
             shutil.copy(ROOT/'internal'/'bridge'/'web'/'logo.svg',stage/'webdevicecable.svg')
             for source,name in [('install-linux.sh','install.sh'),('uninstall-linux.sh','uninstall.sh')]:
                 shutil.copy(ROOT/'scripts'/source,stage/name);(stage/name).chmod(0o755)
-            archive=OUT/f'{stem}.tar.gz';archive.unlink(missing_ok=True)
+            archive=out/f'{stem}.tar.gz';archive.unlink(missing_ok=True)
             with tarfile.open(archive,'w:gz') as handle: handle.add(stage,arcname=stem)
             produced.append(archive)
-        print(f'Built WebDeviceCable {target} ({"official" if args.release else "preview"})',flush=True)
-    (OUT/'SHA256SUMS').write_text(checksums(produced+list(OUT.glob('webdevicecable-sdk-*.tgz'))))
-    report=dict(name='WebDeviceCable',version=VERSION,targets=targets,distribution='official' if args.release else 'unsigned-preview',artifacts=[p.name for p in produced],toolchain=subprocess.check_output([os.environ.get('BRIDGE_GO','go'),'version'],text=True).strip(),validation='See docs/validation.md. Cross-compilation does not establish native execution.')
-    (OUT/'build-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+        print(f'Built WebDeviceCable {target} ({distribution})',flush=True)
+    (out/'SHA256SUMS').write_text(checksums(produced+([] if args.community else list(OUT.glob('webdevicecable-sdk-*.tgz')))))
+    report=dict(name='WebDeviceCable',version=VERSION,targets=targets,distribution=distribution,sourceCommit=source,automaticUpdates=bool(args.release),releasePublicKey=pub,artifacts=[p.name for p in produced],toolchain=subprocess.check_output([os.environ.get('BRIDGE_GO','go'),'version'],text=True).strip(),validation='See docs/validation.md and docs/testing.md. Native Windows/Linux provider execution awaits tester feedback.')
+    (out/'build-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
 
 if __name__=='__main__': main()

@@ -27,6 +27,7 @@ const Appcast = "https://github.com/" + Repository + "/releases/latest/download/
 type Build struct {
 	Version   string `json:"version"`
 	Official  bool   `json:"official"`
+	Community bool   `json:"community,omitempty"`
 	PublicKey string `json:"-"`
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`

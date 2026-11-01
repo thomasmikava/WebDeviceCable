@@ -14,9 +14,9 @@ Start WDC with the same OS profile and native-client environment you normally us
 
 ## Update, backup and recovery
 
-Official installations support manual and automatic updates through Settings → Updates; see [update behavior and recovery](updates.md). Automatic installation waits for requests and sessions to end. Source builds and previews keep automatic updates disabled.
+Community test installations show a downloads link and use manual replacement with the same private state directory. Trusted publisher-signed installations support manual and automatic updates through Settings → Updates; see [update behavior and recovery](updates.md). Automatic installation waits for requests and sessions to end. Source builds and previews keep automatic updates disabled.
 
-Quit the desktop app and stop the runner before replacing an installation. Install the new binary/app for the same OS/architecture, then start it using the **same data directory**. The supplied Linux/Windows installers use `desktop-stop` to close the native tray app before replacing its executable, then stop the default runner. Keep a known-good copy for rollback. Verify `SHA256SUMS` against the downloaded archive; hashes alone do not authenticate a publisher. Current preview artifacts are unsigned.
+Quit the desktop app and stop the runner before replacing an installation. Install the new binary/app for the same OS/architecture, then start it using the **same data directory**. The supplied Linux/Windows installers use `desktop-stop` to close the native tray app before replacing its executable, then stop the default runner. Keep a known-good copy for rollback. Verify `SHA256SUMS` against the downloaded archive; hashes alone do not authenticate a publisher. Community macOS executables have ad-hoc signatures; Windows executables and macOS installers have no trusted publisher signature.
 
 The directory is normally the OS user config directory plus `WebDeviceCable`, or the existing legacy `ai-bridge` directory. `--data-dir` overrides it. It contains sensitive state, keys, pairing grants, command configuration, minimal replay receipts and output artifacts. Use a local per-user filesystem with private permissions; do not use a shared/network directory. Unix uses owner-only modes; Windows applies a protected current-user/SYSTEM DACL and inheritance. Same-account processes and administrators are outside this storage boundary.
 
@@ -36,14 +36,14 @@ The opt-in `node scripts/native-e2e.mjs --images` makes actual Codex subscriptio
 
 `node scripts/native-tools-e2e.mjs codex` (or `claude`) separately tests a real app callback, a selected-folder read and a write approved through WDC. Add `--idle` to check continuing context after 65 idle seconds. These tests intentionally use the installed native subscription and create disposable state and folders inside this repository.
 
-For public distribution:
+For distribution:
 
-1. Obtain successful native Linux and Windows execution/installer/browser results, including cancellation and Windows DACL checks; cross-compilation is not equivalent. Validate the macOS app/package on a clean supported machine.
-2. Build official stable releases with the [release guide](releases.md), signing all macOS/Windows downloads with publisher credentials. Unsigned previews remain supported. A GitHub download does not require Apple/Microsoft review. Notarization is an automated Apple scan; it is separate from App Store review. Unsigned packages remain identifiable as previews.
+1. For the community prerelease, retain passing cross-platform CI and provide the installation/testing checklist. Friends will supply the outstanding real Windows/Linux native-provider and clean-machine/browser results. Do not describe cross-compilation or fixture tests as actual provider acceptance. Wider stable support requires those results.
+2. Build community downloads with `--community`, sign their checksum manifest with the committed community key and use manual updates. The [release guide](releases.md) separately supports trusted publisher-signed stable downloads. A GitHub download does not require Apple/Microsoft review. Notarization is an automated Apple scan; it is separate from App Store review. Unsigned packages remain identifiable as previews.
 3. An independent security review is recommended. It is an external assessment, not an Apple/Microsoft distribution requirement or a prerequisite for finishing local implementation.
 4. Keep native subscription eligibility within current provider conditions. Provider conditions for commercial/hosted Codex use remain separate from accepted HTTPS website origins. Claude is a user-controlled local invocation of the official CLI; third-party product distribution conditions still require the maintainer's review. Never extract/relay credentials or disguise API billing as subscription usage.
 
-The current packages remain **unsigned previews**. App tools and Workspace are implemented; native compatibility is checked per request. No build script commits, uploads or publishes anything.
+The first public desktop build is a **community test prerelease with manual updates**, ad-hoc macOS signatures and unsigned Windows executables. App tools and Workspace are implemented; native compatibility is checked per request. No build script commits, uploads or publishes anything.
 
 App tool authorization belongs to the connected app. Older per-tool WDC grants are discarded when state is next saved; pairing keys, folder grants and configured-command consent remain intact. Older SDK tool-permission requests complete immediately. New clients can check `appToolPermissions:"application"` before using this policy.
 

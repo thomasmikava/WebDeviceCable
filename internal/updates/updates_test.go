@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -324,6 +325,37 @@ func TestDevelopmentBuildNeverChecksOrInstalls(t *testing.T) {
 	m.status.Stage = "development"
 	if m.Check() == nil || m.Install(false) == nil || m.SetAutomatic(true) == nil {
 		t.Fatal("developer build accepted official update operation")
+	}
+}
+
+func TestCommunityBuildKeepsManualUpdatesWithExistingAutomaticPreference(t *testing.T) {
+	for _, system := range []string{"linux", "windows", "darwin"} {
+		t.Run(system, func(t *testing.T) {
+			base, _, installed, _ := managerFixture(t, system)
+			dir := t.TempDir()
+			if e := os.WriteFile(filepath.Join(dir, "preferences.json"), []byte(`{"automatic":true,"lastChecked":"0001-01-01T00:00:00Z"}`), 0600); e != nil {
+				t.Fatal(e)
+			}
+			build := base.build
+			build.Community = true // Even a conflicting official flag cannot enable updates.
+			m, e := New(build, dir, base.hooks)
+			if e != nil {
+				t.Fatal(e)
+			}
+			m.client.Transport = transportFunc(func(*http.Request) (*http.Response, error) {
+				t.Error("community build contacted the update service")
+				return nil, errors.New("unexpected update request")
+			})
+			m.step()
+			if status := m.Status(); status.Stage != "community" || !status.Community || status.Official || status.Automatic || status.Supported {
+				t.Fatalf("incorrect community update status: %+v", status)
+			}
+			if m.Check() == nil || m.Install(true) == nil || m.SetAutomatic(true) == nil || installed.Load() != 0 {
+				t.Fatal("community build accepted an upstream update")
+			}
+			m.cancel()
+			m.workers.Wait()
+		})
 	}
 }
 func TestNoAutomaticIncompatibleMigration(t *testing.T) {

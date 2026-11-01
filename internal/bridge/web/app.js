@@ -324,11 +324,13 @@ function renderUpdates(){
   const supported=!!update?.supported,busy=['checking','downloading','installing'].includes(update?.stage);
   $('automatic-updates').disabled=!supported||update?.stage==='installing';$('automatic-updates').setAttribute('aria-checked',String(!!update?.automatic));
   $('installed-version').textContent=update?.version&&update.version!=='dev'?update.version:'Development build';
-  $('build-version').textContent=update?.official?`WebDeviceCable ${update.version}`:update?.version&&update.version!=='dev'?`${update.version} preview`:'Development build';
-  const messages={development:'Updates are available in official installations.',application:'Open the WebDeviceCable app to install updates.',idle:'Checks daily. You can check anytime.',checking:'Checking for updates…',current:'WebDeviceCable is up to date.',available:`WebDeviceCable ${update?.available} is available.`,downloading:'Downloading update…',ready:'Update ready to install.',waiting:'Update ready. Waiting for sessions to finish.',authorization:'Update ready. macOS needs your permission to install.',installing:'Updating WebDeviceCable…',manual:'This update needs a manual installation.',error:update?.error??'Couldn’t check for updates. Try again.'};
+  $('build-version').textContent=update?.community?`${update.version} community test`:update?.official?`WebDeviceCable ${update.version}`:update?.version&&update.version!=='dev'?`${update.version} preview`:'Development build';
+  const messages={development:'Updates are available in official installations.',community:'This test release uses manual updates. Download the next release and install it over this one; your connections stay saved.',application:'Open the WebDeviceCable app to install updates.',idle:'Checks daily. You can check anytime.',checking:'Checking for updates…',current:'WebDeviceCable is up to date.',available:`WebDeviceCable ${update?.available} is available.`,downloading:'Downloading update…',ready:'Update ready to install.',waiting:'Update ready. Waiting for sessions to finish.',authorization:'Update ready. macOS needs your permission to install.',installing:'Updating WebDeviceCable…',manual:'This update needs a manual installation.',error:update?.error??'Couldn’t check for updates. Try again.'};
   $('update-status').textContent=messages[update?.stage]??messages.development;
   $('check-updates').disabled=!supported||busy;
-  $('manual-update').hidden=update?.stage!=='manual';
+  $('manual-update').hidden=update?.stage!=='manual'&&!update?.community;
+  $('manual-update').href=update?.community?'https://github.com/thomasmikava/WebDeviceCable/releases':'https://github.com/thomasmikava/WebDeviceCable/releases/latest';
+  $('manual-update').textContent=update?.community?'View downloads':'Download update';
   $('install-update').hidden=!supported||!['available','ready','waiting','authorization'].includes(update?.stage);$('install-update').textContent=update?.stage==='waiting'?'End sessions and update':'Update now';
   $('update-progress').hidden=update?.stage!=='downloading';
   if(update?.size&&update?.downloaded){$('update-progress').max=update.size;$('update-progress').value=update.downloaded;}else{$('update-progress').removeAttribute('value');}

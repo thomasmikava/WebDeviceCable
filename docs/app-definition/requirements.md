@@ -5,7 +5,7 @@ Kings and Rorido are examples, not dependencies; keep changes in this repository
 
 ## Delivery
 - One self-contained executable with a bundled local web UI on Linux, macOS and Windows; no Node.js or Python required by users.
-- A local runner stays available independently of its control panel; optional self-hosted relay with outbound polling. Official WebDeviceCable releases support signed manual/automatic updates, waiting for active work to end.
+- A local runner stays available independently of its control panel; optional self-hosted relay with outbound polling. Community downloads use signed checksums/manual replacement; publisher-signed releases support automatic updates after work ends.
 - Browser SDK and independent backend npm package and a documented signed/encrypted HTTP streaming protocol for other languages; no unsigned fallback.
 - Each pairing binds an application identity/origin, device and app user; every user supplies their own native client login.
 - Reuse supported native authentication without reading, copying, or exposing provider credentials; never silently use paid APIs.

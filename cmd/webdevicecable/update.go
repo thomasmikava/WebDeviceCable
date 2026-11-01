@@ -22,6 +22,7 @@ import (
 )
 
 var official = "false"
+var community = "false"
 var releasePublicKey = ""
 
 func updateCLI(args []string) error {
@@ -109,7 +110,7 @@ func configuredUpdates(a *bridge.App, dir string, port int) error {
 		exe = filepath.Join(filepath.Dir(exe), "WebDeviceCable.exe")
 	}
 	native := runtime.GOOS == "darwin" && strings.HasSuffix(filepath.Dir(exe), ".app/Contents/Resources")
-	return a.ConfigureUpdates(updates.Build{Version: version, Official: official == "true", PublicKey: releasePublicKey, OS: runtime.GOOS, Arch: runtime.GOARCH, Native: native}, func(p updates.Plan) error {
+	return a.ConfigureUpdates(updates.Build{Version: version, Official: official == "true", Community: community == "true", PublicKey: releasePublicKey, OS: runtime.GOOS, Arch: runtime.GOARCH, Native: native}, func(p updates.Plan) error {
 		if runtime.GOOS == "darwin" {
 			return errors.New("open the installed WebDeviceCable application to install this update")
 		}

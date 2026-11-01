@@ -21,6 +21,7 @@ import (
 type Status struct {
 	Version     string    `json:"version"`
 	Official    bool      `json:"official"`
+	Community   bool      `json:"community,omitempty"`
 	Supported   bool      `json:"supported"`
 	Automatic   bool      `json:"automatic"`
 	Stage       string    `json:"stage"`
@@ -95,14 +96,14 @@ func New(b Build, dir string, h Hooks) (*Manager, error) {
 		return errors.New("unexpected update host")
 	}}
 	key, e := base64.StdEncoding.DecodeString(b.PublicKey)
-	supported := b.Official && e == nil && len(key) == 32
+	supported := b.Official && !b.Community && e == nil && len(key) == 32
 	if b.OS == "darwin" && !b.Native {
 		supported = false
 	}
 	if _, e = Version(b.Version); e != nil {
 		supported = false
 	}
-	m.status = Status{Version: b.Version, Official: b.Official, Supported: supported, Automatic: supported, Stage: "idle"}
+	m.status = Status{Version: b.Version, Official: b.Official && !b.Community, Community: b.Community, Supported: supported, Automatic: supported, Stage: "idle"}
 	disable := func() (*Manager, error) {
 		m.status.Supported = false
 		m.status.Automatic = false
@@ -113,7 +114,10 @@ func New(b Build, dir string, h Hooks) (*Manager, error) {
 	if !supported {
 		m.status.Stage = "development"
 	}
-	if b.Official && b.OS == "darwin" && !b.Native {
+	if b.Community {
+		m.status.Stage = "community"
+	}
+	if b.Official && !b.Community && b.OS == "darwin" && !b.Native {
 		m.status.Stage = "application"
 	}
 	if e = h.Prepare(dir); e != nil {

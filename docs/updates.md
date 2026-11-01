@@ -1,5 +1,7 @@
 # Updates
 
+Community test releases use manual updates. Settings identifies the build, disables automatic/check/install controls and links to GitHub downloads (including prereleases). They make no update-service requests and never install official updates, even if the retained preferences previously enabled them. Quit WDC and install the next community package over the existing application, preserving the same private data directory. See [installation](../INSTALL.md).
+
 Official WebDeviceCable installations enable automatic updates by default. Settings → Updates provides the version, status, Check for updates, Update now and Automatic updates. Checks normally run daily while the app is running. Turning automatic updates off stops scheduled checks and installation; manual checks still work. Updates do not add an OS login service or keep WDC running after you quit it.
 
 Releases are selected from signed metadata using a pinned maintainer key. Windows/Linux downloads verify exact size and SHA-256; Windows additionally verifies Authenticode. macOS binds the expected version, URL and size to Sparkle's signed feed and verifies the archive signature and Apple code signing. There is no unsigned fallback. Wrong platforms, older metadata and downgrades are rejected. Updates requiring an incompatible state/protocol migration are manual.

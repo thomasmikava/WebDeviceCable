@@ -44,7 +44,7 @@ Generated PNGs are checked for content, dimensions and size, capped at four file
 
 The opt-in `node scripts/native-e2e.mjs --images` uses real existing subscription usage. It exercises approval, encrypted streaming, native context continuation, text-document/schema input, image generation/editing, encrypted file transfer, metadata and cancellation. The `--claude` variant checks real Claude Code streaming, context continuation, supplied inputs, schema validation, metadata omission and cancellation. Standard checks use fixtures/connection tests and never send model prompts.
 
-Validated natively on macOS with Codex `0.163.0-alpha.10.2` and Claude Code `2.1.308`; the app-server interface and named profiles remain version-sensitive. Native Windows/Linux sandbox/runtime and clean-machine installation checks remain release work. Signing/notarization needs publisher credentials; an independent security review is recommended separately. Unsupported client/policy combinations fail closed instead of falling back to broader permissions.
+Validated natively on macOS with Codex `0.163.0-alpha.10.2` and Claude Code `2.1.308`; the app-server interface and named profiles remain version-sensitive. Native Windows/Linux provider sandbox/runtime and clean-machine installation checks are explicitly pending early-user testing in the community prerelease; WDC fixture/installer tests pass on native CI runners. Signing/notarization needs publisher credentials; an independent security review is recommended separately. Unsupported client/policy combinations fail closed instead of falling back to broader permissions.
 
 
 ## App tools and Workspace

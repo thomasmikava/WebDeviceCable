@@ -1,6 +1,6 @@
 // Local maintainer tool. Does not upload, publish, install, or change Git settings.
 import {generateKeyPairSync,createPrivateKey,createPublicKey,sign,verify,createHash} from 'node:crypto';
-import {readFile,writeFile,mkdir,copyFile,mkdtemp,rm,readdir} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,copyFile,mkdtemp,rm,readdir,lstat} from 'node:fs/promises';
 import {resolve,relative,sep,join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const root=resolve(import.meta.dirname,'..');
@@ -11,13 +11,72 @@ const privatePath=option('--private-key');
 function checkKeyPath(path){if(!path)throw Error('Provide --private-key /private/path/key.pem');const rel=relative(root,resolve(path));if(!rel.startsWith('..'+sep)&&!rel.startsWith('.local'+sep))throw Error('Keep private signing keys outside the source repository. .local is allowed for disposable test keys only.');}
 function publicRaw(key){if(key.asymmetricKeyType!=='ed25519')throw Error('An Ed25519 release key is required.');return createPublicKey(key).export({format:'der',type:'spki'}).subarray(-32).toString('base64');}
 const domain=Buffer.from('WebDeviceCable release v1\0');
+const communityDomain=Buffer.from('WebDeviceCable community checksums v1\0');
+const targets=['linux/amd64','linux/arm64','darwin/amd64','darwin/arm64','windows/amd64','windows/arm64'];
+async function boundedFile(dir,name,max=256*1024*1024){
+ if(!/^[A-Za-z0-9._-]+$/.test(name))throw Error('Unsafe release filename.');
+ const path=join(dir,name),info=await lstat(path);
+ if(!info.isFile()||info.size>max)throw Error(`Unsafe or oversized release file: ${name}`);
+ return readFile(path);
+}
+async function communityFiles(dir,publicKey){
+ const report=JSON.parse(await boundedFile(dir,'build-manifest.json',16384));
+ if(report.distribution!=='community'||report.automaticUpdates!==false||report.releasePublicKey!==publicKey||!/^\d+\.\d+\.\d+$/.test(report.version)||!/^[a-f0-9]{40}$/.test(report.sourceCommit))throw Error('Invalid community release manifest.');
+ if(JSON.stringify([...report.targets].sort())!==JSON.stringify([...targets].sort()))throw Error('A community release needs all six targets.');
+ const expected=[];
+ for(const target of targets){
+  const [os,arch]=target.split('/'),stem=`WebDeviceCable-${report.version}-${os}-${arch}`;
+  const name=stem+(os==='linux'?'.tar.gz':'.zip');expected.push(name);
+  await boundedFile(dir,name);
+  const inspect=`import sys,json,zipfile,tarfile\np=sys.argv[1];name=sys.argv[2]\nif p.endswith('.zip'):\n z=zipfile.ZipFile(p);i=z.getinfo(name);assert i.file_size<16384;data=z.read(name)\nelse:\n z=tarfile.open(p);i=z.getmember(name);assert i.isfile() and i.size<16384;data=z.extractfile(i).read()\nprint(data.decode())`;
+  const manifest=JSON.parse(run(process.platform==='win32'?'python':'python3',['-c',inspect,join(dir,name),`${stem}/build-manifest.json`]));
+  for(const field of ['version','distribution','sourceCommit','automaticUpdates','releasePublicKey'])if(manifest[field]!==report[field])throw Error(`Inconsistent archive manifest: ${name} (${field})`);
+  if(manifest.target!==target||manifest.protocolVersion!==2||manifest.stateVersion!==1)throw Error(`Incompatible archive: ${name}`);
+  if(os==='darwin')expected.push(stem+'.pkg');
+ }
+ if(JSON.stringify([...report.artifacts].sort())!==JSON.stringify([...expected].sort()))throw Error('Unexpected or missing community artifacts.');
+ return {report,files:[...expected,'build-manifest.json','INSTALL.md','RELEASE_PUBLIC_KEY.pem'].sort()};
+}
 try{
  if(command==='keygen'){
   checkKeyPath(privatePath);const keys=generateKeyPairSync('ed25519');
   await writeFile(resolve(privatePath),keys.privateKey.export({format:'pem',type:'pkcs8'}),{mode:0o600,flag:'wx'});
   console.log(`WDC_RELEASE_PUBLIC_KEY=${publicRaw(keys.privateKey)}`);
  }else if(command==='public-key'){
-  checkKeyPath(privatePath);console.log(publicRaw(createPrivateKey(await readFile(privatePath))));
+  checkKeyPath(privatePath);const key=createPrivateKey(await readFile(privatePath));
+  console.log(params.includes('--pem')?createPublicKey(key).export({format:'pem',type:'spki'}).trim():publicRaw(key));
+ }else if(command==='prepare-community'){
+  checkKeyPath(privatePath);const key=createPrivateKey(await readFile(privatePath)),publicKey=publicRaw(key);
+  const trusted=createPublicKey(await readFile(join(root,'keys/community-release.pub')));
+  if(!trusted.equals(createPublicKey(key)))throw Error('The private key does not match the committed community release key.');
+  const dir=resolve(option('--dir',join(root,'dist')));
+  await copyFile(join(root,'INSTALL.md'),join(dir,'INSTALL.md'));
+  await writeFile(join(dir,'RELEASE_PUBLIC_KEY.pem'),trusted.export({format:'pem',type:'spki'}));
+  const {report,files}=await communityFiles(dir,publicKey);
+  if(report.version!==JSON.parse(await readFile(join(root,'package.json'),'utf8')).version||report.sourceCommit!==run('git',['rev-parse','HEAD']).trim())throw Error('Release source/version does not match this checkout.');
+  if(run('git',['status','--porcelain','--untracked-files=no']).trim())throw Error('Commit tracked source changes before finalizing release artifacts.');
+  const lines=[];for(const name of files)lines.push(`${createHash('sha256').update(await boundedFile(dir,name)).digest('hex')}  ${name}\n`);
+  const checksums=Buffer.from(lines.join(''));
+  await writeFile(join(dir,'SHA256SUMS'),checksums);
+  await writeFile(join(dir,'SHA256SUMS.sig'),sign(null,Buffer.concat([communityDomain,checksums]),key));
+  console.log(`Community ${report.version}: ${files.length} files signed; manual updates, no publisher identity or notarization. Nothing published.`);
+ }else if(command==='verify-community'){
+  const dir=resolve(option('--dir',join(root,'dist'))),key=createPublicKey(await readFile(resolve(option('--public-key',join(root,'keys/community-release.pub')))));
+  if(key.asymmetricKeyType!=='ed25519')throw Error('An Ed25519 community release key is required.');
+  const checksums=await boundedFile(dir,'SHA256SUMS',16384),signature=await boundedFile(dir,'SHA256SUMS.sig',64);
+  if(!verify(null,Buffer.concat([communityDomain,checksums]),key,signature))throw Error('Community release signature verification failed.');
+  const publicKey=key.export({format:'der',type:'spki'}).subarray(-32).toString('base64');
+  const names=[];
+  for(const line of checksums.toString('utf8').trimEnd().split('\n')){
+   const match=/^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$/.exec(line);
+   if(!match||names.includes(match[2]))throw Error('Invalid or duplicate checksum entry.');
+   names.push(match[2]);
+   if(createHash('sha256').update(await boundedFile(dir,match[2])).digest('hex')!==match[1])throw Error(`Release checksum mismatch: ${match[2]}`);
+  }
+  const {report,files}=await communityFiles(dir,publicKey);
+  if(JSON.stringify(names.sort())!==JSON.stringify(files))throw Error('Release checksum list is incomplete.');
+  if(!createPublicKey(await boundedFile(dir,'RELEASE_PUBLIC_KEY.pem',4096)).equals(key))throw Error('Bundled public key differs from the trusted key.');
+  console.log(`Verified community ${report.version}: all six targets, installers, source binding, signatures and checksums. Manual updates only.`);
  }else if(command==='prepare'){
   checkKeyPath(privatePath);const key=createPrivateKey(await readFile(privatePath)),publicKey=publicRaw(key);
   const dir=resolve(option('--dir',join(root,'dist'))),version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
@@ -53,5 +112,5 @@ try{
   const lines=[];for(const name of files.sort())lines.push(`${createHash('sha256').update(await readFile(join(dir,name))).digest('hex')}  ${name}\n`);
   await writeFile(join(dir,'SHA256SUMS'),lines.join(''));
   console.log(`WebDeviceCable ${version}: verified metadata and checksums prepared locally. Nothing published.`);
- }else throw Error('Usage: node scripts/release.mjs keygen|public-key|prepare --private-key /private/key.pem');
+ }else throw Error('Usage: node scripts/release.mjs keygen|public-key|prepare|prepare-community --private-key /private/key.pem; verify-community --dir DIR [--public-key TRUSTED.pem]');
 }catch(error){console.error(error.message);process.exitCode=1;}

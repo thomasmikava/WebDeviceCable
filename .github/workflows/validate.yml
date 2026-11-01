@@ -27,6 +27,7 @@ jobs:
       - run: npm run check:sdk-drift
       - run: scripts/check.sh
       - run: npm run test:package
+      - run: node --test scripts/release.test.mjs
       - name: Build local runner
         run: |
           mkdir -p dist
@@ -48,12 +49,13 @@ jobs:
         run: |
           command -v dbus-daemon
           WDC_DESKTOP_BINARY="$PWD/dist/WebDeviceCable" go test -count=1 ./internal/desktop
-      - name: Package this OS (unsigned preview)
+      - name: Package this OS (community test build)
         run: |
+          export WDC_RELEASE_PUBLIC_KEY=$(node --input-type=module -e "import{readFileSync}from'node:fs';import{createPublicKey}from'node:crypto';console.log(createPublicKey(readFileSync('keys/community-release.pub')).export({format:'der',type:'spki'}).subarray(-32).toString('base64'))")
           case "$RUNNER_OS" in
-            macOS) python3 scripts/package.py --target darwin/arm64 ;;
-            Windows) python scripts/package.py --target windows/amd64 ;;
-            Linux) python3 scripts/package.py --target linux/amd64 ;;
+            macOS) python3 scripts/package.py --community --target darwin/arm64 ;;
+            Windows) python scripts/package.py --community --target windows/amd64 ;;
+            Linux) python3 scripts/package.py --community --target linux/amd64 ;;
           esac
       - name: Verify Windows install and Installed Apps removal
         if: runner.os == 'Windows'
