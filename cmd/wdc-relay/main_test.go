@@ -58,3 +58,17 @@ func TestMountedAdminSecretTakesPrecedenceAndFailsClosed(t *testing.T) {
 		t.Fatal("missing secret silently fell back to environment")
 	}
 }
+
+func TestMaintenanceNeedsNoOperatorSecretAndNeverCreatesEmptyState(t *testing.T) {
+	clearRelayEnvironment(t)
+	if err := maintenance([]string{"backup", "--help"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := maintenance([]string{"backup", "--data-dir", dir, "--backup-dir", t.TempDir()}); err == nil {
+		t.Fatal("missing state accepted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "relay.sqlite")); !os.IsNotExist(err) {
+		t.Fatal("maintenance created an empty database")
+	}
+}

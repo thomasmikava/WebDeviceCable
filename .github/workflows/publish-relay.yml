@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts --prefix tests/relay-contract
-      - run: go test -race ./internal/relay ./internal/bridge
+      - run: go test -race ./cmd/wdc-relay ./internal/relay ./internal/bridge
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

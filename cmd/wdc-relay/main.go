@@ -14,6 +14,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "backup" || os.Args[1] == "fence-restored") {
+		if err := maintenance(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	dir := flag.String("data-dir", "/data", "private persistent relay directory")
 	listen := flag.String("listen", ":8080", "HTTP listen address (put HTTPS termination in front)")
 	flag.Parse()
@@ -42,6 +49,27 @@ func main() {
 		fmt.Fprintln(os.Stderr, e)
 		os.Exit(1)
 	}
+}
+
+func maintenance(args []string) error {
+	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	directory := flags.String("data-dir", "/data", "existing relay directory")
+	backups := flags.String("backup-dir", "/backups", "private backup directory")
+	retain := flags.Int("retain", 7, "completed backups to retain")
+	if err := flags.Parse(args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected maintenance arguments")
+	}
+	if args[0] == "fence-restored" {
+		return relay.FenceRestored(*directory, *backups)
+	}
+	_, err := relay.Backup(*directory, *backups, *retain)
+	return err
 }
 
 func configFromEnvironment(directory string) (relay.Config, error) {
