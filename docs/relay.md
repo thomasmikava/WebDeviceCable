@@ -71,6 +71,17 @@ A production host needs persistent local/block storage for SQLite, HTTPS termina
 
 Do not restore an older database and resume its old connections automatically: the snapshot may predate consumed inference. Keep the restore private, fence old connections/codes, preserve receipts, reconcile uncertain work and require new pairings before reopening traffic. Image rollback must preserve the current database.
 
+The relay image owns database maintenance; integrations do not need to interpret its SQLite records:
+
+```sh
+wdc-relay backup --data-dir /data --backup-dir /backups --retain 7
+wdc-relay fence-restored --data-dir /data --backup-dir /backups
+```
+
+Mount the existing data and private backup directories into a disposable instance of the same reviewed relay image. Maintenance needs filesystem access, no operator key or network access. `backup` includes committed WAL data and retains only WDC snapshots. Stop the server before `fence-restored`: it requires the same exclusive directory lock as the server, creates a forensic snapshot, revokes restored connections and pending pairing codes, and preserves projects and consumed receipts. Reconcile uncertain operations and require fresh pairings before reopening traffic. Missing state is rejected rather than replaced by an empty database.
+
+One relay may host QA and production as separate projects with distinct app IDs, exact website origins and credentials. Keep each environment's project key in its own secret store. Shared-host maintenance affects both environments; project isolation does not create separate availability domains.
+
 ## Independent backend npm package
 
 `npm run package:sdk` creates two independent npm archives in `dist/`: `@webdevicecable/sdk` for direct browser connections, and `@webdevicecable/relay` for Node 22+ backends. Neither requires a sibling checkout or runtime dependencies. Building artifacts does not publish to npm.
