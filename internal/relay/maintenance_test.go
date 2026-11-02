@@ -9,7 +9,8 @@ import (
 )
 
 func TestBackupIncludesCommittedWALAndRetainsOnlyOwnSnapshots(t *testing.T) {
-	s, err := Open(Config{Directory: t.TempDir(), AdminKey: strings.Repeat("a", 64)})
+	directory := filepath.Join(t.TempDir(), "relay # &%")
+	s, err := Open(Config{Directory: directory, AdminKey: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}

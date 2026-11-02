@@ -25,7 +25,12 @@ func maintenanceDB(directory string, writable bool) (*sql.DB, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("existing regular relay database required")
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	uriPath := filepath.ToSlash(path)
+	// A Windows drive belongs in the URI path, never in its authority.
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	mode := "ro"
 	if writable {
 		mode = "rw"
