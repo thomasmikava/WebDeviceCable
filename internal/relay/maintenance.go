@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -64,22 +65,20 @@ func Backup(directory, destination string, retain int) (string, error) {
 		return "", err
 	}
 	defer lock.Close()
-	file, err := os.CreateTemp(destination, "wdc-"+time.Now().UTC().Format("20060102T150405.000000000Z")+"-*.sqlite")
+	file, err := os.CreateTemp(destination, "wdc-"+time.Now().UTC().Format("20060102T150405.000000000Z")+"-*.sqlite.partial")
 	if err != nil {
 		return "", err
 	}
-	path := file.Name()
-	complete := false
+	temporary := file.Name()
+	path := strings.TrimSuffix(temporary, ".partial")
 	defer func() {
 		file.Close()
-		if !complete {
-			os.Remove(path)
-		}
+		os.Remove(temporary)
 	}()
-	if _, err = db.Exec("VACUUM main INTO ?", path); err != nil {
+	if _, err = db.Exec("VACUUM main INTO ?", temporary); err != nil {
 		return "", err
 	}
-	if _, err = db.Exec("ATTACH DATABASE ? AS snapshot", path); err != nil {
+	if _, err = db.Exec("ATTACH DATABASE ? AS snapshot", temporary); err != nil {
 		return "", err
 	}
 	var integrity string
@@ -94,6 +93,9 @@ func Backup(directory, destination string, retain int) (string, error) {
 	if err = file.Close(); err != nil {
 		return "", err
 	}
+	if err = os.Rename(temporary, path); err != nil {
+		return "", err
+	}
 	if runtime.GOOS != "windows" {
 		dir, err := os.Open(destination)
 		if err != nil {
@@ -105,7 +107,6 @@ func Backup(directory, destination string, retain int) (string, error) {
 			return "", err
 		}
 	}
-	complete = true
 	files, err := filepath.Glob(filepath.Join(destination, "wdc-*.sqlite"))
 	if err != nil {
 		return "", err

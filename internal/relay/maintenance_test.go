@@ -30,6 +30,10 @@ func TestBackupIncludesCommittedWALAndRetainsOnlyOwnSnapshots(t *testing.T) {
 	if err = os.WriteFile(other, []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	partial := filepath.Join(backups, "wdc-interrupted.sqlite.partial")
+	if err = os.WriteFile(partial, []byte("interrupted-copy"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for range 4 {
 		path, err := Backup(s.config.Directory, backups, 2)
 		if err != nil {
@@ -65,6 +69,9 @@ func TestBackupIncludesCommittedWALAndRetainsOnlyOwnSnapshots(t *testing.T) {
 	}
 	if data, err := os.ReadFile(other); err != nil || string(data) != "keep" {
 		t.Fatal("unrelated file changed")
+	}
+	if data, err := os.ReadFile(partial); err != nil || string(data) != "interrupted-copy" {
+		t.Fatal("interrupted backup was counted as a completed snapshot")
 	}
 }
 
