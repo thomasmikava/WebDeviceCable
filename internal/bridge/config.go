@@ -63,6 +63,8 @@ type Choice struct {
 	Value string `yaml:"value" json:"value"`
 }
 type configuredAction struct {
+	program    *AIProgram
+	continuing bool
 	Action
 	Source string `json:"source"`
 	Hash   string `json:"hash"`

@@ -4,7 +4,8 @@ export { ConnectionStore } from './storage.js';
 export { BridgeError, BridgeSecurityError } from './secure.js';
 export type { ConnectionKeys, RunnerIdentity, Failure, ErrorCategory } from './secure.js';
 /** Local-only protocol client. Pairing keys belong to one app user and device. */
-export type Provider = 'codex' | 'claude';
+/** Stable local AI program ID. Built-in IDs resolve to the editable default entries. */
+export type Provider = 'codex' | 'claude' | (string & {});
 export type JobStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'cancelled' | 'timed_out' | 'blocked' | 'interrupted' | 'failed';
 export interface JobRequest {
     idempotencyKey: string;
@@ -29,7 +30,7 @@ export interface Job {
     output?: string;
     actualProvider?: Provider;
     actualModel?: string;
-    billing: 'none' | 'native_subscription';
+    billing: 'none' | 'native_subscription' | 'program_defined';
     revision: number;
     request: JobRequest;
     createdAt: string;
@@ -67,6 +68,7 @@ export interface AdmissionStatus {
     code?: string;
 }
 export interface Pairing {
+    groupsDeclared?: boolean;
     id: string;
     appId: string;
     appUser: string;
@@ -80,6 +82,10 @@ export interface Pairing {
     actions?: Record<string, string>;
 }
 export interface Capability {
+    integration?: 'codex' | 'claude' | 'custom';
+    sessions?: boolean;
+    streaming?: boolean;
+    isolation?: 'native' | 'os-account';
     id: Provider;
     name: string;
     execution: boolean;
@@ -115,6 +121,8 @@ export interface CommandAction {
     sessions: boolean;
 }
 export interface Capabilities {
+    routingVersion?: number;
+    routingConfigured?: boolean;
     appToolPermissions?: 'application';
     fileTransfer: boolean;
     maxTextBytes: number;
@@ -128,10 +136,12 @@ export interface Capabilities {
     remoteAccess: false;
 }
 export interface ExecutionMetadata {
-    kind: 'command' | 'native' | 'connection-test';
+    programId?: string;
+    integration?: 'codex' | 'claude' | 'custom';
+    kind: 'command' | 'native' | 'custom' | 'connection-test';
     name?: string;
     version?: string;
-    versionSource?: 'configured' | 'native';
+    versionSource?: 'configured' | 'native' | 'program';
     provider?: Provider;
     model?: string;
     reasoning?: string;
@@ -141,6 +151,12 @@ export interface ActionGroup {
     name: string;
     kind?: 'ai' | 'command';
     parentId?: string;
+    /** Image stages require a native image-capable program. */
+    operation?: 'text' | 'image';
+    /** Keep legacy routes addressable for recovery without displaying them. */
+    hidden?: boolean;
+    /** Copy an existing local route once when introducing this group. */
+    replaces?: string[];
 }
 export interface GroupDefinition extends ActionGroup {
     children?: GroupDefinition[];
@@ -205,6 +221,7 @@ export interface PermissionStatus {
     }[];
 }
 export interface ClientOptions {
+    minimumRoutingVersion?: number;
     tools?: AppTool[];
     baseURL?: string;
     connection: ConnectionKeys;

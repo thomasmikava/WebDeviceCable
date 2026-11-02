@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {RelayClient, RelayAdminClient, relayRequest, BridgeError} from '../internal/bridge/web/relay.js';
+import {RelayClient, RelayAdminClient, relayRequest, BridgeError, relayConnectURL, relaySettingsURL} from '../internal/bridge/web/relay.js';
 
 test('relay requests preserve Headers and tuple headers while retaining project authentication', async () => {
   const saved = globalThis.fetch;
@@ -37,4 +37,15 @@ test('invalid connection IDs and non-loopback HTTP endpoints are rejected before
   for (const baseURL of ['http://relay.example', 'https://user:password@relay.example', 'https://relay.example/path']) {
     assert.throws(() => new RelayAdminClient({baseURL,adminKey:'fixture-key'}));
   }
+});
+
+test('relay app links contain a single-use invitation or connection ID, never the project credential', () => {
+  const code='a'.repeat(64), connectionId='b'.repeat(64);
+  const invitation=new URL(relayConnectURL({baseURL:'https://relay.example',code}));
+  assert.equal(invitation.host,'relay-connect'); assert.equal(invitation.searchParams.get('relayUrl'),'https://relay.example'); assert.equal(invitation.searchParams.get('code'),code);
+  const settings=new URL(relaySettingsURL({baseURL:'https://relay.example',connectionId}));
+  assert.equal(settings.host,'settings');assert.equal(settings.searchParams.get('connectionId'),connectionId);
+  assert.throws(()=>relayConnectURL({baseURL:'http://192.168.1.1',code}));
+  assert.throws(()=>relayConnectURL({baseURL:'http://localhost:47323',code}));
+  assert.throws(()=>relaySettingsURL({baseURL:'https://relay.example',connectionId:'../other'}));
 });

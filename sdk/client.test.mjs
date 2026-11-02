@@ -439,3 +439,11 @@ test('a signed update interruption never resubmits a job and reconnects with the
     await assert.rejects(client.connect(),BridgeSecurityError);
   }finally{await client?.close().catch(()=>{});restore();}
 });
+
+test('workflow declarations retain native operation hints, recovery aliases and hidden legacy routes', async () => {
+  const seen=[];
+  const transport={reset(){},close:async()=>{},fetch:async(path,init)=>{seen.push(JSON.parse(init.body));return Response.json({groups:[]});}};
+  const client=new BridgeClient({connection:{pairingId:'a'.repeat(64),identity:{deviceId:'b'.repeat(64),publicKey:'',endpoint:'http://127.0.0.1:47321'},privateKey:{},publicKey:''},origin:'https://app.example'},transport);
+  await client.registerGroups([{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai',children:[{id:'render',name:'Render',kind:'ai',operation:'image',replaces:['legacy']}]}]);
+  assert.deepEqual(seen[0].groups,[{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai'},{id:'images.render',name:'Render',operation:'image',replaces:['legacy'],kind:'ai',parentId:'images'}]);
+});

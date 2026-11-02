@@ -89,7 +89,7 @@ export class RelayClient extends BridgeClient {
             },
             async close() { },
         };
-        super({ origin: relay.origin, account: relay.account, groups: relay.groups, tools: relay.tools,
+        super({ minimumRoutingVersion: relay.minimumRoutingVersion, origin: relay.origin, account: relay.account, groups: relay.groups ?? [], tools: relay.tools,
             connection: { pairingId: relay.connectionId, identity, privateKey: {}, publicKey: '' } }, transport);
         this.relay = relay;
     }
@@ -105,4 +105,22 @@ export class RelayClient extends BridgeClient {
             throw new Error('A paired account connection is required.');
         return relayRequest(options, '/relay/v1/connections/' + options.connectionId, { method: 'DELETE', headers: { 'X-WDC-Account': options.appUser } });
     }
+}
+/** A short-lived invitation opens a local review; it never approves execution. */
+export function relayConnectURL(options) {
+    if (!/^[a-f0-9]{64}$/.test(options.code))
+        throw new Error('A single-use relay pairing code is required.');
+    const origin = endpoint(options.baseURL);
+    if (new URL(origin).protocol === 'http:' && new URL(origin).hostname === 'localhost')
+        throw new Error('Use a numeric loopback relay origin for local pairing.');
+    return 'webdevicecable://relay-connect?' + new URLSearchParams({ relayUrl: origin, code: options.code });
+}
+/** Open the already-paired connection's local program settings. */
+export function relaySettingsURL(options) {
+    if (!/^[a-f0-9]{64}$/.test(options.connectionId))
+        throw new Error('A relay connection ID is required.');
+    const origin = endpoint(options.baseURL);
+    if (new URL(origin).protocol === 'http:' && new URL(origin).hostname === 'localhost')
+        throw new Error('Use a numeric loopback relay origin for local pairing.');
+    return 'webdevicecable://settings?' + new URLSearchParams({ relayUrl: origin, connectionId: options.connectionId });
 }

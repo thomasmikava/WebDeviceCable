@@ -13,7 +13,7 @@ npm install --save-exact @webdevicecable/relay@@VERSION@
 ```
 
 ```js
-import { RelayClient, RelayAdminClient } from '@webdevicecable/relay';
+import { RelayClient, RelayAdminClient, relayConnectURL, relaySettingsURL } from '@webdevicecable/relay';
 ```
 
 ```js
@@ -45,10 +45,18 @@ const enrollment = await RelayClient.enroll({
   apiKey: process.env.WDC_PROJECT_KEY,
   appUser: String(authenticatedUser.id),
 });
-// Show the returned pairing instructions to this authenticated account.
+const launchUrl = relayConnectURL({baseURL: process.env.WDC_RELAY_URL, code: enrollment.code});
+// Return launchUrl only to this authenticated account. It opens local approval.
+// Keep code + URL under a manual fallback if the installed app cannot open.
 // After local approval, retain its connection ID on the backend.
 ```
+
+`relaySettingsURL({baseURL, connectionId})` reopens the paired connection's local program settings. Keep pending pairing separate from the active device until approval. `status()` distinguishes pending, declined and expired enrollment; a lost device remains paired until explicitly disconnected.
+
+Workflow groups support independent program, model and reasoning choices in WDC. Use `minimumRoutingVersion: 2` to require the updated desktop; model choices and native credentials stay local. Existing direct browser integrations remain compatible.
 
 See [RELAY.md](./RELAY.md) for the complete pairing flow, `RelayClient` construction, groups, jobs, streaming, sessions, files, tool callbacks, provider-compatible routes and recovery. Your backend owns authorization, operation IDs and output validation. Never automatically replay an uncertain inference through another route.
 
 The package does not include the Docker server or desktop application. For direct browser integration, use [`@webdevicecable/sdk`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/integrate.md). MIT licensed.
+
+Named installations and profiles are chosen locally in WDC, per connection and workflow. Existing `codex`/`claude` IDs remain the default entries; generated program IDs identify additional installations. Check each selected entry's capabilities before submitting work. Custom harnesses require explicit local grants and do not inherit native isolation guarantees. See [AI programs](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/ai-programs.md).

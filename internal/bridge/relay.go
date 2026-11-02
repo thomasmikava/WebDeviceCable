@@ -118,6 +118,22 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		writeJSON(w, 200, info)
 		return nil
 	}))
+	mux.HandleFunc("POST /api/relay/decline", control(func(w http.ResponseWriter, r *http.Request) error {
+		var in relayInput
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		if _, err := inspectRelay(r.Context(), in); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if _, err := relayJSON(ctx, relayHTTPClient(), in.URL+"/connector/v1/decline", "", map[string]string{"code": in.Code}, nil); err != nil {
+			return fail(502, "relay_unavailable", "Could not decline this invitation. Try again.")
+		}
+		writeJSON(w, 200, map[string]bool{"declined": true})
+		return nil
+	}))
 	mux.HandleFunc("POST /api/relay/connect", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
 			URL      string    `json:"url"`

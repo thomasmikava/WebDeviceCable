@@ -20,6 +20,10 @@ const maxJobs = 500
 // Provider-backed execution stays disabled until eligibility AND isolation are verified.
 // A UI checkbox or application request cannot override these release gates.
 type Capability struct {
+	Integration     string `json:"integration,omitempty"`
+	Sessions        bool   `json:"sessions"`
+	Streaming       bool   `json:"streaming"`
+	Isolation       string `json:"isolation,omitempty"`
 	AppTools        bool   `json:"appTools"`
 	Workspace       bool   `json:"workspace"`
 	ID              string `json:"id"`
@@ -45,6 +49,7 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
+	GroupsDeclared  bool               `json:"groupsDeclared,omitempty"`
 	Relay           *RelayBinding      `json:"relay,omitempty"`
 	Transport       string             `json:"transport,omitempty"`
 	Tools           map[string]AppTool `json:"tools,omitempty"`
@@ -62,6 +67,7 @@ type Pairing struct {
 	Revoked         bool               `json:"revoked"`
 	CreatedAt       time.Time          `json:"createdAt"`
 	Mode            string             `json:"mode"`
+	ProgramGrants   map[string]string  `json:"programGrants,omitempty"`
 	NativeAccounts  map[string]string  `json:"nativeAccounts,omitempty"`
 	Actions         map[string]string  `json:"actions,omitempty"`
 	Groups          []ActionGroup      `json:"groups,omitempty"`
@@ -122,6 +128,7 @@ type Receipt struct {
 	Hash  string `json:"hash"`
 }
 type State struct {
+	Programs      map[string]AIProgram     `json:"programs"`
 	IdentityKey   string                   `json:"identityKey,omitempty"`
 	SecurityReset bool                     `json:"securityReset,omitempty"`
 	Version       int                      `json:"version"`
@@ -294,11 +301,8 @@ func validateRequest(r *JobRequest) error {
 			return errors.New("connection-test accepts no provider or prompt")
 		}
 	case "text", "image-generate", "image-edit":
-		if r.Provider != "codex" && r.Provider != "claude" {
-			return errors.New("provider must be codex or claude")
-		}
-		if r.Kind != "text" && r.Provider != "codex" {
-			return errors.New("image generation/editing requires Codex")
+		if !actionID.MatchString(r.Provider) {
+			return errors.New("provider must be a program ID")
 		}
 		if len(strings.TrimSpace(r.Prompt)) == 0 || len(r.Prompt) > 32768 {
 			return errors.New("prompt must be 1–32768 bytes")

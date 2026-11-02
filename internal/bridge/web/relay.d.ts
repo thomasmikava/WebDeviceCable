@@ -12,6 +12,7 @@ export interface RelayOptions {
         appUser: string;
     };
     origin: string;
+    minimumRoutingVersion?: number;
     groups?: ActionGroups;
     tools?: AppTool[];
     /** Recheck project authorization before every operation, including heartbeats/tools. */
@@ -30,6 +31,7 @@ export interface RelayStatus {
     appUser: string;
     connected: boolean;
     revoked: boolean;
+    enrollmentStatus?: 'pending' | 'declined' | 'expired';
 }
 export interface RelayProject {
     id: string;
@@ -81,3 +83,13 @@ export declare class RelayClient extends BridgeClient {
         revoked: boolean;
     }>;
 }
+/** A short-lived invitation opens a local review; it never approves execution. */
+export declare function relayConnectURL(options: {
+    baseURL: string;
+    code: string;
+}): string;
+/** Open the already-paired connection's local program settings. */
+export declare function relaySettingsURL(options: {
+    baseURL: string;
+    connectionId: string;
+}): string;

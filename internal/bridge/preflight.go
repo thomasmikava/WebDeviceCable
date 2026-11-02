@@ -38,6 +38,10 @@ func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error
 					continue
 				}
 				switch feature {
+				case "sessions":
+					supported = cap.Sessions
+				case "streaming":
+					supported = cap.Streaming
 				case "text":
 					supported = cap.Text
 				case "json":

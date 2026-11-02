@@ -126,6 +126,17 @@ func Open(dir string) (*App, error) {
 		}
 	}
 	a.state.IdentityKey = currentIdentity
+	if a.state.Programs == nil {
+		a.state.Programs = defaultPrograms()
+	}
+	for id, program := range a.state.Programs {
+		if id != program.ID {
+			return nil, errors.New("invalid AI program identity")
+		}
+		if err := validateProgram(program); err != nil {
+			return nil, err
+		}
+	}
 	if a.state.Sharing == nil {
 		a.state.Sharing = defaultSharing()
 	}
@@ -343,6 +354,9 @@ func (a *App) tick() error {
 							j.ActualProvider = metadata.Provider
 							j.ActualModel = metadata.Model
 							j.Billing = "native_subscription"
+							if metadata.Kind == "custom" {
+								j.Billing = "program_defined"
+							}
 						}
 						run.mu.Unlock()
 					}

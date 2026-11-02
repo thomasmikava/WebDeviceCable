@@ -10,13 +10,14 @@ export interface RelayOptions {
   connectionId: string;
   account: { appId: string; appUser: string };
   origin: string;
+  minimumRoutingVersion?: number;
   groups?: ActionGroups;
   tools?: AppTool[];
   /** Recheck project authorization before every operation, including heartbeats/tools. */
   authorize?: () => Promise<void>;
 }
 export interface RelayEnrollment { code: string; connectionId: string; expiresAt: string; appId: string; name: string; origin: string }
-export interface RelayStatus { connectionId: string; appUser: string; connected: boolean; revoked: boolean }
+export interface RelayStatus { connectionId: string; appUser: string; connected: boolean; revoked: boolean; enrollmentStatus?: 'pending' | 'declined' | 'expired' }
 export interface RelayProject {
   id: string; appId: string; name: string; origin: string; createdAt: string; revoked: boolean;
 }
@@ -99,7 +100,7 @@ export class RelayClient extends BridgeClient {
       },
       async close() {},
     };
-    super({origin:relay.origin,account:relay.account,groups:relay.groups,tools:relay.tools,
+    super({minimumRoutingVersion:relay.minimumRoutingVersion,origin:relay.origin,account:relay.account,groups:relay.groups ?? [],tools:relay.tools,
       connection:{pairingId:relay.connectionId,identity,privateKey:{} as CryptoKey,publicKey:''}},transport);
   }
   async status(): Promise<RelayStatus> {
@@ -113,4 +114,19 @@ export class RelayClient extends BridgeClient {
     if (!/^[a-f0-9]{64}$/.test(options.connectionId) || !options.appUser) throw new Error('A paired account connection is required.');
     return relayRequest(options,'/relay/v1/connections/'+options.connectionId,{method:'DELETE',headers:{'X-WDC-Account':options.appUser}});
   }
+}
+
+/** A short-lived invitation opens a local review; it never approves execution. */
+export function relayConnectURL(options: {baseURL: string; code: string}): string {
+  if (!/^[a-f0-9]{64}$/.test(options.code)) throw new Error('A single-use relay pairing code is required.');
+  const origin=endpoint(options.baseURL);
+  if (new URL(origin).protocol==='http:' && new URL(origin).hostname==='localhost') throw new Error('Use a numeric loopback relay origin for local pairing.');
+  return 'webdevicecable://relay-connect?' + new URLSearchParams({relayUrl:origin,code:options.code});
+}
+/** Open the already-paired connection's local program settings. */
+export function relaySettingsURL(options: {baseURL: string; connectionId: string}): string {
+  if (!/^[a-f0-9]{64}$/.test(options.connectionId)) throw new Error('A relay connection ID is required.');
+  const origin=endpoint(options.baseURL);
+  if (new URL(origin).protocol==='http:' && new URL(origin).hostname==='localhost') throw new Error('Use a numeric loopback relay origin for local pairing.');
+  return 'webdevicecable://settings?' + new URLSearchParams({relayUrl:origin,connectionId:options.connectionId});
 }

@@ -39,7 +39,7 @@ function groupsArray(groups) {
             if (result.length >= 64)
                 throw new BridgeError('invalid_groups', 'An app can declare up to 64 groups.', 400);
             const id = parent ? `${parent}.${definition.id}` : definition.id;
-            result.push({ id, name: definition.name, ...(definition.kind ? { kind: definition.kind } : {}), ...(parent || definition.parentId ? { parentId: parent ?? definition.parentId } : {}) });
+            result.push({ id, name: definition.name, ...(definition.operation ? { operation: definition.operation } : {}), ...(definition.hidden ? { hidden: true } : {}), ...(definition.replaces?.length ? { replaces: definition.replaces } : {}), ...(definition.kind ? { kind: definition.kind } : {}), ...(parent || definition.parentId ? { parentId: parent ?? definition.parentId } : {}) });
             if (definition.children?.length)
                 visit(definition.children, id, depth + 1);
         }
@@ -365,9 +365,12 @@ export class BridgeClient {
         const generation = ++this.generation;
         this.connecting = (async () => {
             try {
-                if (this.options.account) {
-                    const { pairing } = await this.capabilities();
-                    if (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId)
+                if (this.options.account || this.options.minimumRoutingVersion) {
+                    const capabilities = await this.capabilities();
+                    const { pairing } = capabilities;
+                    if (this.options.minimumRoutingVersion && (capabilities.routingVersion ?? 1) < this.options.minimumRoutingVersion)
+                        throw new BridgeError('desktop_update_required', 'Update WebDeviceCable before configuring workflow models and reasoning.', 409);
+                    if (this.options.account && (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId))
                         throw new BridgeError('identity_mismatch', 'This connection belongs to another app or account. Disconnect and pair this account.', 403);
                 }
                 await this.openLease(generation);

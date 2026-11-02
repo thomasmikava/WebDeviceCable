@@ -100,6 +100,11 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 				return err
 			}
 		}
+		if program, ok := a.program(plan.Provider); ok && program.Type == "custom" {
+			if err := a.checkProgramRequest(p, plan, JobRequest{Mode: in.Mode, ConversationID: "checking"}); err != nil {
+				return err
+			}
+		}
 		if plan.Kind == "command" && a.actions[plan.Action].Session == nil {
 			return fail(400, "sessions_unsupported", "This command does not support continuing sessions. Enable its JSONL session interface in configuration.")
 		}

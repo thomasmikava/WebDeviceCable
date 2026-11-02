@@ -26,6 +26,9 @@ func TestMain(m *testing.M) {
 func claudeFixtureMain() {
 	root := filepath.Dir(os.Args[0])
 	config := filepath.Join(root, "config")
+	if configured := os.Getenv("CLAUDE_CONFIG_DIR"); configured != "" {
+		config = configured
+	}
 	emit := func(value any) { _ = json.NewEncoder(os.Stdout).Encode(value) }
 	value := func(flag string) string {
 		for i, arg := range os.Args {
@@ -39,6 +42,10 @@ func claudeFixtureMain() {
 		fmt.Println(claudeMinimumVersion)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--help" {
+		fmt.Println("--effort (low, medium, high)")
+		return
+	}
 	isAuth := false
 	for i, arg := range os.Args {
 		if arg == "auth" && i+1 < len(os.Args) && os.Args[i+1] == "status" {
@@ -46,7 +53,10 @@ func claudeFixtureMain() {
 		}
 	}
 	if isAuth {
-		identity, _ := os.ReadFile(filepath.Join(root, "identity"))
+		identity, _ := os.ReadFile(filepath.Join(config, "account"))
+		if len(identity) == 0 {
+			identity, _ = os.ReadFile(filepath.Join(root, "identity"))
+		}
 		if len(identity) == 0 {
 			identity = []byte("fixture-owner")
 		}
@@ -123,7 +133,7 @@ func claudeFixtureMain() {
 			emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": "Rate limit reached", "api_error_status": 429, "session_id": id})
 			continue
 		}
-		data, _ := json.Marshal(map[string]any{"prompts": prompts, "pid": os.Getpid(), "cwd": dir})
+		data, _ := json.Marshal(map[string]any{"prompts": prompts, "pid": os.Getpid(), "cwd": dir, "profile": config})
 		if mode == "oversized" {
 			data = []byte(strings.Repeat("x", 18000))
 		}
@@ -166,6 +176,7 @@ func claudeFixture(t *testing.T) (*fixture, string) {
 	if err = os.Mkdir(filepath.Join(root, "config"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "config"))
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
 	f := setup(t)
 	f.a.native = []NativeStatus{{ID: "claude", Execution: true, Installed: true, Authentication: "native_subscription", Version: claudeMinimumVersion}}

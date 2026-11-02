@@ -4,7 +4,8 @@ export { ConnectionStore } from './storage.js';
 export { BridgeError, BridgeSecurityError } from './secure.js';
 export type { ConnectionKeys, RunnerIdentity, Failure, ErrorCategory } from './secure.js';
 /** Local-only protocol client. Pairing keys belong to one app user and device. */
-export type Provider = 'codex' | 'claude';
+/** Stable local AI program ID. Built-in IDs resolve to the editable default entries. */
+export type Provider = 'codex' | 'claude' | (string & {});
 export type JobStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'cancelled' | 'timed_out' | 'blocked' | 'interrupted' | 'failed';
 export interface JobRequest {
   idempotencyKey: string;
@@ -22,7 +23,7 @@ export interface JobRequest {
 }
 export interface Job {
   id: string; pairingId: string; status: JobStatus; code?: string; detail?: string;
-  output?: string; actualProvider?: Provider; actualModel?: string; billing: 'none' | 'native_subscription';
+  output?: string; actualProvider?: Provider; actualModel?: string; billing: 'none' | 'native_subscription' | 'program_defined';
   revision: number; request: JobRequest; createdAt: string; finishedAt?: string;
   actionTitle?: string; exitCode?: number; outputTruncated?: boolean;
   execution?: ExecutionMetadata; error?: Failure; turn?: number;
@@ -33,17 +34,19 @@ export interface TokenUsage {inputTokens:number;cachedInputTokens:number;outputT
 export interface UploadedInput extends Artifact {}
 export interface AdmissionStatus { available: boolean; kind?: 'native' | 'command'; code?: string }
 export interface Pairing {
+  groupsDeclared?: boolean;
   id: string; appId: string; appUser: string; name: string; origin: string;
   deviceId: string; automatic: boolean; paused: boolean; revoked: boolean; mode: 'restricted' | 'commands'; actions?: Record<string, string>;
 }
 export interface Capability {
+  integration?: 'codex' | 'claude' | 'custom'; sessions?: boolean; streaming?: boolean; isolation?: 'native' | 'os-account';
   id: Provider; name: string; execution: boolean; eligibility: string; reason: string; source: string;
   appTools:boolean;workspace:boolean;
  text: boolean; json: boolean; imageInput: boolean; documentInput: boolean; imageGeneration: boolean; imageEditing: boolean;
 }
 export interface ActionArgument { name: string; title?: string; type?: string; default?: string; rejectNull?: boolean; choices?: { title?: string; value: string }[] }
 export interface CommandAction { id: string; title?: string; arguments: ActionArgument[] | null; timeout: number; available: boolean; sessions: boolean }
-export interface Capabilities {appToolPermissions?:'application';fileTransfer:boolean;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
+export interface Capabilities {routingVersion?: number; routingConfigured?: boolean; appToolPermissions?:'application';fileTransfer:boolean;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
 const done = (job: Job) => ['completed', 'cancelled', 'timed_out', 'blocked', 'interrupted', 'failed'].includes(job.status);
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function json<T>(response: Response): Promise<T> {
@@ -56,8 +59,15 @@ async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
   return body as T;
 }
-export interface ExecutionMetadata { kind: 'command' | 'native' | 'connection-test'; name?: string; version?: string; versionSource?: 'configured' | 'native'; provider?: Provider; model?: string; reasoning?: string }
-export interface ActionGroup { id: string; name: string; kind?: 'ai' | 'command'; parentId?: string }
+export interface ExecutionMetadata { programId?: string; integration?: 'codex' | 'claude' | 'custom'; kind: 'command' | 'native' | 'custom' | 'connection-test'; name?: string; version?: string; versionSource?: 'configured' | 'native' | 'program'; provider?: Provider; model?: string; reasoning?: string }
+export interface ActionGroup { id: string; name: string; kind?: 'ai' | 'command'; parentId?: string;
+  /** Image stages require a native image-capable program. */
+  operation?: 'text' | 'image';
+  /** Keep legacy routes addressable for recovery without displaying them. */
+  hidden?: boolean;
+  /** Copy an existing local route once when introducing this group. */
+  replaces?: string[];
+}
 export interface GroupDefinition extends ActionGroup { children?: GroupDefinition[] }
 export type ActionGroups = GroupDefinition[] | Record<string, string>;
 export interface Conversation { id: string; group?: string; status: 'open' | 'closed'; code?: string; lastJobId?: string; turns: number; createdAt: string; updatedAt: string }
@@ -68,7 +78,7 @@ export interface AppToolDefinition {id:string;title:string;description:string;in
 export interface AppTool extends AppToolDefinition {execute:(args:Record<string,unknown>,context:{idempotencyKey:string;signal:AbortSignal})=>unknown|Promise<unknown>}
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {tools:Record<string,AppToolDefinition&{hash:string}>;grants:Record<string,{hash:string;automatic:boolean}>;folders:{id:string;name:string;write:boolean;automatic:boolean}[]}
-export interface ClientOptions { tools?: AppTool[]; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
+export interface ClientOptions { minimumRoutingVersion?: number; tools?: AppTool[]; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
 export interface BridgeTransport {
   reset(): void;
   fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
@@ -86,7 +96,7 @@ function groupsArray(groups: ActionGroups): ActionGroup[] {
     for (const definition of definitions) {
       if (result.length >= 64) throw new BridgeError('invalid_groups','An app can declare up to 64 groups.',400);
       const id = parent ? `${parent}.${definition.id}` : definition.id;
-      result.push({id,name:definition.name,...(definition.kind ? {kind:definition.kind} : {}),...(parent || definition.parentId ? {parentId:parent ?? definition.parentId} : {})});
+      result.push({id,name:definition.name,...(definition.operation ? {operation:definition.operation} : {}),...(definition.hidden ? {hidden:true} : {}),...(definition.replaces?.length ? {replaces:definition.replaces} : {}),...(definition.kind ? {kind:definition.kind} : {}),...(parent || definition.parentId ? {parentId:parent ?? definition.parentId} : {})});
       if (definition.children?.length) visit(definition.children,id,depth + 1);
     }
   };
@@ -271,9 +281,12 @@ export class BridgeClient {
     if (!this.closed) this.stop();
     const generation = ++this.generation;
     this.connecting = (async () => { try {
-      if (this.options.account) {
-        const {pairing} = await this.capabilities();
-        if (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId) throw new BridgeError('identity_mismatch','This connection belongs to another app or account. Disconnect and pair this account.',403);
+      if (this.options.account || this.options.minimumRoutingVersion) {
+        const capabilities = await this.capabilities();
+        const {pairing} = capabilities;
+        if (this.options.minimumRoutingVersion && (capabilities.routingVersion ?? 1) < this.options.minimumRoutingVersion)
+          throw new BridgeError('desktop_update_required','Update WebDeviceCable before configuring workflow models and reasoning.',409);
+        if (this.options.account && (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId)) throw new BridgeError('identity_mismatch','This connection belongs to another app or account. Disconnect and pair this account.',403);
       }
       await this.openLease(generation); if (this.options.groups) await this.registerGroups(this.options.groups); if(this.options.tools)await this.registerTools(this.options.tools); } catch (error) { await this.close().catch(() => {}); throw error; } })();
     try { await this.connecting; } finally { this.connecting = undefined; }

@@ -118,10 +118,11 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			return fn(w, r, p)
 		})
 	}
-	a.launchRoutes(mux, wrap, origin)
+	a.launchRoutes(mux, wrap, control, origin)
 	a.updateRoutes(mux, control, wrap)
 	a.permissionRoutes(mux, paired, control)
 	a.commandRoutes(mux, control)
+	a.programRoutes(mux, control)
 	a.pairingRequestRoutes(mux, control, origin)
 	a.preferenceRoutes(mux, paired, control)
 	a.conversationRoutes(mux, paired, control)
@@ -182,9 +183,13 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	mux.HandleFunc("GET /api/state", control(func(w http.ResponseWriter, r *http.Request) error {
 		pairs := []Pairing{}
 		providersByPairing := map[string][]Capability{}
+		relayConnections := []map[string]string{}
 		for _, p := range a.state.Pairings {
 			pairs = append(pairs, publicPairing(p))
 			providersByPairing[p.ID] = a.capabilities(p)
+			if p.Relay != nil && !p.Revoked {
+				relayConnections = append(relayConnections, map[string]string{"relayUrl": p.Relay.URL, "connectionId": p.Relay.ConnectionID, "pairingId": p.ID})
+			}
 		}
 		jobs := []Job{}
 		for _, j := range a.state.Jobs {
@@ -192,7 +197,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			copy.Plan = j.Plan
 			jobs = append(jobs, copy)
 		}
-		writeJSON(w, 200, map[string]any{"updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.state.Conversations, "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
+		writeJSON(w, 200, map[string]any{"updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.state.Conversations, "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/providers/check", control(func(w http.ResponseWriter, r *http.Request) error {
@@ -412,7 +417,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/capabilities", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		writeJSON(w, 200, map[string]any{"protocolVersion": 2, "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.capabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
+		writeJSON(w, 200, map[string]any{"protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p), "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/actions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {

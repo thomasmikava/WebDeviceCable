@@ -30,6 +30,7 @@ type Config struct{ Directory, AdminKey string }
 type ticket struct {
 	ProjectID, AppUser, CodeHash, ConnectionID string
 	Expires                                    time.Time
+	Declined                                   bool
 }
 type connection struct {
 	ID         string
@@ -228,6 +229,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
+	m.HandleFunc("POST /connector/v1/decline", s.decline)
 	m.HandleFunc("POST /connector/v1/claim", s.claim)
 	m.HandleFunc("POST /connector/v1/{connection}/poll", s.poll)
 	m.HandleFunc("POST /connector/v1/{connection}/result", s.result)
@@ -292,7 +294,7 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 	var t ticket
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || !s.projectActive(t.ProjectID) {
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || !s.projectActive(t.ProjectID) {
 		problem(w, 410, "pairing_expired")
 		return
 	}
@@ -307,7 +309,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var t ticket
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || len(in.Token) != 64 || !s.projectActive(t.ProjectID) {
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || len(in.Token) != 64 || !s.projectActive(t.ProjectID) {
 		problem(w, 410, "pairing_expired")
 		return
 	}
@@ -335,6 +337,30 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	s.connections[c.ID] = c
 	jsonOut(w, 201, map[string]string{"connectionId": c.ID})
 }
+
+// Declining requires the same single-use invitation as claiming. Persist a
+// short-lived tombstone so the account backend can distinguish it from expiry.
+func (s *Server) decline(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code string `json:"code"`
+	}
+	if !read(w, r, &in, 4096) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t ticket
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || !s.projectActive(t.ProjectID) {
+		problem(w, 410, "pairing_expired")
+		return
+	}
+	t.Declined = true
+	if s.put("ticket", t.CodeHash, t) != nil {
+		problem(w, 500, "storage_error")
+		return
+	}
+	jsonOut(w, 200, map[string]bool{"declined": true})
+}
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	p := s.project(w, r)
 	if p == nil {
@@ -343,6 +369,25 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connections[r.PathValue("connection")]
+	if c == nil {
+		var raw string
+		var t ticket
+		err := s.db.QueryRow("SELECT data FROM records WHERE kind='ticket' AND json_extract(data,'$.ConnectionID')=?", r.PathValue("connection")).Scan(&raw)
+		if err == nil && json.Unmarshal([]byte(raw), &t) == nil && t.ProjectID == p.ID && s.projectActive(p.ID) {
+			if account := r.Header.Get("X-WDC-Account"); account != "" && account != t.AppUser {
+				problem(w, 403, "account_mismatch")
+				return
+			}
+			state := "pending"
+			if time.Now().After(t.Expires) {
+				state = "expired"
+			} else if t.Declined {
+				state = "declined"
+			}
+			jsonOut(w, 200, map[string]any{"connectionId": t.ConnectionID, "appUser": t.AppUser, "connected": false, "revoked": false, "enrollmentStatus": state})
+			return
+		}
+	}
 	if c == nil || c.ProjectID != p.ID || !s.projectActive(p.ID) {
 		problem(w, 404, "connection_not_found")
 		return

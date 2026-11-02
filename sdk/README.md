@@ -16,7 +16,7 @@ import { BridgeClient, ConnectionStore } from '@webdevicecable/sdk';
 
 CommonJS frontend tooling can use `require('@webdevicecable/sdk')`. Browser execution requires HTTPS or localhost, WebCrypto, IndexedDB and streaming fetch. Choose one module format per application; the native ESM and CommonJS builds have separate class identities.
 
-Uses WDC's signed/encrypted protocol v2. The user chooses native programs and models inside WDC; the SDK does not include a provider model or a paid API fallback.
+Uses WDC's signed/encrypted protocol v2. The user chooses named AI programs, profiles, models and reasoning inside WDC. Group routes use stable program IDs; the original `codex` and `claude` IDs remain the default entries. Custom harnesses expose only their supported capabilities and require explicit OS account permission grants. See [AI programs](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/ai-programs.md). The SDK does not include a provider model or a paid API fallback.
 
 ## Connect from a button
 

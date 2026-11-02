@@ -43,6 +43,13 @@ try {
  control=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+await readFile(dir+'/desktop/admin.key','utf8')}}).then(r=>r.json());
  if(native){for(let i=0;i<250;i++){const state=await api('/state',undefined,'GET');if(!state.nativeChecking&&state.native.length)break;await wait(100)}await api('/sharing',{names:true,models:true,versions:true},'PATCH')}
  const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7'});
+ const pendingClient=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin});
+ assert.equal((await pendingClient.status()).enrollmentStatus,'pending');await pendingClient.close();
+ const declined=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'decline-fixture'});
+ await api('/relay/decline',{url,code:declined.code});
+ const declinedClient=new RelayClient({baseURL:url,apiKey:key,connectionId:declined.connectionId,account:{appId:'kings-international',appUser:'decline-fixture'},origin});
+ assert.equal((await declinedClient.status()).enrollmentStatus,'declined');await declinedClient.close();
+ await RelayClient.revoke({baseURL:url,apiKey:key,connectionId:declined.connectionId,appUser:'decline-fixture'});
  const expected=await api('/relay/inspect',{url,code:enrollment.code});assert.equal(expected.appUser,'admin-7');
  await api('/relay/connect',{url,code:enrollment.code,expected});
  backend=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin,groups:[{id:'ai',name:'Kings AI',kind:'ai',children:[{id:'generation',name:'Generation',kind:'ai'},{id:'images',name:'Images',kind:'ai'}]}]});
@@ -67,6 +74,21 @@ try {
  await assert.rejects(direct.get(kings.id),e=>e.status===404);
  assert.equal(otherJob.status,'completed');assert.notEqual(otherJob.id,kings.id);await assert.rejects(second.get(kings.id),e=>e.status===404);
  const file=await backend.upload(new Blob(['fixture task'],{type:'text/plain'}),'task.txt');assert.equal(file.size,12);await backend.removeInput(file.id);
+ if(!native){
+   await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:0,routing:{default:{provider:'codex',reasoning:'low'},groups:{'ai.generation':{provider:'codex',reasoning:'high'}}}},'PUT');
+   const workflowGroups=process.env.WDC_GROUPS_FILE ? JSON.parse(await readFile(process.env.WDC_GROUPS_FILE,'utf8')) : [{id:'images',name:'Image generation',kind:'ai',children:[{id:'plan',name:'Plan prompts',kind:'ai',replaces:['ai.generation']},{id:'render',name:'Generate image',kind:'ai',operation:'image',replaces:['ai.images']},{id:'review',name:'Review image',kind:'ai',replaces:['ai.generation']}]}];
+   await backend.registerGroups(workflowGroups);
+   const updated=(await api('/state',undefined,'GET')).pairings.find(pair=>pair.id===caps.pairing.id);
+   assert.equal(updated.groupsDeclared,true);assert.equal(updated.routing.groups['images.plan'].reasoning,'high');assert.equal(updated.routing.groups['images.review'].reasoning,'high');
+   assert.equal(updated.groups.find(group=>group.id==='images.render').operation,'image');
+   const revision=updated.routing.revision;
+   const routing={...updated.routing,groups:{...updated.routing.groups,'images.review':{inheritOptions:true,modelDefault:true,reasoning:'medium'}}};
+   await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:revision,routing},'PUT');
+   await backend.registerGroups(workflowGroups);
+   assert.equal((await api('/state',undefined,'GET')).pairings.find(pair=>pair.id===caps.pairing.id).routing.groups['images.review'].reasoning,'medium');
+   assert.equal((await direct.run({kind:'connection-test',idempotencyKey:'direct-after-workflow-migration'})).status,'completed');
+   console.log('Workflow migration passed with the consumer SDK: same-pairing legacy overrides copied once, image-stage metadata, independent native defaults and reasoning, and unchanged direct transport.');
+ }
  if(native){
    await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:0,routing:{default:{provider:'codex',reasoning:'low'}}},'PUT');
    assert.equal((await backend.preflight({kind:'action',group:'ai.generation',prompt:'fixture'},['text'])).available,true);
