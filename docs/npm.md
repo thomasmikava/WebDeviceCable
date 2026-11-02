@@ -20,6 +20,8 @@ npm run test:package
 
 `test:package` builds and installs the actual tarballs into a disposable consumer outside the source checkout, checks the complete file lists, imports both module formats, tests NodeNext and bundler TypeScript resolution, verifies backend declarations without DOM libraries, loads browser modules through HTTP without Node globals, exercises account-scoped browser key storage and performs offline publish dry runs. It also checks that the relay package loads without the browser package installed. It uses only fixture requests and temporary state; no inference or registry writes occur.
 
+The relay ESM facade is generated from the TypeScript compiler's actual value exports. Packaging fails if either format omits an export or the relay formats have different runtime identities. The installed-tarball test independently compares every value export for both packages against the compiler output, rather than maintaining a list of selected APIs. A negative control recreates the broken `0.1.1` relay ESM facade and requires the gate to reject it. These checks run before publication in the GitHub publishing workflow. Direct `npm publish` can bypass repository checks; use only an archive that passed this gate and verify its integrity against the public registry after publication.
+
 For version `0.1.0`, review:
 
 - `dist/webdevicecable-sdk-0.1.0.tgz` and `dist/sdk/`.

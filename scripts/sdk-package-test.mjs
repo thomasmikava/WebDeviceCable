@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
 import {createContext,SourceTextModule} from 'node:vm';
 import {indexedDB} from 'fake-indexeddb';
+import {pathToFileURL} from 'node:url';
 const dir=await mkdtemp(resolve(tmpdir(),'wdc-sdk-consumer-'));
 const npm=process.platform==='win32'?'npm.cmd':'npm';
 function run(args,cwd=process.cwd()){const result=spawnSync(npm,args,{cwd,encoding:'utf8',shell:process.platform==='win32'});assert.equal(result.status,0,result.stdout+result.stderr);return result.stdout;}
@@ -14,6 +15,43 @@ try{
   await writeFile(resolve(dir,'package.json'),JSON.stringify({private:true,type:'module'}));
   run(['install',resolve(`dist/webdevicecable-sdk-${JSON.parse(await readFile(resolve('package.json'),'utf8')).version}.tgz`),resolve(`dist/webdevicecable-relay-${JSON.parse(await readFile(resolve('package.json'),'utf8')).version}.tgz`),'--ignore-scripts','--offline','--cache',resolve('.cache/npm'),'--no-audit'],dir);
   const {version} = JSON.parse(await readFile('package.json','utf8'));
+  const publicExports = {};
+  for (const [name, file] of [['sdk','index.js'],['relay','relay.js']]) {
+    publicExports[name] = Object.keys(await import(pathToFileURL(resolve('internal/bridge/web',file)).href)).sort();
+  }
+  await writeFile(resolve(dir,'expected-exports.json'),JSON.stringify(publicExports));
+  await writeFile(resolve(dir,'check-exports.cjs'),`const assert = require('node:assert/strict');
+const expected = require('./expected-exports.json');
+async function main() {
+  for (const name of ['sdk','relay']) {
+    const commonjs = require('@webdevicecable/'+name);
+    const esm = await import('@webdevicecable/'+name);
+    assert.deepEqual(Object.keys(commonjs).sort(), expected[name], name+' CommonJS public API differs from TypeScript');
+    assert.deepEqual(Object.keys(esm).sort(), expected[name], name+' ESM public API differs from TypeScript');
+    for (const key of expected[name]) {
+      assert.notEqual(commonjs[key], undefined, name+' CommonJS export is undefined: '+key);
+      assert.notEqual(esm[key], undefined, name+' ESM export is undefined: '+key);
+      if (name === 'relay') assert.equal(esm[key], commonjs[key], 'Relay runtime identity differs: '+key);
+    }
+  }
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
+`);
+  const checkExports = () => spawnSync(process.execPath,['check-exports.cjs'],{cwd:dir,encoding:'utf8'});
+  const exports = checkExports();
+  assert.equal(exports.status,0,exports.stdout+exports.stderr);
+  // Negative control: reproduce the exact 0.1.1 facade omission. The installed
+  // tarball check must reject it, so a broken gate cannot silently pass CI.
+  const relayFacade = resolve(dir,'node_modules/@webdevicecable/relay/relay.js');
+  const correctFacade = await readFile(relayFacade,'utf8');
+  try {
+    await writeFile(relayFacade,"import relay from './cjs/relay.js';\nexport const { RelayClient, RelayAdminClient, BridgeError, BridgeJobError, relayRequest } = relay;\n");
+    const broken = checkExports();
+    assert.notEqual(broken.status,0,'The package gate accepted the broken 0.1.1 ESM facade');
+    assert.match(broken.stderr,/relay ESM public API differs from TypeScript/);
+    assert.match(broken.stderr,/relayConnectURL/);
+    assert.match(broken.stderr,/relaySettingsURL/);
+  } finally { await writeFile(relayFacade,correctFacade); }
   await mkdir(resolve(dir,'node_modules/@types'),{recursive:true});
   await cp(resolve('node_modules/@types/node'),resolve(dir,'node_modules/@types/node'),{recursive:true});
   await cp(resolve('node_modules/undici-types'),resolve(dir,'node_modules/undici-types'),{recursive:true});
@@ -125,6 +163,15 @@ async function main() {
   try {
     const options = {baseURL:'http://127.0.0.1:'+server.address().port,apiKey:'fixture-key'};
     for (const client of [relay, esm]) {
+      const code = 'a'.repeat(64);
+      const connectionId = 'b'.repeat(64);
+      const launch = new URL(client.relayConnectURL({baseURL:'https://relay.example',code}));
+      assert.equal(launch.protocol,'webdevicecable:');
+      assert.equal(launch.hostname,'relay-connect');
+      assert.equal(launch.searchParams.get('code'),code);
+      const settings = new URL(client.relaySettingsURL({baseURL:'https://relay.example',connectionId}));
+      assert.equal(settings.hostname,'settings');
+      assert.equal(settings.searchParams.get('connectionId'),connectionId);
       assert.equal((await client.RelayClient.enroll({...options,appUser:'fixture'})).connectionId,'fixture-connection');
       await assert.rejects(client.RelayClient.enroll({...options,appUser:'denied'}), error => error instanceof relay.BridgeError && error.code === 'fixture_denied');
       const admin = new client.RelayAdminClient({baseURL:options.baseURL,adminKey:'operator-key'});
@@ -155,5 +202,5 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
   await writeFile(resolve(dir,'standalone.cjs'),"const assert=require('node:assert/strict'); const relay=require('@webdevicecable/relay'); import('@webdevicecable/relay').then(esm=>{assert.equal(esm.RelayClient,relay.RelayClient); assert.equal(typeof esm.RelayAdminClient,'function');});");
   const standalone=spawnSync(process.execPath,['standalone.cjs'],{cwd:dir,encoding:'utf8'});assert.equal(standalone.status,0,standalone.stdout+standalone.stderr);
   for (const name of ['sdk','relay']) run(['publish',resolve(`dist/webdevicecable-${name}-${version}.tgz`),'--dry-run','--offline','--ignore-scripts','--access','public']);
-  console.log('Both reviewed npm archives install, import and typecheck in CommonJS, ESM and bundler resolution; browser HTTP imports and account-scoped key storage pass. Publish dry runs passed; nothing published.');
+  console.log('Both reviewed npm archives install, import and typecheck in CommonJS, ESM and bundler resolution. Every TypeScript value export matches both installed formats; the broken 0.1.1 facade is rejected. Browser HTTP imports and account-scoped key storage pass. Publish dry runs passed; nothing published.');
 }finally{await rm(dir,{recursive:true,force:true});}
