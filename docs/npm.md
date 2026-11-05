@@ -22,10 +22,10 @@ npm run test:package
 
 The relay ESM facade is generated from the TypeScript compiler's actual value exports. Packaging fails if either format omits an export or the relay formats have different runtime identities. The installed-tarball test independently compares every value export for both packages against the compiler output, rather than maintaining a list of selected APIs. A negative control recreates the broken `0.1.1` relay ESM facade and requires the gate to reject it. These checks run before publication in the GitHub publishing workflow. Direct `npm publish` can bypass repository checks; use only an archive that passed this gate and verify its integrity against the public registry after publication.
 
-For version `0.1.0`, review:
+For version `0.2.0`, review:
 
-- `dist/webdevicecable-sdk-0.1.0.tgz` and `dist/sdk/`.
-- `dist/webdevicecable-relay-0.1.0.tgz` and `dist/relay-client/`.
+- `dist/webdevicecable-sdk-0.2.0.tgz` and `dist/sdk/`.
+- `dist/webdevicecable-relay-0.2.0.tgz` and `dist/relay-client/`.
 
 Only runtime JavaScript, declarations, package metadata, license, README and the relevant integration guide enter each archive. Packaged guides link back to the source documentation. The root package stays private to prevent accidentally publishing the whole repository.
 
@@ -41,8 +41,8 @@ Trusted publishers are configured in each existing package's npm settings. If th
 
 ```sh
 npm login --auth-type=web
-npm publish ./dist/webdevicecable-sdk-0.1.0.tgz --access public --ignore-scripts
-npm publish ./dist/webdevicecable-relay-0.1.0.tgz --access public --ignore-scripts
+npm publish ./dist/webdevicecable-sdk-0.2.0.tgz --access public --ignore-scripts
+npm publish ./dist/webdevicecable-relay-0.2.0.tgz --access public --ignore-scripts
 ```
 
 These commands publish real packages. They are not part of the preparation or test scripts. Authenticate with the publishing account's required 2FA. A local first publication does not carry GitHub Actions build provenance; subsequent releases through the workflow below do. Do not publish placeholder packages or put an npm token in source, frontend configuration or a Docker image.
@@ -76,7 +76,7 @@ Publishing the two packages is not atomic. If one succeeds and the other fails, 
 Once the version exists in npm, a frontend such as Rorido installs it normally:
 
 ```sh
-npm install --save-exact @webdevicecable/sdk@0.1.0
+npm install --save-exact @webdevicecable/sdk@0.2.0
 ```
 
 ```js
@@ -88,12 +88,12 @@ Plain HTML applications can import the identical native ESM files from a version
 ```html
 <script type="module">
   import { BridgeClient, ConnectionStore }
-    from 'https://unpkg.com/@webdevicecable/sdk@0.1.0/index.js';
+    from 'https://unpkg.com/@webdevicecable/sdk@0.2.0/index.js';
 </script>
 ```
 
-jsDelivr also serves `https://cdn.jsdelivr.net/npm/@webdevicecable/sdk@0.1.0/index.js`. These URLs become usable only after publication; local tests validate the equivalent HTTP module layout, not a nonexistent CDN release. [UNPKG](https://unpkg.com/) and [jsDelivr](https://www.jsdelivr.com/documentation) serve npm files, so WDC needs no separate SDK hosting service. Pin a complete version rather than `latest`.
+jsDelivr also serves `https://cdn.jsdelivr.net/npm/@webdevicecable/sdk@0.2.0/index.js`. These URLs become usable only after publication; local tests validate the equivalent HTTP module layout, not a nonexistent CDN release. [UNPKG](https://unpkg.com/) and [jsDelivr](https://www.jsdelivr.com/documentation) serve npm files, so WDC needs no separate SDK hosting service. Pin a complete version rather than `latest`.
 
 For self-hosting, copy `index.js`, `secure.js` and `storage.js` from the same archive into one static directory and import its `index.js`. Load it as a module. No global script build is provided. Browser local-network policy still applies to connections to installed WDC; changing where SDK code is downloaded does not change that connection.
 
-Keep Rorido's reviewed SDK snapshot and Kings' vendored relay workspace until the corresponding npm versions actually exist and each application deliberately switches its pinned dependency. Publication alone does not change their Docker layouts or installed dependencies.
+Rorido and Kings pin the coordinated 0.2.0 registry packages. Before publication, validate against the prepared local archives without committing filesystem dependencies. Make compatible desktop and relay versions available before deploying the application upgrades. Publication alone does not change application deployments or installed dependencies.

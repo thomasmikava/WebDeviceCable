@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 	_ "modernc.org/sqlite"
 )
 
@@ -183,11 +184,20 @@ func read(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
-	if d.Decode(v) != nil || d.Decode(new(any)) != io.EOF {
-		problem(w, 400, "invalid_request")
-		return false
+	err := d.Decode(v)
+	if err == nil {
+		err = d.Decode(new(any))
+		if err == io.EOF {
+			return true
+		}
 	}
-	return true
+	var oversized *http.MaxBytesError
+	if limit == wirelimits.Envelope && errors.As(err, &oversized) {
+		problem(w, 413, "request_too_large")
+	} else {
+		problem(w, 400, "invalid_request")
+	}
+	return false
 }
 func (s *Server) project(w http.ResponseWriter, r *http.Request) *projectRecord {
 	key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -226,6 +236,12 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		jsonOut(w, 200, map[string]bool{"ready": true})
+	})
+	m.HandleFunc("GET /relay/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if s.project(w, r) == nil {
+			return
+		}
+		jsonOut(w, 200, map[string]any{"scopedToolsVersion": 1, "limits": wirelimits.Capabilities()})
 	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
@@ -461,8 +477,13 @@ func (s *Server) poll(w http.ResponseWriter, r *http.Request) {
 	for {
 		s.mu.Lock()
 		packets := []Packet{}
+		packetBytes := 0
 		for _, op := range s.operations {
 			if op.connection == c.ID && !op.claimed && time.Now().UnixMilli() < op.packet.Deadline {
+				if packetBytes+len(op.packet.Body) > wirelimits.Envelope {
+					continue
+				}
+				packetBytes += len(op.packet.Body)
 				op.claimed = true
 				packets = append(packets, op.packet)
 				if len(packets) == 8 {
@@ -634,14 +655,14 @@ func (s *Server) request(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in logicalRequest
-	if !read(w, r, &in, 128<<10) {
+	if !read(w, r, &in, wirelimits.Envelope) {
 		return
 	}
 	if in.Deadline <= time.Now().UnixMilli() || in.Deadline > time.Now().Add(time.Minute).UnixMilli() {
 		problem(w, 408, "request_expired")
 		return
 	}
-	if _, err := hex.DecodeString(in.ID); err != nil || len(in.ID) != 64 || len(in.Body) > 40<<10 {
+	if _, err := hex.DecodeString(in.ID); err != nil || len(in.ID) != 64 {
 		problem(w, 400, "invalid_request")
 		return
 	}
@@ -651,6 +672,10 @@ func (s *Server) request(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Method != "GET" && in.Method != "POST" && in.Method != "PUT" && in.Method != "DELETE" {
 		problem(w, 400, "invalid_method")
+		return
+	}
+	if code := wirelimits.Check(in.Method, in.Path, in.Body); code != "" {
+		problem(w, 413, code)
 		return
 	}
 	client, e := s.client(p.ID, r.PathValue("connection"), r.Header.Get("X-WDC-Account"))

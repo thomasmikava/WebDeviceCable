@@ -41,6 +41,10 @@ console.log(job.output);
 
 Use the authenticated user's immutable ID. Keep one client per tab. Close the client and clear the account-scoped store on logout/account changes. Preserve the app's own authorization and output validation. See [INTEGRATE.md](./INTEGRATE.md) for lifecycle, streaming, consent and uncertain-outcome recovery.
 
+## Execution-scoped tools
+
+SDK 0.2.0 requires WDC desktop 0.2.0 or later. Pass `tools` to `session({tools})` or standalone `submit`, `run`, and `preflight`. Each execution snapshots its own catalog and handlers; a continuing session keeps that snapshot. Change tools by creating a new native session with saved history. Constructor tools and `registerTools()` were removed. Relay clients use the same execution API.
+
 ## URL imports and self-hosting
 
 The same npm release can be loaded without a bundler:

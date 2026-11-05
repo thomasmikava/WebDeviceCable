@@ -3,6 +3,18 @@ package bridge
 // Admission is called with the app lock held. Receipts are checked before route
 // resolution so retrying an old key can never execute a newly selected program.
 func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, error) {
+	tools, toolHash, err := snapshotTools(in.Tools, &in.Mode)
+	if err != nil {
+		return nil, false, err
+	}
+	if in.ConversationID != "" && len(in.Tools) > 0 {
+		return nil, false, fail(400, "invalid_tools", "Session messages cannot replace tools.")
+	}
+	in.Tools = tools
+	in.ToolSetHash = toolHash
+	if c := a.state.Conversations[in.ConversationID]; c != nil && c.PairingID == p.ID {
+		in.ToolSetHash = c.ToolSetHash
+	}
 	if err := validateRequest(&in); err != nil {
 		return nil, false, fail(400, "invalid_job", err.Error())
 	}
@@ -13,6 +25,18 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		return nil, false, err
 	}
 	if consumed {
+		if in.ConversationID != "" && a.state.Conversations[in.ConversationID] == nil {
+			in.ToolSetHash = receipt.ToolSetHash
+			hash = requestHash(in)
+		}
+		if receipt.ToolSetHash == "" && len(in.Tools) == 0 {
+			legacy := in
+			legacy.Tools = nil
+			legacy.ToolSetHash = ""
+			if receipt.Hash == requestHash(legacy) {
+				hash = receipt.Hash
+			}
+		}
 		if receipt.Hash != hash {
 			return nil, false, fail(409, "idempotency_conflict", "This key was already used for a different request.")
 		}
@@ -71,6 +95,11 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		job.Status = "queued"
 	}
 	if err := a.update(func(s *State) error {
+		if in.ConversationID == "" {
+			if err := admitDefinitions(s, in.Tools); err != nil {
+				return err
+			}
+		}
 		if len(s.Jobs) >= maxJobs {
 			oldest := -1
 			for i, previous := range s.Jobs {
@@ -85,7 +114,7 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		}
 		// Reserve first. A failed job-state save consumes the key rather than
 		// risking execution again after a crash or ambiguous submission.
-		if err := a.reserveReceipt(key, Receipt{JobID: job.ID, Hash: hash}); err != nil {
+		if err := a.reserveReceipt(key, Receipt{JobID: job.ID, Hash: hash, ToolSetHash: in.ToolSetHash, LeaseHash: digest(lease)}); err != nil {
 			return err
 		}
 		s.Jobs = append(s.Jobs, job)

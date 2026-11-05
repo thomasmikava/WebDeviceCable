@@ -8,6 +8,7 @@ export type { ConnectionKeys, RunnerIdentity, Failure, ErrorCategory } from './s
 export type Provider = 'codex' | 'claude' | (string & {});
 export type JobStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'cancelled' | 'timed_out' | 'blocked' | 'interrupted' | 'failed';
 export interface JobRequest {
+    tools?: AppTool[];
     idempotencyKey: string;
     kind: 'connection-test' | 'text' | 'image-generate' | 'image-edit' | 'command' | 'action';
     provider?: Provider;
@@ -32,7 +33,9 @@ export interface Job {
     actualModel?: string;
     billing: 'none' | 'native_subscription' | 'program_defined';
     revision: number;
-    request: JobRequest;
+    request: Omit<JobRequest, 'tools'> & {
+        toolSetHash?: string;
+    };
     createdAt: string;
     finishedAt?: string;
     actionTitle?: string;
@@ -121,6 +124,8 @@ export interface CommandAction {
     sessions: boolean;
 }
 export interface Capabilities {
+    scopedToolsVersion?: number;
+    limits?: Record<string, number>;
     routingVersion?: number;
     routingConfigured?: boolean;
     appToolPermissions?: 'application';
@@ -136,6 +141,7 @@ export interface Capabilities {
     remoteAccess: false;
 }
 export interface ExecutionMetadata {
+    toolSetHash?: string;
     programId?: string;
     integration?: 'codex' | 'claude' | 'custom';
     kind: 'command' | 'native' | 'custom' | 'connection-test';
@@ -163,6 +169,7 @@ export interface GroupDefinition extends ActionGroup {
 }
 export type ActionGroups = GroupDefinition[] | Record<string, string>;
 export interface Conversation {
+    toolSetHash: string;
     id: string;
     group?: string;
     status: 'open' | 'closed';
@@ -173,6 +180,7 @@ export interface Conversation {
     updatedAt: string;
 }
 export interface SessionOptions {
+    tools?: AppTool[];
     mode?: "restricted" | "app-tools" | "workspace";
     group?: string;
     provider?: Provider;
@@ -198,11 +206,16 @@ export interface AppToolDefinition {
     inputSchema: Record<string, unknown>;
     readOnly?: boolean;
 }
+export interface ToolCallbackContext {
+    idempotencyKey: string;
+    jobId: string;
+    conversationId?: string;
+    requestIdempotencyKey: string;
+    toolSetHash: string;
+    signal: AbortSignal;
+}
 export interface AppTool extends AppToolDefinition {
-    execute: (args: Record<string, unknown>, context: {
-        idempotencyKey: string;
-        signal: AbortSignal;
-    }) => unknown | Promise<unknown>;
+    execute: (args: Record<string, unknown>, context: ToolCallbackContext) => unknown | Promise<unknown>;
 }
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {
@@ -222,7 +235,6 @@ export interface PermissionStatus {
 }
 export interface ClientOptions {
     minimumRoutingVersion?: number;
-    tools?: AppTool[];
     baseURL?: string;
     connection: ConnectionKeys;
     origin?: string;
@@ -244,7 +256,10 @@ export declare class BridgeJobError extends BridgeError {
 export declare class BridgeClient {
     private options;
     private transport;
-    private toolHandlers;
+    private executions;
+    private sessions;
+    private activeCalls;
+    private callbackCount;
     private toolsBusy;
     private toolsTimer?;
     private lifetime;
@@ -284,14 +299,12 @@ export declare class BridgeClient {
     private static launchPairing;
     private request;
     get connected(): boolean;
-    registerTools(tools: AppTool[]): Promise<void>;
     permissions(): Promise<PermissionStatus>;
     permissionRequest(id: string): Promise<{
         id: string;
         status: string;
     }>;
     requestPermissions(request: {
-        tools?: string[];
         workspace?: boolean;
     }, options?: {
         wait?: boolean;
@@ -300,7 +313,13 @@ export declare class BridgeClient {
         id: string;
         status: string;
     }>;
+    private pollTools;
+    private release;
+    private observe;
+    private install;
+    private settleSubmission;
     private drainTools;
+    private dispatchTool;
     registerGroups(groups: ActionGroups): Promise<{
         groups: ActionGroup[];
     }>;
@@ -311,6 +330,8 @@ export declare class BridgeClient {
     run(input: RunOptions | string, signal?: AbortSignal): Promise<Job>;
     openSession(options: SessionOptions): Promise<Conversation>;
     sendSession(id: string, input: MessageOptions): Promise<Job>;
+    attachSession(id: string, options: SessionOptions): Promise<void>;
+    private releaseSession;
     getSession(id: string): Promise<Conversation>;
     closeSession(id: string): Promise<Conversation>;
     capabilities(): Promise<Capabilities>;
@@ -348,6 +369,7 @@ export declare class BridgeSession {
     private closed;
     private submitting;
     private uncertainKey?;
+    private releaseHandlers;
     constructor(client: BridgeClient, options: SessionOptions);
     get id(): string | undefined;
     send(input: MessageOptions | string): Promise<Job>;

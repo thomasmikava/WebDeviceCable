@@ -10,7 +10,7 @@ export class BridgeError extends Error {
         this.code = code;
         this.status = status;
         this.name = 'BridgeError';
-        this.category = details.category ?? (code === 'verification_failed' ? 'security' : status === 400 ? 'validation' : status === 401 ? 'authentication' : status === 403 ? 'permission' : status === 409 ? 'conflict' : status === 410 ? 'disconnected' : status === 429 ? 'rate_limit' : 'internal');
+        this.category = details.category ?? (code === 'verification_failed' ? 'security' : status === 400 || status === 413 ? 'validation' : status === 401 ? 'authentication' : status === 403 ? 'permission' : status === 409 ? 'conflict' : status === 410 ? 'disconnected' : status === 429 ? 'rate_limit' : 'internal');
         this.retryable = details.retryable ?? false;
         this.raw = details.raw;
     }

@@ -1,6 +1,6 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
 import { BridgeClient, BridgeError } from './index.js';
-import type { ActionGroups, AppTool, BridgeTransport } from './index.js';
+import type { ActionGroups, BridgeTransport } from './index.js';
 import { nonce } from './secure.js';
 export { BridgeError, BridgeJobError } from './index.js';
 export type * from './index.js';
@@ -12,7 +12,6 @@ export interface RelayOptions {
   origin: string;
   minimumRoutingVersion?: number;
   groups?: ActionGroups;
-  tools?: AppTool[];
   /** Recheck project authorization before every operation, including heartbeats/tools. */
   authorize?: () => Promise<void>;
 }
@@ -78,10 +77,16 @@ export class RelayClient extends BridgeClient {
     const base = endpoint(relay.baseURL);
     const identity = {deviceId:'',publicKey:'',endpoint:base};
     if (!/^[a-f0-9]{64}$/.test(relay.connectionId) || !relay.account.appUser) throw new Error('A paired account connection is required.');
+    let checked=false;
     const transport: BridgeTransport = {
-      reset() {},
+      reset() {checked=false;},
       async fetch(path, init = {}, lease = '') {
         await relay.authorize?.();
+        if(!checked){
+          let capability:{scopedToolsVersion?:number};
+          try{capability=await relayRequest(relay,'/relay/v1/capabilities');}catch(error){if(error instanceof BridgeError&&error.status===404)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.0 or later.',409);throw error;}
+          if(capability.scopedToolsVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.0 or later.',409);checked=true;
+        }
         const response = await fetch(base+'/relay/v1/connections/'+relay.connectionId+'/request', {
           method:'POST', redirect:'error', signal:init.signal ?? AbortSignal.timeout(45000),
           headers:{'Content-Type':'application/json',Authorization:'Bearer '+relay.apiKey,'X-WDC-Account':relay.account.appUser},
@@ -100,7 +105,7 @@ export class RelayClient extends BridgeClient {
       },
       async close() {},
     };
-    super({minimumRoutingVersion:relay.minimumRoutingVersion,origin:relay.origin,account:relay.account,groups:relay.groups ?? [],tools:relay.tools,
+    super({minimumRoutingVersion:relay.minimumRoutingVersion,origin:relay.origin,account:relay.account,groups:relay.groups ?? [],
       connection:{pairingId:relay.connectionId,identity,privateKey:{} as CryptoKey,publicKey:''}},transport);
   }
   async status(): Promise<RelayStatus> {

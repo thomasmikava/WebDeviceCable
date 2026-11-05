@@ -144,6 +144,9 @@ func Open(dir string) (*App, error) {
 		a.state.Conversations = map[string]*Conversation{}
 	}
 	a.closeConversations(&a.state, "", "runner_restarted", a.now())
+	for _, c := range a.state.Conversations {
+		c.Tools = nil
+	}
 	// No automatic replay after a crash: every outstanding request lost its originating tab lease.
 	for _, j := range a.state.Jobs {
 		if !terminal(j.Status) {
@@ -211,7 +214,7 @@ func (a *App) Close() error {
 	return a.lock.Close()
 }
 func (a *App) save(s *State) error {
-	b, e := json.Marshal(s)
+	b, e := jsonData(s)
 	if e != nil {
 		return e
 	}
@@ -223,13 +226,23 @@ func (a *App) save(s *State) error {
 
 // Transactions publish only after persistence succeeds. Call with mu held.
 func (a *App) update(fn func(*State) error) error {
-	b, _ := json.Marshal(a.state)
+	b, _ := jsonData(a.state)
 	var next State
 	if e := json.Unmarshal(b, &next); e != nil {
 		return e
 	}
 	if e := fn(&next); e != nil {
 		return e
+	}
+	for _, c := range next.Conversations {
+		if c.Status != "open" {
+			c.Tools = nil
+		}
+	}
+	for _, j := range next.Jobs {
+		if terminal(j.Status) {
+			j.Request.Tools = nil
+		}
 	}
 	// Bound retained history as output limits grow; replay receipts remain durable.
 	total := 0
@@ -250,7 +263,7 @@ func (a *App) update(fn func(*State) error) error {
 		total -= len(j.Output) + len(j.JSON)
 		next.Jobs = append(next.Jobs[:oldest], next.Jobs[oldest+1:]...)
 	}
-	after, e := json.Marshal(next)
+	after, e := jsonData(next)
 	if e != nil {
 		return e
 	}

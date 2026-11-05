@@ -8,6 +8,7 @@ export type { ConnectionKeys, RunnerIdentity, Failure, ErrorCategory } from './s
 export type Provider = 'codex' | 'claude' | (string & {});
 export type JobStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'cancelled' | 'timed_out' | 'blocked' | 'interrupted' | 'failed';
 export interface JobRequest {
+  tools?: AppTool[];
   idempotencyKey: string;
   kind: 'connection-test' | 'text' | 'image-generate' | 'image-edit' | 'command' | 'action';
   provider?: Provider;
@@ -24,7 +25,7 @@ export interface JobRequest {
 export interface Job {
   id: string; pairingId: string; status: JobStatus; code?: string; detail?: string;
   output?: string; actualProvider?: Provider; actualModel?: string; billing: 'none' | 'native_subscription' | 'program_defined';
-  revision: number; request: JobRequest; createdAt: string; finishedAt?: string;
+  revision: number; request: Omit<JobRequest,'tools'> & {toolSetHash?:string}; createdAt: string; finishedAt?: string;
   actionTitle?: string; exitCode?: number; outputTruncated?: boolean;
   execution?: ExecutionMetadata; error?: Failure; turn?: number;
  json?: unknown; artifacts?: Artifact[]; usage?: TokenUsage; inputNames?: string[];
@@ -46,7 +47,7 @@ export interface Capability {
 }
 export interface ActionArgument { name: string; title?: string; type?: string; default?: string; rejectNull?: boolean; choices?: { title?: string; value: string }[] }
 export interface CommandAction { id: string; title?: string; arguments: ActionArgument[] | null; timeout: number; available: boolean; sessions: boolean }
-export interface Capabilities {routingVersion?: number; routingConfigured?: boolean; appToolPermissions?:'application';fileTransfer:boolean;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
+export interface Capabilities {scopedToolsVersion?:number; limits?:Record<string,number>;routingVersion?: number; routingConfigured?: boolean; appToolPermissions?:'application';fileTransfer:boolean;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
 const done = (job: Job) => ['completed', 'cancelled', 'timed_out', 'blocked', 'interrupted', 'failed'].includes(job.status);
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function json<T>(response: Response): Promise<T> {
@@ -59,7 +60,7 @@ async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
   return body as T;
 }
-export interface ExecutionMetadata { programId?: string; integration?: 'codex' | 'claude' | 'custom'; kind: 'command' | 'native' | 'custom' | 'connection-test'; name?: string; version?: string; versionSource?: 'configured' | 'native' | 'program'; provider?: Provider; model?: string; reasoning?: string }
+export interface ExecutionMetadata { toolSetHash?:string; programId?: string; integration?: 'codex' | 'claude' | 'custom'; kind: 'command' | 'native' | 'custom' | 'connection-test'; name?: string; version?: string; versionSource?: 'configured' | 'native' | 'program'; provider?: Provider; model?: string; reasoning?: string }
 export interface ActionGroup { id: string; name: string; kind?: 'ai' | 'command'; parentId?: string;
   /** Image stages require a native image-capable program. */
   operation?: 'text' | 'image';
@@ -70,15 +71,16 @@ export interface ActionGroup { id: string; name: string; kind?: 'ai' | 'command'
 }
 export interface GroupDefinition extends ActionGroup { children?: GroupDefinition[] }
 export type ActionGroups = GroupDefinition[] | Record<string, string>;
-export interface Conversation { id: string; group?: string; status: 'open' | 'closed'; code?: string; lastJobId?: string; turns: number; createdAt: string; updatedAt: string }
-export interface SessionOptions { mode?: "restricted" | "app-tools" | "workspace"; group?: string; provider?: Provider; action?: string; id?: string }
+export interface Conversation { toolSetHash:string; id: string; group?: string; status: 'open' | 'closed'; code?: string; lastJobId?: string; turns: number; createdAt: string; updatedAt: string }
+export interface SessionOptions { tools?: AppTool[]; mode?: "restricted" | "app-tools" | "workspace"; group?: string; provider?: Provider; action?: string; id?: string }
 export interface MessageOptions { outputSchema?: Record<string,unknown>; inputs?:string[]; prompt?: string; arguments?: Record<string, string>; timeoutSeconds?: number; idempotencyKey?: string }
 export type RunOptions = Omit<JobRequest, 'idempotencyKey' | 'kind'> & { kind?: JobRequest['kind']; idempotencyKey?: string };
 export interface AppToolDefinition {id:string;title:string;description:string;inputSchema:Record<string,unknown>;readOnly?:boolean}
-export interface AppTool extends AppToolDefinition {execute:(args:Record<string,unknown>,context:{idempotencyKey:string;signal:AbortSignal})=>unknown|Promise<unknown>}
+export interface ToolCallbackContext {idempotencyKey:string;jobId:string;conversationId?:string;requestIdempotencyKey:string;toolSetHash:string;signal:AbortSignal}
+export interface AppTool extends AppToolDefinition {execute:(args:Record<string,unknown>,context:ToolCallbackContext)=>unknown|Promise<unknown>}
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {tools:Record<string,AppToolDefinition&{hash:string}>;grants:Record<string,{hash:string;automatic:boolean}>;folders:{id:string;name:string;write:boolean;automatic:boolean}[]}
-export interface ClientOptions { minimumRoutingVersion?: number; tools?: AppTool[]; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
+export interface ClientOptions { minimumRoutingVersion?: number; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
 export interface BridgeTransport {
   reset(): void;
   fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
@@ -108,9 +110,53 @@ function unknownSubmission(error: unknown, key: string): never {
   if (error instanceof BridgeError && error.status === 0) error.idempotencyKey = key;
   throw error;
 }
+interface ToolCall {id:string;name:string;arguments:Record<string,unknown>;jobId:string;conversationId?:string;requestIdempotencyKey:string;toolSetHash:string}
+interface ToolExecution {tools:Map<string,AppTool>;fingerprint:string;controller:AbortController;seen:Set<string>;submissions:number;uncertain:boolean;conversationId?:string;jobId?:string;hash?:string}
+const byteLength=(value:string)=>new TextEncoder().encode(value).length;
+const validation=(code:string,message:string)=>new BridgeError(code,message,400,{category:'validation'});
+function definitions(tools:AppTool[]):AppToolDefinition[]{return tools.map(({execute,...tool})=>tool);}
+function captureTools(tools:AppTool[]|undefined,mode?:string):AppTool[]{
+  if(!tools)return [];
+  if(!Array.isArray(tools)||tools.length>32)throw validation('invalid_tools','At most 32 app tools are supported.');
+  if(tools.length&&mode&&mode!=='app-tools'&&mode!=='workspace')throw validation('invalid_mode','Tools require app-tools or workspace mode.');
+  const seen=new Set<string>();
+  try{return tools.map(tool=>{
+    if(!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(tool.id)||tool.id.startsWith('wdc_')||seen.has(tool.id)||typeof tool.execute!=='function'||!tool.title||byteLength(tool.title)>100||byteLength(tool.description)>2000)throw validation('invalid_tools','Invalid or duplicate tool definition.');
+    seen.add(tool.id);
+    const copy=JSON.parse(JSON.stringify({id:tool.id,title:tool.title,description:tool.description,inputSchema:tool.inputSchema,readOnly:tool.readOnly??false})) as AppToolDefinition;
+    const schemaJSON=JSON.stringify(copy.inputSchema).replaceAll('\u2028','\\u2028').replaceAll('\u2029','\\u2029');
+    if(byteLength(schemaJSON)>8192)throw validation('invalid_tools','Input schema exceeds 8 KiB.');
+    validateToolSchema(copy.inputSchema,0);return {...copy,execute:tool.execute};
+  });}catch(error){if(error instanceof BridgeError)throw error;throw validation('invalid_tools','Tools must contain serializable definitions.');}
+}
+function validateToolSchema(schema:Record<string,unknown>,depth:number):void{
+  const invalid=()=>{throw validation('invalid_tools','Input schema must use the supported 8 KiB / 12-level JSON Schema subset.');};
+  if(!schema||typeof schema!=='object'||Array.isArray(schema)||depth>12||Object.keys(schema).some(key=>!['type','properties','required','additionalProperties','items','enum','description','title'].includes(key)))invalid();
+  if(depth===0&&schema.type!=='object')invalid();
+  for(const key of ['title','description'])if(key in schema&&typeof schema[key]!=='string')invalid();
+  if('enum'in schema&&(!Array.isArray(schema.enum)||!schema.enum.length||schema.enum.length>64))invalid();
+  if(schema.type==='object'){
+    const properties=schema.properties as Record<string,Record<string,unknown>>;
+    if(!properties||typeof properties!=='object'||Array.isArray(properties)||Object.keys(properties).length>64||schema.additionalProperties!==false||!Array.isArray(schema.required)||schema.required.length!==Object.keys(properties).length||new Set(schema.required).size!==schema.required.length||schema.required.some(key=>typeof key!=='string'||!(key in properties)))invalid();
+    for(const child of Object.values(properties))validateToolSchema(child,depth+1);
+  }else if(schema.type==='array'){validateToolSchema(schema.items as Record<string,unknown>,depth+1);}
+  else if(!['string','number','integer','boolean','null'].includes(schema.type as string))invalid();
+}
+function serialize(value:unknown):string{try{return JSON.stringify(value);}catch{throw validation('invalid_request','Request fields must be serializable JSON.');}}
+function creationBody(value:Record<string,unknown>,admission=false):string{
+  const owner=(admission?value.request:value) as Record<string,unknown>;
+  const toolJSON=JSON.stringify(owner.tools??[]);
+  if(byteLength(toolJSON)>1048576)throw validation('tool_set_too_large','Tool definitions exceed 1 MiB.');
+  const {tools:_tools,...ordinary}=owner;
+  if(byteLength(serialize(admission?{...value,request:ordinary}:ordinary))>40960)throw validation('request_too_large','Non-tool request fields exceed 40 KiB.');
+  const body=serialize(value);if(byteLength(body)>1088*1024)throw validation('request_too_large','Execution creation exceeds 1,088 KiB.');return body;
+}
 export class BridgeClient {
   private transport: BridgeTransport;
- private toolHandlers=new Map<string,AppTool>();
+ private executions=new Map<string,ToolExecution>();
+ private sessions=new Map<string,{tools:AppTool[];hash:string}>();
+ private activeCalls=new Set<string>();
+ private callbackCount=0;
  private toolsBusy=false;
  private toolsTimer?:ReturnType<typeof setInterval>;
  private lifetime=new AbortController();
@@ -203,55 +249,130 @@ export class BridgeClient {
     catch (error) { this.transport.reset(); if (networkError(error)) throw new BridgeError('connection_failed', 'Cannot reach the local runner. Check that WebDeviceCable is running.', 0, {category:'transport',retryable:true}); throw error; }
   }
   get connected(): boolean { return !this.closed && Date.now() < this.leaseExpiresAt; }
-  async registerTools(tools:AppTool[]):Promise<void> {
-    const definitions=tools.map(({execute,...definition})=>definition);
-    await this.request('/v2/tools',{method:'POST',body:JSON.stringify({tools:definitions})}).then(json);
-    this.toolHandlers=new Map(tools.map(tool=>[tool.id,tool]));
-  }
   permissions():Promise<PermissionStatus>{return this.request('/v2/permissions').then(json<PermissionStatus>);}
   permissionRequest(id:string):Promise<{id:string;status:string}>{return this.request(`/v2/permissions/${encodeURIComponent(id)}`).then(json<{id:string;status:string}>);}
-  async requestPermissions(request:{tools?:string[];workspace?:boolean},options:{wait?:boolean;signal?:AbortSignal}={}):Promise<{id:string;status:string}>{
+  async requestPermissions(request:{workspace?:boolean},options:{wait?:boolean;signal?:AbortSignal}={}):Promise<{id:string;status:string}>{
     await this.connect();let result=await this.request('/v2/permissions',{method:'POST',body:JSON.stringify(request)}).then(json<{id:string;status:string}>);
     if(options.wait===false)return result;
     while(result.status==='pending'&&!this.closed){if(options.signal?.aborted)throw options.signal.reason??new DOMException('Aborted','AbortError');await sleep(650);result=await this.permissionRequest(result.id);}
     if(result.status!=='completed')throw new BridgeError('permission_denied','The requested access was not approved in WebDeviceCable.',403,{category:'permission'});
     return result;
   }
+  private pollTools():void {
+    if(this.toolsTimer || this.closed || !this.executions.size)return;
+    this.toolsTimer=setInterval(()=>{void this.drainTools();},250);
+    void this.drainTools();
+  }
+  private release(key:string,owner?:ToolExecution):void {
+    const entry=this.executions.get(key);
+    if(owner&&entry!==owner)return;
+    entry?.controller.abort();this.executions.delete(key);
+    if(!this.executions.size){clearInterval(this.toolsTimer);this.toolsTimer=undefined;}
+  }
+  private observe(job:Job):Job {
+    if(!job.request)return job;
+    const entry=this.executions.get(job.request.idempotencyKey);
+    if(entry){
+      if(entry.jobId && entry.jobId!==job.id || entry.hash && job.request.toolSetHash && entry.hash!==job.request.toolSetHash)throw new BridgeError('execution_mismatch','WDC execution identity changed.',0,{category:'security'});
+      entry.jobId=job.id;entry.hash=job.request.toolSetHash ?? entry.hash;
+      if(done(job))this.release(job.request.idempotencyKey);
+      if(done(job)&&job.status!=="completed"&&job.request.conversationId)this.sessions.delete(job.request.conversationId);
+    }
+    return job;
+  }
+  private install(key:string,tools:AppTool[],fingerprint:string,conversationId?:string,hash?:string):ToolExecution|undefined {
+    const previous=this.executions.get(key);
+    if(previous){if(previous.fingerprint!==fingerprint||previous.conversationId!==conversationId||hash&&previous.hash&&previous.hash!==hash)throw new BridgeError('idempotency_conflict','This key has different execution tools or input.',409);previous.submissions++;return previous;}
+    if(!tools.length)return;
+    if(this.executions.size>=256)throw new BridgeError('execution_limit','Resolve pending tool executions before submitting more.',429);
+    const entry:ToolExecution={tools:new Map(tools.map(tool=>[tool.id,tool])),fingerprint,conversationId,hash,seen:new Set(),submissions:1,uncertain:false,controller:new AbortController()};
+    this.executions.set(key,entry);this.pollTools();return entry;
+  }
+  private settleSubmission(key:string,entry:ToolExecution|undefined,uncertain:boolean):void {
+    if(!entry)return;
+    entry.submissions--;entry.uncertain ||=uncertain;
+    // Matching retries share a snapshot. A rejected attempt cannot discard it
+    // while another attempt is pending, accepted, or has an unknown outcome.
+    if(!entry.submissions&&!entry.jobId&&!entry.uncertain)this.release(key,entry);
+  }
   private async drainTools():Promise<void>{
-    if(this.closed||this.toolsBusy||!this.toolHandlers.size)return;this.toolsBusy=true;
+    if(this.closed||this.toolsBusy||!this.executions.size)return;this.toolsBusy=true;
     try {
-      const {calls}=await this.request('/v2/tool-calls').then(json<{calls:{id:string;name:string;arguments:Record<string,unknown>}[]}>);
-      for(const call of calls){const tool=this.toolHandlers.get(call.name);if(!tool||this.closed)continue;
-        // Claim once before invoking. An ambiguous claim is never retried or executed.
-        try{await this.request(`/v2/tool-calls/${call.id}/claim`,{method:'POST'}).then(json);}catch{continue;}
-        let result:unknown;try{result=await tool.execute(call.arguments,{idempotencyKey:call.id,signal:this.lifetime.signal});if(result===undefined)result=null;}catch{result={error:'The application could not complete this tool call.'};}
-        try {if(new TextEncoder().encode(JSON.stringify(result)).length>32768)result={error:'Tool result exceeds the 32 KiB limit. Return a summary or file reference.'};} catch {result={error:'Tool result must be serializable JSON.'};}
- if(!this.closed)await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result})}).then(json).catch(()=>{});
+      const result=await this.request('/v2/tool-calls/poll',{method:'POST',body:JSON.stringify({requests:[...this.executions.keys()]})}).then(json<{calls:ToolCall[];completed?:{jobId:string;requestIdempotencyKey:string;toolSetHash:string}[]}>);
+      for(const item of result.completed??[]){const entry=this.executions.get(item.requestIdempotencyKey);if(entry&&(!entry.jobId||entry.jobId===item.jobId)&&(!entry.hash||entry.hash===item.toolSetHash))this.release(item.requestIdempotencyKey);}
+      for(const call of result.calls){
+        if(this.callbackCount>=4)break;
+        const entry=this.executions.get(call.requestIdempotencyKey), tool=entry?.tools.get(call.name);
+        if(!entry||!tool||this.closed||this.activeCalls.has(call.id)||entry.seen.has(call.id)||!call.jobId||!call.toolSetHash||entry.conversationId!==call.conversationId||entry.jobId&&entry.jobId!==call.jobId||entry.hash&&entry.hash!==call.toolSetHash)continue;
+        entry.jobId=call.jobId;entry.hash=call.toolSetHash;
+        entry.seen.add(call.id);this.activeCalls.add(call.id);this.callbackCount++;
+        void this.dispatchTool(call,entry,tool).finally(()=>{this.activeCalls.delete(call.id);this.callbackCount--;});
       }
-    }catch{/* The lease and native turn determine cancellation; tool callbacks are never replayed. */}finally{this.toolsBusy=false;}
+    }catch{/* Ambiguous claims and callbacks are never replayed. */}finally{this.toolsBusy=false;}
+  }
+  private async dispatchTool(call:ToolCall,entry:ToolExecution,tool:AppTool):Promise<void>{
+    try {
+      // A claim is attempted once. Only its acknowledged owner executes the handler.
+      await this.request(`/v2/tool-calls/${call.id}/claim`,{method:'POST'}).then(json);
+      if(this.closed||entry.controller.signal.aborted)return;
+      let result:unknown;
+      try{result=await tool.execute(call.arguments,{idempotencyKey:call.id,jobId:call.jobId,conversationId:call.conversationId,requestIdempotencyKey:call.requestIdempotencyKey,toolSetHash:call.toolSetHash,signal:entry.controller.signal});if(result===undefined)result=null;}
+      catch{result={error:'The application could not complete this tool call.'};}
+      try{if(byteLength(JSON.stringify(result))>32768)result={error:'Tool result exceeds the 32 KiB limit. Return a summary or file reference.'};}catch{result={error:'Tool result must be serializable JSON.'};}
+      if(!this.closed&&!entry.controller.signal.aborted)await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result})}).then(json);
+    }catch{/* No automatic replay of uncertain tool operations. */}
   }
   registerGroups(groups: ActionGroups): Promise<{groups: ActionGroup[]}> { return this.request('/v2/groups',{method:'POST',body:JSON.stringify({groups:groupsArray(groups)})}).then(json<{groups: ActionGroup[]}>); }
   groups(): Promise<{groups: ActionGroup[]}> { return this.request('/v2/groups').then(json<{groups: ActionGroup[]}>); }
   session(options: SessionOptions = {}): BridgeSession { return new BridgeSession(this, options); }
   async run(input: RunOptions | string, signal?: AbortSignal): Promise<Job> {
     if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
-    await this.connect(); const request = typeof input === 'string' ? {prompt:input} : input;
+    const proposed=typeof input === 'string' ? {prompt:input} : input;
+    const request={...proposed,tools:captureTools(proposed.tools,proposed.mode)};
+    await this.connect();
     const job = await this.submit({...request, kind:request.kind ?? (request.action ? 'command' : request.provider ? 'text' : 'action'),idempotencyKey:request.idempotencyKey ?? crypto.randomUUID()});
     let result = job; for await (const update of this.stream(job.id,signal)) result = update;
     if (result.status !== 'completed') throw new BridgeJobError(result); return result;
   }
-  async openSession(options: SessionOptions): Promise<Conversation> { await this.connect(); const {id: _id, ...selection} = options; return this.request('/v2/conversations',{method:'POST',body:JSON.stringify(selection)}).then(json<Conversation>); }
-  async sendSession(id: string, input: MessageOptions): Promise<Job> {
-    const request = {...input,idempotencyKey:input.idempotencyKey ?? crypto.randomUUID()};
-    const body = JSON.stringify(request);
-    try { return await this.request(`/v2/conversations/${encodeURIComponent(id)}/turns`,{method:'POST',body}).then(json<Job>); }
-    catch (error) { return unknownSubmission(error, request.idempotencyKey); }
+  async openSession(options: SessionOptions): Promise<Conversation> {
+    const tools=captureTools(options.tools,options.mode);const {id:_id,tools:_tools,...selection}=options;
+    const body=creationBody({...selection,tools:definitions(tools)});await this.connect();
+    const generation=this.generation;
+    const conversation=await this.request('/v2/conversations',{method:'POST',body}).then(json<Conversation>);
+    if(generation!==this.generation||!this.connected)throw new BridgeError('lease_closed','The tab connection ended while this session was opening.',410);
+    this.sessions.set(conversation.id,{tools,hash:conversation.toolSetHash});return conversation;
   }
-  getSession(id: string): Promise<Conversation> { return this.request(`/v2/conversations/${encodeURIComponent(id)}`).then(json<Conversation>); }
-  closeSession(id: string): Promise<Conversation> { return this.request(`/v2/conversations/${encodeURIComponent(id)}`,{method:'DELETE'}).then(json<Conversation>); }
+  async sendSession(id: string, input: MessageOptions): Promise<Job> {
+    if("tools" in input)throw validation("invalid_tools","Session messages cannot replace tools.");
+    const request = {...input,idempotencyKey:input.idempotencyKey ?? crypto.randomUUID()};
+    const body = serialize(request);
+    if(byteLength(body)>40960)throw validation('request_too_large','Message exceeds 40 KiB.');
+    const scope=this.sessions.get(id);
+    const installed=this.install(request.idempotencyKey,scope?.tools??[],body,id,scope?.hash);
+    let uncertain=false;
+    try { return this.observe(await this.request(`/v2/conversations/${encodeURIComponent(id)}/turns`,{method:'POST',body}).then(json<Job>)); }
+    catch (error) { uncertain=!(error instanceof BridgeError&&error.status>0&&!networkError(error));return unknownSubmission(error, request.idempotencyKey); }
+    finally{this.settleSubmission(request.idempotencyKey,installed,uncertain);}
+  }
+  async attachSession(id:string,options:SessionOptions):Promise<void>{
+    if(this.sessions.has(id))return;
+    if(options.tools?.length)throw validation('invalid_session','Tool-enabled sessions cannot attach new handlers. Keep the original session or create a history-backed replacement.');
+    const conversation=await this.getSession(id);if(conversation.status!=='open')throw new BridgeError('session_closed','This session has ended.',410);
+  }
+  private releaseSession(id:string):void{
+    for(const [key,entry]of this.executions)if(entry.conversationId===id)this.release(key);
+    this.sessions.delete(id);
+  }
+  async getSession(id: string): Promise<Conversation> {
+    const conversation=await this.request(`/v2/conversations/${encodeURIComponent(id)}`).then(json<Conversation>);
+    if(conversation.status!=="open")this.releaseSession(id);return conversation;
+  }
+  async closeSession(id: string): Promise<Conversation> {
+    this.releaseSession(id);return this.request(`/v2/conversations/${encodeURIComponent(id)}`,{method:'DELETE'}).then(json<Conversation>);
+  }
   capabilities(): Promise<Capabilities> { return this.request('/v2/capabilities').then(json<Capabilities>); }
   async preflight(request: Omit<JobRequest,'idempotencyKey'>, features: string[] = []):Promise<AdmissionStatus>{
-    await this.connect();return this.request('/v2/admission',{method:'POST',body:JSON.stringify({request:{...request,idempotencyKey:'preflight-check'},features})}).then(json<AdmissionStatus>);
+    const tools=captureTools(request.tools,request.mode);const body=creationBody({request:{...request,tools:definitions(tools),idempotencyKey:'preflight-check'},features},true);await this.connect();return this.request('/v2/admission',{method:'POST',body}).then(json<AdmissionStatus>);
   }
   /** File bytes stay unchanged and scoped to this requesting tab. */
   async upload(file: Blob, name = 'input'): Promise<UploadedInput> {
@@ -281,14 +402,15 @@ export class BridgeClient {
     if (!this.closed) this.stop();
     const generation = ++this.generation;
     this.connecting = (async () => { try {
-      if (this.options.account || this.options.minimumRoutingVersion) {
+      {
         const capabilities = await this.capabilities();
+        if(capabilities.scopedToolsVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to 0.2.0 or later before using this SDK.',409);
         const {pairing} = capabilities;
         if (this.options.minimumRoutingVersion && (capabilities.routingVersion ?? 1) < this.options.minimumRoutingVersion)
           throw new BridgeError('desktop_update_required','Update WebDeviceCable before configuring workflow models and reasoning.',409);
         if (this.options.account && (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId)) throw new BridgeError('identity_mismatch','This connection belongs to another app or account. Disconnect and pair this account.',403);
       }
-      await this.openLease(generation); if (this.options.groups) await this.registerGroups(this.options.groups); if(this.options.tools)await this.registerTools(this.options.tools); } catch (error) { await this.close().catch(() => {}); throw error; } })();
+      await this.openLease(generation); if (this.options.groups) await this.registerGroups(this.options.groups); } catch (error) { await this.close().catch(() => {}); throw error; } })();
     try { await this.connecting; } finally { this.connecting = undefined; }
   }
   private async openLease(generation: number): Promise<void> {
@@ -297,7 +419,7 @@ export class BridgeClient {
     this.lease = result.lease; this.closed = false; this.lifetime=new AbortController();
     this.leaseExpiresAt = result.expiresAt ? Date.parse(result.expiresAt) : Date.now() + 12000;
     this.timer = setInterval(() => { void this.heartbeat(); }, 3000);
- this.toolsTimer=setInterval(()=>{void this.drainTools();},1000);
+
     if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
   }
   private async heartbeat(): Promise<void> {
@@ -309,14 +431,16 @@ export class BridgeClient {
       if (generation !== this.generation || this.closed) return;
       if (!response.ok) { this.stop(); }
       else {
-        const result = await json<{ expiresAt: string }>(response);
+        const result = await json<{ expiresAt: string;closedSessions?:string[] }>(response);
         this.leaseExpiresAt = Date.parse(result.expiresAt);
+        for(const id of result.closedSessions??[])this.releaseSession(id);
       }
     } catch { if (generation === this.generation && !this.closed && Date.now() >= this.leaseExpiresAt) this.stop(); }
     finally { this.heartbeatPending = false; }
   }
   private stop(): void {
-    clearInterval(this.timer);clearInterval(this.toolsTimer); this.closed = true; this.lifetime.abort();
+    clearInterval(this.timer);clearInterval(this.toolsTimer);this.toolsTimer=undefined; this.closed = true; this.lifetime.abort();
+    for(const key of this.executions.keys())this.release(key);this.sessions.clear();
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
     for (const controller of this.watchers) controller.abort();
     this.watchers.clear();
@@ -329,12 +453,16 @@ export class BridgeClient {
   }
   async submit(request: JobRequest): Promise<Job> {
     if (this.closed) throw new BridgeError('lease_required', 'Call connect() for this requesting tab first.', 410);
-    const body = JSON.stringify(request);
-    try { return await json(await this.request('/v2/jobs', { method: 'POST', body })); } catch (error) { return unknownSubmission(error, request.idempotencyKey); }
+    const tools=captureTools(request.tools,request.mode);const body=creationBody({...request,tools:definitions(tools)});
+    const installed=this.install(request.idempotencyKey,tools,body);
+    let uncertain=false;
+    try { return this.observe(await json<Job>(await this.request('/v2/jobs', { method: 'POST', body }))); }
+    catch (error) { uncertain=!(error instanceof BridgeError&&error.status>0&&!networkError(error));return unknownSubmission(error, request.idempotencyKey); }
+    finally{this.settleSubmission(request.idempotencyKey,installed,uncertain);}
   }
-  async lookup(idempotencyKey: string): Promise<Job | null> { return (await this.request('/v2/jobs/lookup',{method:'POST',body:JSON.stringify({idempotencyKey})}).then(json<{job: Job | null}>)).job; }
-  get(id: string): Promise<Job> { return this.request(`/v2/jobs/${encodeURIComponent(id)}`).then(json<Job>); }
-  cancel(id: string): Promise<Job> { return this.request(`/v2/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }).then(json<Job>); }
+  async lookup(idempotencyKey: string): Promise<Job | null> { const job=(await this.request('/v2/jobs/lookup',{method:'POST',body:JSON.stringify({idempotencyKey})}).then(json<{job: Job | null}>)).job;return job?this.observe(job):null; }
+  get(id: string): Promise<Job> { return this.request(`/v2/jobs/${encodeURIComponent(id)}`).then(json<Job>).then(job=>this.observe(job)); }
+  cancel(id: string): Promise<Job> { return this.request(`/v2/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }).then(json<Job>).then(job=>this.observe(job)); }
   /** Full job snapshots, reconnectable without replaying inference or app actions. */
   async *stream(id: string, signal?: AbortSignal): AsyncGenerator<Job> {
     const controller = new AbortController(); this.watchers.add(controller);
@@ -361,7 +489,7 @@ export class BridgeClient {
             while ((boundary = buffer.indexOf('\n\n')) >= 0) {
               const event = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
               const data = event.split('\n').find(line => line.startsWith('data: ')); if (!data) continue;
-              const job = JSON.parse(data.slice(6)) as Job;
+              const job = this.observe(JSON.parse(data.slice(6)) as Job);
               if (job.revision > revision) { revision = job.revision; yield job; }
               if (done(job)) return;
             }
@@ -385,8 +513,10 @@ export class BridgeSession {
   private closed = false;
   private submitting = false;
   private uncertainKey?: string;
+  private releaseHandlers=()=>{this.closed=true;this.options.tools=undefined;};
   constructor(private client: BridgeClient, private options: SessionOptions) {
-    if (options.id && (options.group || options.provider || options.action)) throw new BridgeError('invalid_session', 'A resumed session takes an id without a new target selection.',400);
+    if (options.id && (options.group || options.provider || options.action || options.mode || options.tools !== undefined)) throw new BridgeError('invalid_session', 'A resumed session takes an id without a new target selection or tools.',400);
+    this.options={...options,tools:captureTools(options.tools,options.mode)};
     this.conversationId = options.id;
   }
   get id(): string | undefined { return this.conversationId; }
@@ -394,10 +524,12 @@ export class BridgeSession {
     if (this.closed) throw new BridgeError('session_closed', 'This session has ended. Create a new session explicitly.',410);
     if (this.submitting) throw new BridgeError('session_busy', 'Wait for the current message to finish.',409);
     const message = typeof input === 'string' ? {prompt:input} : input;
+    if('tools' in message)throw validation('invalid_tools','Session tools cannot change. Create a new session and supply saved history.');
     if (this.uncertainKey && message.idempotencyKey !== this.uncertainKey) { const error = new BridgeError('submission_unknown','Resolve the previous submission with recover(), or retry its exact input and idempotency key.',0,{category:'transport'}); error.idempotencyKey = this.uncertainKey; throw error; }
     this.submitting = true;
     try {
       if (this.conversationId && !this.client.connected) throw new BridgeError('session_closed','This tab connection ended. Create a new session explicitly.',410);
+      if(this.conversationId&&!this.opening)await this.client.attachSession(this.conversationId,this.options);
       if (!this.conversationId) {
         if (!this.opening) this.opening = this.client.openSession(this.options).then(conversation => { this.conversationId = conversation.id; });
         try { await this.opening; } finally { this.opening = undefined; }
@@ -418,7 +550,7 @@ export class BridgeSession {
   }
   async recover(): Promise<Job | null> { if (!this.uncertainKey) return this.pendingJob ? this.client.get(this.pendingJob) : null; const job = await this.client.lookup(this.uncertainKey); if (job) {this.pendingJob = done(job) ? undefined : job.id; this.uncertainKey = undefined;} return job; }
   async close(): Promise<void> {
-    if (this.closed) return; this.closed = true;
+    if (this.closed) return; this.releaseHandlers();
     if (this.opening) await this.opening.catch(() => {});
     if (this.conversationId && this.client.connected) await this.client.closeSession(this.conversationId);
   }

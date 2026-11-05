@@ -26,7 +26,7 @@ try {
  await writeFile(dir+'/relay.key',secret,{mode:0o444});
  const portProbe=createServer();await new Promise(resolve=>portProbe.listen(0,'127.0.0.1',resolve));const port=portProbe.address().port;await new Promise(resolve=>portProbe.close(resolve));
  docker('run','-d','--rm','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','1g','--cpus','1','--name',name,'-p','127.0.0.1:'+port+':8080','--mount','type=bind,source='+dir+'/relay.key,target=/run/secrets/relay_key,readonly','--mount','type=volume,source='+volume+',target=/data',
-   '-e','WDC_ADMIN_KEY_FILE=/run/secrets/relay_key','wdc-relay:local');
+   '-e','WDC_ADMIN_KEY_FILE=/run/secrets/relay_key',process.env.WDC_RELAY_IMAGE??'wdc-relay:local');
  const url='http://'+docker('port',name,'8080/tcp');
  for(let i=0;i<100;i++){try{if((await fetch(url+'/readyz')).ok)break;}catch{}await wait(50)}
  assert.equal(docker('exec',name,'id','-u'),'10001');
@@ -97,8 +97,8 @@ try {
    const schema={type:'object',properties:{ok:{type:'boolean'}},required:['ok'],additionalProperties:false};
    const structured=await backend.run({group:'ai.generation',prompt:'Return JSON with ok equal to true.',outputSchema:schema,timeoutSeconds:180});assert.deepEqual(structured.json,{ok:true});
    const session=backend.session({group:'ai.generation'});await session.run('Remember this fixture word: saffron. Reply OK.');assert.match((await session.run('What fixture word did I give you? Reply with the word.')).output,/saffron/i);await session.close();
-   let calls=0;await backend.registerTools([{id:'echo',title:'Echo',description:'Return a fixture verification value.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{calls++;return {value,marker:'relay-tool-confirmed'}}}]);
-   const tool=await backend.run({group:'ai.generation',mode:'app-tools',prompt:'Call the app echo tool once with value saffron. Report the returned marker.',timeoutSeconds:180});assert.equal(calls,1);assert.match(tool.output,/relay-tool-confirmed/);
+   let calls=0;const tools=[{id:'echo',title:'Echo',description:'Return a fixture verification value.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{calls++;return {value,marker:'relay-tool-confirmed'}}}];
+   const tool=await backend.run({group:'ai.generation',tools,mode:'app-tools',prompt:'Call the app echo tool once with value saffron. Report the returned marker.',timeoutSeconds:180});assert.equal(calls,1);assert.match(tool.output,/relay-tool-confirmed/);
    const image=await backend.run({kind:'image-generate',provider:'codex',group:'ai.images',prompt:'Generate a small simple image using the built-in image generation tool: a yellow circle on a white background.',timeoutSeconds:240});const blob=await backend.artifact(image);assert.equal(blob.type,'image/png');
    const input=await backend.upload(blob,'reference.png');const edited=await backend.run({kind:'image-edit',provider:'codex',group:'ai.images',inputs:[input.id],prompt:'Use the image generation tool to change the circle to blue and preserve the white background.',timeoutSeconds:240});assert.notEqual(edited.artifacts[0].sha256,image.artifacts[0].sha256);assert.ok((await backend.artifact(edited)).size>1000);
    console.log('Native relay parity passed: simultaneous Codex/Claude, feature-group admission, JSON, continuing session, once-only app tool, image generation and reference-image editing.');

@@ -143,33 +143,36 @@ For non-browser implementations use the [complete protocol](protocol.md), and fo
 
 ## Optional app tools and folders
 
-Register tool definitions and callbacks when constructing the client. WDC checks input schemas before dispatch. App callbacks need no per-tool WDC grant. Your app must authorize each callback, provide any needed confirmations, and deduplicate mutations using the supplied call ID. WDC validates schemas and keeps callbacks inside the originating tab/account.
+Pass tool definitions and callbacks to each session or standalone submission. Browser and relay clients use the same execution API. WDC checks input schemas before dispatch. App callbacks need no per-tool WDC grant. Your app must authorize each callback, provide any needed confirmations, and deduplicate mutations using the supplied call ID. WDC validates schemas and keeps callbacks inside the originating tab/account.
 
 ```js
-const bridge = new BridgeClient({ connection, account, tools: [{
+const bridge = new BridgeClient({ connection, account });
+const tools = [{
   id: 'tasks.create', title: 'Create task', description: 'Create a task in this account.',
   inputSchema: { type: 'object', properties: {title: {type: 'string'}},
     required: ['title'], additionalProperties: false },
   async execute({title}, {idempotencyKey, signal}) {
     return createTaskForCurrentAccount({title, idempotencyKey, signal});
   }
-}] });
+}];
 await bridge.connect();
 await bridge.requestPermissions({workspace: true});
 // Folder access is approved in WDC; existing folder grants do not ask again.
-const chat = bridge.session({group: 'ai.chat', mode: 'workspace'});
+const chat = bridge.session({group: 'ai.chat', mode: 'workspace', tools});
 for await (const job of chat.stream('Read the approved folder and create a task.')) {
   render(job.output);
 }
 ```
 
-Use `mode:'app-tools'` for app callbacks without folders. Default `restricted` exposes neither. Folder paths are chosen only in WDC; the app receives grant IDs and labels. Folder edits ask for WDC approval unless the user separately enables automatic edits. Your app owns confirmation for app actions. `readOnly:true` is an application declaration, not a substitute for backend authorization. Tool definitions are hashed; changing them ends affected native sessions. Folder grant edits/revocation end affected Workspace sessions. Start a new session explicitly after the user finishes reviewing access.
+Supplying tools infers App tools mode; supplying tools with explicit Restricted mode is rejected. Omitted tools means none. Workspace and command access remain explicit. Folder paths are chosen only in WDC; the app receives grant IDs and labels. Folder edits ask for WDC approval unless the user separately enables automatic edits. Your app owns confirmation for app actions. `readOnly:true` is an application declaration, not a substitute for backend authorization. A session captures definitions and handler references when created and opens lazily. Its later messages reuse that snapshot. To change tools, explicitly create a new session and supply your saved history or summary; WDC never recreates context silently. Simultaneous sessions/jobs may use overlapping tool IDs with different definitions and handlers. Standalone `submit`/`run` capture their own tools; `preflight` validates without installing callbacks. Constructor-level tools and `registerTools()` were removed in 0.2.0. Folder grant edits/revocation end affected Workspace sessions. Start a new session explicitly after the user finishes reviewing access.
 
 In WDC, the user opens the connection's **Folder access**, chooses **Add folder**, browses to the folder and adds it. They review read/edit access and choose **Save access**. Browsing or cancelling never grants access; newly added folders default to read-only.
 
-A callback is claimed once before it runs. Reconnects never replay it. Use the call ID as your backend idempotency key: a tab can close after a remote mutation succeeds but before its result arrives. Cancellation cannot undo an already-performed external action. Return bounded JSON (32 KiB); use your own file references for larger results. Unknown outcomes are never silently retried.
+Callbacks include `jobId`, optional `conversationId`, `requestIdempotencyKey`, `toolSetHash`, stable callback `idempotencyKey`, and an execution abort signal. The SDK routes by execution and installs handlers before submission, including callbacks arriving before its response. It polls only while tool-enabled work is pending and runs at most four callbacks concurrently per client. Terminal executions, session closure and client closure release their handlers and abort their signals. A callback is claimed once before it runs. Reconnects never replay it. Use the call ID as your backend idempotency key: a tab can close after a remote mutation succeeds but before its result arrives. Cancellation cannot undo an already-performed external action. Return bounded JSON (32 KiB); use your own file references for larger results. Unknown outcomes are never silently retried.
 
 File-enabled commands use `files:true` in the owner's config.yaml; websites cannot enable it. `upload()` and `artifact()` are unchanged. File bytes are staged unchanged, and unsupported native formats produce an explicit error. WDC does not convert documents, parse PDFs or add OCR. See [command file interface](commands.md#file-transfers).
+
+Execution creation/preflight support 32 tools, the existing 8 KiB/12-level schema subset, 1 MiB complete definitions and a 1,088 KiB logical request. Non-tool fields retain their ordinary 40 KiB budget. Encrypted envelopes allow 4 MiB. Aggregate live definitions are bounded to 8 MiB on the desktop; resource rejection occurs before consuming an inference key. Definitions are excluded from normal history/status. Reusing a request key with different tools conflicts. SDK 0.2.0 requires desktop/relay `scopedToolsVersion:1` and explains missing upgrades before submitting work.
 
 ## WebDeviceCable updates
 

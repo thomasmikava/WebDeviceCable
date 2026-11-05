@@ -50,7 +50,7 @@ func failureFor(status int, code, message string) *Failure {
 		category = "interrupted"
 	case status == 409 || code == "session_busy":
 		category = "conflict"
-	case status == 400 || status == 404 || status == 415:
+	case status == 400 || status == 404 || status == 413 || status == 415:
 		category = "validation"
 	case status == 410:
 		category = "interrupted"

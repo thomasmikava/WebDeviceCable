@@ -53,7 +53,9 @@ const launchUrl = relayConnectURL({baseURL: process.env.WDC_RELAY_URL, code: enr
 
 `relaySettingsURL({baseURL, connectionId})` reopens the paired connection's local program settings. Keep pending pairing separate from the active device until approval. `status()` distinguishes pending, declined and expired enrollment; a lost device remains paired until explicitly disconnected.
 
-Workflow groups support independent program, model and reasoning choices in WDC. Use `minimumRoutingVersion: 2` to require the updated desktop; model choices and native credentials stay local. Existing direct browser integrations remain compatible.
+Workflow groups support independent program, model and reasoning choices in WDC. Use `minimumRoutingVersion: 2` to require the updated desktop; model choices and native credentials stay local. SDK 0.2.0 also requires desktop and relay `scopedToolsVersion:1`; upgrade both transports together.
+
+Pass app tools to a continuing `session({tools})` or standalone `submit`, `run`, and `preflight`, never client construction. Sessions retain immutable definitions and handlers. New tools require an explicit new session with saved history; simultaneous executions can use different definitions for the same IDs.
 
 See [RELAY.md](./RELAY.md) for the complete pairing flow, `RelayClient` construction, groups, jobs, streaming, sessions, files, tool callbacks, provider-compatible routes and recovery. Your backend owns authorization, operation IDs and output validation. Never automatically replay an uncertain inference through another route.
 

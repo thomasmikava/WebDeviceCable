@@ -1,4 +1,8 @@
-# Current delivery checkpoint — 1 November 2026
+# Current preparation checkpoint — 5 November 2026
+
+The coordinated 0.2.0 execution-scoped tool implementation, consumer migrations, validation and local artifacts are recorded in the [release handoff](execution-scoped-tools-0.2.0.md). This candidate is unpublished; deployment and installation remain separate release actions. Pairing/receipt data and application databases were preserved.
+
+## Previous delivery checkpoint — 1 November 2026
 
 The first desktop distribution is a community test prerelease: manual updates, ad-hoc macOS app signatures, unsigned Windows executables and an independently signed checksum manifest. No personal publisher name/email, paid developer account or notarization is used.
 

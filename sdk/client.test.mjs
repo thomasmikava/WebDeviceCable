@@ -70,6 +70,7 @@ async function runner() {
     }
     assert.equal(request.publicKey, appKey); assert.equal(request.pairingId, pairingId); assert.equal(request.authorization, undefined);
     if (peer.handler) { const response = await peer.handler(context); if (response) return response; }
+    if (request.path === '/v2/capabilities')return context.json({scopedToolsVersion:1,protocolVersion:2,pairing,routingVersion:2});
     if (request.path === '/v2/lease') return context.json({ lease, expiresAt: new Date(Date.now() + 12000).toISOString() }, request.method === 'POST' ? 201 : 200);
     if (request.path === '/v2/jobs') { assert.equal(request.lease, lease); return context.json({ id: 'job', status: 'queued', revision: 1 }, 202); }
     if (request.path.endsWith('/events')) return context.sse([{ id: 'job', revision: 2, status: 'completed', output: 'Two chunks.' }]);
@@ -273,13 +274,14 @@ test('oversized Unicode tool results return a bounded error instead of stalling 
     let receiveResult;
     const result = new Promise(resolve=>{receiveResult=resolve;});
     peer.handler = context => {
-      if (context.request.path === '/v2/tools') return context.json({ok:true});
-      if (context.request.path === '/v2/tool-calls') return context.json({calls:[{id:'unicode-call',name:'read',arguments:{}}]});
+      if (context.request.path === '/v2/tool-calls/poll') return context.json({calls:[{id:'unicode-call',name:'read',arguments:{},jobId:'job',requestIdempotencyKey:'unicode-key',toolSetHash:'hash'}]});
       if (context.request.path.endsWith('/claim')) return context.json({ok:true});
       if (context.request.path.endsWith('/result')) { receiveResult(JSON.parse(context.request.body)); return context.json({ok:true}); }
     };
-    client = new BridgeClient({connection:paired.connection, origin:peer.origin, tools:[{
-      id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{}},execute:()=>({text:'🙂'.repeat(12000)}),
+    client = new BridgeClient({connection:paired.connection, origin:peer.origin});
+    await client.connect();
+    await client.submit({kind:'action',idempotencyKey:'unicode-key',tools:[{
+      id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},execute:()=>({text:'🙂'.repeat(12000)}),
     }]});
     await client.connect();
     const received = await Promise.race([result,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Tool callback stalled')),4000);})]);
@@ -351,7 +353,7 @@ test('saved account binding is verified before opening a lease or registering gr
   const peer=await runner(), restore=peer.install();
   try {
     const {connection}=await peer.pair();
-    peer.handler=context => context.request.path==='/v2/capabilities' ? context.json({pairing:{appId:'writer',appUser:'alice',origin:peer.origin,deviceId:connection.identity.deviceId}}) : undefined;
+    peer.handler=context => context.request.path==='/v2/capabilities' ? context.json({scopedToolsVersion:1,pairing:{appId:'writer',appUser:'alice',origin:peer.origin,deviceId:connection.identity.deviceId}}) : undefined;
     const wrong=new BridgeClient({connection,origin:peer.origin,account:{appId:'writer',appUser:'bob'},groups:{chat:'Chat'}});
     await assert.rejects(wrong.connect(),error=>error.code==='identity_mismatch');
     assert.equal(peer.calls.some(call=>call.request.path==='/v2/lease'),false);
@@ -402,12 +404,12 @@ test('fragment removal, replay, malformed UTF-8 and unnegotiated framing fail cl
 test('app callbacks execute only after a successful claim and are not replayed',async()=>{
  const peer=await runner(),restore=peer.install();let client,calls=0,claimed=false;
  try{({client}=await peer.connect());peer.handler=c=>{
-  if(c.request.path==='/v2/tools')return c.json({tools:{}});
-  if(c.request.path==='/v2/tool-calls')return c.json({calls:[{id:'call',name:'create',arguments:{title:'A'}}]});
+  if(c.request.path==='/v2/tool-calls/poll')return c.json({calls:[{id:'call',name:'create',arguments:{title:'A'},jobId:'job',requestIdempotencyKey:'callback-key',toolSetHash:'hash'}]});
   if(c.request.path.endsWith('/claim')){if(claimed)return c.json({error:{code:'tool_call_consumed',message:'Already claimed'}},409);claimed=true;return c.json({id:'call'});}
   if(c.request.path.endsWith('/result')){assert.deepEqual(JSON.parse(c.request.body).result,{ok:true});return c.json({ok:true});}
  };
- await client.registerTools([{id:'create',title:'Create',description:'Create task',inputSchema:{type:'object',properties:{},additionalProperties:false},execute:(args,context)=>{calls++;assert.equal(context.idempotencyKey,'call');assert.deepEqual(args,{title:'A'});return {ok:true};}}]);
+ await client.submit({kind:'action',idempotencyKey:'callback-key',tools:[{id:'create',title:'Create',description:'Create task',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},execute:(args,context)=>{calls++;assert.equal(context.idempotencyKey,'call');assert.deepEqual(args,{title:'A'});return {ok:true};}}]});
+ for(let attempt=0;attempt<100&&calls<1;attempt++)await new Promise(resolve=>setTimeout(resolve,10));
  await client.drainTools();await client.drainTools();assert.equal(calls,1);
  }finally{await client?.close().catch(()=>{});restore();}
 });
@@ -418,8 +420,8 @@ test('permission helper waits for WDC review and reuses remembered access',async
   if(c.request.path==='/v2/permissions'&&c.request.method==='POST'){requests++;return c.json(requests===1?{id:'review',status:'pending'}:{id:'',status:'completed'});}
   if(c.request.path==='/v2/permissions/review'){reads++;return c.json({id:'review',status:reads===1?'pending':'completed'});}
  };
- assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
- assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
+ assert.equal((await client.requestPermissions({workspace:true})).status,'completed');assert.equal(reads,2);
+ assert.equal((await client.requestPermissions({workspace:true})).status,'completed');assert.equal(reads,2);
  }finally{await client?.close().catch(()=>{});restore();}
 });
 

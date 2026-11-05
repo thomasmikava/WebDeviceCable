@@ -79,6 +79,8 @@ type Invitation struct {
 	ExpiresAt  time.Time `json:"expiresAt"`
 }
 type JobRequest struct {
+	Tools          []AppTool         `json:"tools,omitempty"`
+	ToolSetHash    string            `json:"toolSetHash,omitempty"`
 	IdempotencyKey string            `json:"idempotencyKey"`
 	Kind           string            `json:"kind"`
 	Provider       string            `json:"provider,omitempty"`
@@ -124,8 +126,10 @@ type Job struct {
 	Diagnostic      string             `json:"diagnostic,omitempty"`
 }
 type Receipt struct {
-	JobID string `json:"jobId"`
-	Hash  string `json:"hash"`
+	LeaseHash   string `json:"leaseHash,omitempty"`
+	ToolSetHash string `json:"toolSetHash,omitempty"`
+	JobID       string `json:"jobId"`
+	Hash        string `json:"hash"`
 }
 type State struct {
 	Programs      map[string]AIProgram     `json:"programs"`
@@ -172,6 +176,7 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 	j.Request.Arguments = nil
 	j.Request.OutputSchema = nil
 	j.Request.Inputs = nil
+	j.Request.Tools = nil
 	j.InputNames = nil
 	if status != "completed" {
 		j.Error = failureFor(0, code, detail)
@@ -184,6 +189,7 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 func publicJob(j *Job) Job {
 	c := *j
 	c.RequestHash = ""
+	c.Request.Tools = nil
 	c.ActionHash = ""
 	c.LeaseID = ""
 	c.Plan = nil
@@ -193,6 +199,7 @@ func publicJob(j *Job) Job {
 func publicPairing(p *Pairing) Pairing {
 	c := *p
 	c.Relay = nil
+	c.Tools = nil
 	c.CredentialHash = ""
 	c.ClientPublicKey = ""
 	c.NativeAccounts = nil

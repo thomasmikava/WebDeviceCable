@@ -1,6 +1,6 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
 import { BridgeClient } from './index.js';
-import type { ActionGroups, AppTool } from './index.js';
+import type { ActionGroups } from './index.js';
 export { BridgeError, BridgeJobError } from './index.js';
 export type * from './index.js';
 export interface RelayOptions {
@@ -14,7 +14,6 @@ export interface RelayOptions {
     origin: string;
     minimumRoutingVersion?: number;
     groups?: ActionGroups;
-    tools?: AppTool[];
     /** Recheck project authorization before every operation, including heartbeats/tools. */
     authorize?: () => Promise<void>;
 }

@@ -40,6 +40,7 @@ type ExecutionPlan struct {
 	ActionHash  string `json:"actionHash,omitempty"`
 }
 type ExecutionMetadata struct {
+	ToolSetHash   string `json:"toolSetHash,omitempty"`
 	ProgramID     string `json:"programId,omitempty"`
 	Integration   string `json:"integration,omitempty"`
 	Kind          string `json:"kind"`
@@ -284,6 +285,7 @@ func (a *App) remoteJob(j *Job) Job {
 	}
 	if c.Execution != nil {
 		metadata := *c.Execution
+		metadata.ToolSetHash = j.Request.ToolSetHash
 		c.Execution = &metadata
 		if !sharing.Names {
 			metadata.Name = ""

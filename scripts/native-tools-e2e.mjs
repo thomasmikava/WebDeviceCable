@@ -19,9 +19,9 @@ try {
  await api("/sharing",{names:true,versions:true,models:true,rawErrors:false},"PATCH");
  const invitation=await api('/invitations',{appId:'native-tools',name:'Native tools QA',appUser:'owner',origin,automatic:true});
  const paired=await BridgeClient.pair({origin,baseURL:base,invitation:invitation.invitation,appId:'native-tools',appUser:'owner'});let callbacks=0;
- client=new BridgeClient({origin,connection:paired.connection,tools:[{id:'echo',title:'Echo value',description:'Return the exact input value with a verification marker.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{callbacks++;return {value,marker:'tool-confirmed'};}}]});await client.connect();
+ const tools=[{id:'echo',title:'Echo value',description:'Return the exact input value with a verification marker.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{callbacks++;return {value,marker:'tool-confirmed'};}}];client=new BridgeClient({origin,connection:paired.connection});await client.connect();
  await api(`/pairings/${paired.pairing.id}/permissions`,{folders:[{path:workspace,write:true,automatic:false}]},'PUT');
- const session=client.session({provider,mode:'workspace'});const job=await session.send('Use the app echo tool with value "saffron". Then use the WDC folder tool to read note.txt in the granted folder. Reply with the returned marker, the value and the file contents. You must actually call both tools.');
+ const session=client.session({provider,mode:'workspace',tools});const job=await session.send('Use the app echo tool with value "saffron". Then use the WDC folder tool to read note.txt in the granted folder. Reply with the returned marker, the value and the file contents. You must actually call both tools.');
  let final;for await(const update of client.stream(job.id))final=update;
  assert.ok(final,'No terminal job returned');assert.equal(final.status,'completed');assert.equal(callbacks,1);assert.match(final.output,/tool-confirmed/);assert.match(final.output,/Original cable note/);
  const edit=await session.send('Use the WDC write tool to replace note.txt with exactly "Edited by the local bridge.". Read the current file first if needed. Then reply "done".');

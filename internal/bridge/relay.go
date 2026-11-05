@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
 // RelayBinding is private local connector state. publicPairing always removes it.
@@ -83,7 +85,18 @@ func relayJSON(ctx context.Context, client *http.Client, endpoint, token string,
 		return resp.StatusCode, errors.New("relay rejected this operation")
 	}
 	if out != nil {
-		e = json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(out)
+		limit := 2 << 20
+		if strings.HasSuffix(endpoint, "/poll") {
+			limit = wirelimits.Poll
+		}
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit+1)))
+		if err != nil {
+			return resp.StatusCode, err
+		}
+		if len(raw) > limit {
+			return resp.StatusCode, errors.New("relay response exceeds its size limit")
+		}
+		e = json.Unmarshal(raw, out)
 	} else {
 		_, e = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	}
@@ -241,8 +254,19 @@ func (a *App) relayLoop(ctx context.Context, mux http.Handler, endpoint, appOrig
 			}
 			continue
 		}
+		packetBytes := 0
 		for _, packet := range response.Packets {
-			if (packet.Path != "/v2/channel" && packet.Path != "/v2/request") || !validStorageID(packet.ID) || packet.Deadline <= time.Now().UnixMilli() || packet.Deadline > time.Now().Add(time.Minute).UnixMilli() || len(packet.Body) > 128<<10 {
+			packetBytes += len(packet.Body)
+		}
+		if len(response.Packets) > 8 || packetBytes > wirelimits.Envelope {
+			continue
+		}
+		for _, packet := range response.Packets {
+			packetLimit := wirelimits.Envelope
+			if packet.Path == "/v2/channel" {
+				packetLimit = 128 << 10
+			}
+			if (packet.Path != "/v2/channel" && packet.Path != "/v2/request") || !validStorageID(packet.ID) || packet.Deadline <= time.Now().UnixMilli() || packet.Deadline > time.Now().Add(time.Minute).UnixMilli() || len(packet.Body) > packetLimit {
 				continue
 			}
 			select {

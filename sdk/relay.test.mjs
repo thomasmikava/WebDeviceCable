@@ -49,3 +49,16 @@ test('relay app links contain a single-use invitation or connection ID, never th
   assert.throws(()=>relayConnectURL({baseURL:'http://localhost:47323',code}));
   assert.throws(()=>relaySettingsURL({baseURL:'https://relay.example',connectionId:'../other'}));
 });
+
+test('old relay capability endpoints fail clearly before any desktop submission',async()=>{
+  const saved=globalThis.fetch;const seen=[];
+  try{
+    for(const response of [()=>Response.json({error:{code:'not_found'}},{status:404}),()=>Response.json({})]){
+      globalThis.fetch=async url=>{seen.push(url);assert.ok(url.endsWith('/relay/v1/capabilities'));return response();};
+      const client=new RelayClient({baseURL:'https://relay.example',apiKey:'fixture-key',connectionId:'a'.repeat(64),account:{appId:'writer',appUser:'alice'},origin:'https://writer.example'});
+      await assert.rejects(client.run({prompt:'Do not submit'}),error=>error.code==='relay_update_required');
+      await client.close();
+    }
+    assert.equal(seen.length,2);
+  }finally{globalThis.fetch=saved;}
+});

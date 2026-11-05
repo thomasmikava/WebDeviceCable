@@ -47,6 +47,11 @@ func validReceipt(key string, receipt Receipt) bool {
 			return false
 		}
 	}
+	for _, value := range []string{receipt.ToolSetHash, receipt.LeaseHash} {
+		if value != "" && !validStorageID(value) {
+			return false
+		}
+	}
 	return true
 }
 func (a *App) receipt(key string) (Receipt, bool, error) {
