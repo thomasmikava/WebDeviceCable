@@ -2,6 +2,21 @@
 
 Prepared on 5 November 2026. At the end of implementation, nothing had been published, deployed, installed, tagged or committed. The user subsequently authorized publishing both npm packages on 5 November 2026. Desktop/relay deployment and installation remain separate release actions.
 
+## Publication completed
+
+Both public npm packages were published on 5 November 2026 under `latest`: [@webdevicecable/sdk@0.2.0](https://www.npmjs.com/package/@webdevicecable/sdk/v/0.2.0) and [@webdevicecable/relay@0.2.0](https://www.npmjs.com/package/@webdevicecable/relay/v/0.2.0). Publication used the tested local archives and browser-approved npm authentication. Anonymous registry downloads match their SHA-512 integrity, SHA-1 and SHA-256 hashes; a fresh public-registry installation passed browser/backend ESM and CommonJS import checks. Consumer lockfiles match the published integrity hashes.
+
+The immutable [npm-v0.2.0 source tag](https://github.com/thomasmikava/WebDeviceCable/tree/npm-v0.2.0) points to `3a9ce1cb189b73d181f61e985d06b874e1006917`. Its [release-tag CI run](https://github.com/thomasmikava/WebDeviceCable/actions/runs/41972089332) passed on Linux, macOS and Windows. Source is on `codex/wdc-connection-workflow-ux`; it has not been merged into `main`. Publication was local, without GitHub Actions provenance. Existing desktop installations, relay deployments and application databases remain unchanged.
+
+The duplicate branch CI run exposed incomplete execution metadata in the signed test peer: callback tests depended on polling beating the submission response. The follow-up fixture now returns execution metadata and forces one callback to arrive after submission. This changes tests only; published runtime bytes and the release tag remain unchanged. The full 79-test SDK suite passes with the corrected fixture.
+
+Published npm archive SHA-256 hashes:
+
+```text
+3f471d93ccbe0abed271295c0eeab2c20d5847d468e5b20f23803c3c6145958a  webdevicecable-sdk-0.2.0.tgz
+60876b42a3f6db579c0817401656000c49304954921cdd1a440215f77bdafad5  webdevicecable-relay-0.2.0.tgz
+```
+
 ## Implemented behavior
 
 - Direct and relay SDKs share execution methods and immutable tool snapshots. Tools belong to a continuing session or standalone job, never a pairing/client constructor. Constructor tools and `registerTools()` were removed.
@@ -47,7 +62,7 @@ The SDK adds seven regressions and Rorido adds three. SDK/package checks, direct
 - npm: `dist/webdevicecable-sdk-0.2.0.tgz` and `dist/webdevicecable-relay-0.2.0.tgz`.
 - Desktop preview downloads: `dist/scoped-tools-0.2.0/`. These are **unsigned preview** artifacts, not publisher-signed/notarized releases. Existing installed WDC and its state were left untouched.
 - Relay: local image `wdc-relay:scoped-tools-0.2.0`, plus exported image/binary archives under the same artifact directory. See its manifests for platform coverage.
-- `npm-artifacts.json` records exact npm integrity hashes; application lockfiles contain registry versions/integrities, never local filesystem dependencies. The exact archives were extracted into ignored application `node_modules` for validation. A clean registry install requires later publication of these versions.
+- `npm-artifacts.json` records exact npm integrity hashes; application lockfiles contain registry versions/integrities, never local filesystem dependencies. The exact archives were extracted into ignored application `node_modules` for validation. `npm-publication.json` records verified public archive hashes. A clean public-registry installation now succeeds.
 - `validation/` contains command logs. `CANDIDATE-SHA256SUMS` covers deliverables. These ignored local artifacts are not source commits.
 
 Rebuild locally without publishing/installing:
@@ -59,6 +74,6 @@ BRIDGE_GO="$PWD/.cache/toolchain/go/bin/go" python3 scripts/package.py --out-dir
 
 ## Later release actions
 
-The user's npm publication request is now authorized. Review/commit the intended source, verify tarball hashes against both lockfiles, then publish the exact prepared npm archives. Check registry state before any publication attempt; versions cannot be replaced. If an archive is rebuilt with different bytes, refresh both the affected lock integrity and consumer validation. Official signing/notarization, deployment and replacing the user's installed WDC remain separate actions. Make compatible desktop/relay and SDK releases available before deploying the application upgrades. No application database migration is needed.
+Do not republish 0.2.0 or move its release tag. Future changed package bytes require a new version and refreshed consumer integrity/validation. Official signing/notarization, desktop/relay deployment, merging/deploying the application upgrades and replacing the user's installed WDC remain separate actions. Make compatible desktop/relay releases available before deploying the application upgrades. No application database migration is needed.
 
 Other developers are actively changing Rorido themes and related MCP definitions. Preserve their work. The Rorido changes owned by this task are its two SDK manifests, `pnpm-lock.yaml`, local-AI PRD, Rori local schema, `rori.service.ts`, `rori-local.spec.ts`, `rori-wdc-client.ts`/spec and `WebDeviceCableIntegration.spec.tsx`. Kings changes are its shared-backend manifest, `yarn.lock`, WDC service/spec and WDC feature documentation. Do not sweep unrelated working-tree changes into a release commit.

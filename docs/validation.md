@@ -1,6 +1,6 @@
 # Current preparation checkpoint — 5 November 2026
 
-The coordinated 0.2.0 execution-scoped tool implementation, consumer migrations, validation and local artifacts are recorded in the [release handoff](execution-scoped-tools-0.2.0.md). This candidate is unpublished; deployment and installation remain separate release actions. Pairing/receipt data and application databases were preserved.
+The coordinated 0.2.0 execution-scoped tool implementation, consumer migrations, validation, local artifacts and completed npm publication are recorded in the [release handoff](execution-scoped-tools-0.2.0.md). Both npm clients are published; desktop/relay deployment and installation remain separate release actions. Pairing/receipt data and application databases were preserved.
 
 ## Previous delivery checkpoint — 1 November 2026
 

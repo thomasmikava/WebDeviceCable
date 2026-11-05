@@ -72,7 +72,11 @@ async function runner() {
     if (peer.handler) { const response = await peer.handler(context); if (response) return response; }
     if (request.path === '/v2/capabilities')return context.json({scopedToolsVersion:1,protocolVersion:2,pairing,routingVersion:2});
     if (request.path === '/v2/lease') return context.json({ lease, expiresAt: new Date(Date.now() + 12000).toISOString() }, request.method === 'POST' ? 201 : 200);
-    if (request.path === '/v2/jobs') { assert.equal(request.lease, lease); return context.json({ id: 'job', status: 'queued', revision: 1 }, 202); }
+    if (request.path === '/v2/jobs') {
+      assert.equal(request.lease, lease);
+      const {tools:_tools,...execution}=JSON.parse(request.body);
+      return context.json({ id: 'job', status: 'queued', revision: 1, request:{...execution,toolSetHash:'hash'} }, 202);
+    }
     if (request.path.endsWith('/events')) return context.sse([{ id: 'job', revision: 2, status: 'completed', output: 'Two chunks.' }]);
     return context.json({ id: 'job', revision: 3, status: 'cancelled' });
   };
@@ -268,13 +272,17 @@ test('an unreadable submission response retains its operation key for recovery',
 });
 
 test('oversized Unicode tool results return a bounded error instead of stalling the callback', async () => {
-  const peer = await runner(), restore = peer.install(); let client, timer;
+  const peer = await runner(), restore = peer.install(); let client, timer, releaseCalls;
   try {
     const paired = await peer.pair();
     let receiveResult;
     const result = new Promise(resolve=>{receiveResult=resolve;});
-    peer.handler = context => {
-      if (context.request.path === '/v2/tool-calls/poll') return context.json({calls:[{id:'unicode-call',name:'read',arguments:{},jobId:'job',requestIdempotencyKey:'unicode-key',toolSetHash:'hash'}]});
+    const callbacksReady=new Promise(resolve=>{releaseCalls=resolve;});
+    peer.handler = async context => {
+      if (context.request.path === '/v2/tool-calls/poll') {
+        await callbacksReady;
+        return context.json({calls:[{id:'unicode-call',name:'read',arguments:{},jobId:'job',requestIdempotencyKey:'unicode-key',toolSetHash:'hash'}]});
+      }
       if (context.request.path.endsWith('/claim')) return context.json({ok:true});
       if (context.request.path.endsWith('/result')) { receiveResult(JSON.parse(context.request.body)); return context.json({ok:true}); }
     };
@@ -283,11 +291,12 @@ test('oversized Unicode tool results return a bounded error instead of stalling 
     await client.submit({kind:'action',idempotencyKey:'unicode-key',tools:[{
       id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},execute:()=>({text:'🙂'.repeat(12000)}),
     }]});
+    releaseCalls();
     await client.connect();
     const received = await Promise.race([result,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Tool callback stalled')),4000);})]);
     assert.match(received.result.error,/32 KiB/);
     assert.ok(new TextEncoder().encode(JSON.stringify(received)).length < 32768);
-  } finally { clearTimeout(timer); await client?.close().catch(()=>{}); restore(); }
+  } finally { releaseCalls?.();clearTimeout(timer); await client?.close().catch(()=>{}); restore(); }
 });
 
 test('interactive pairing only accepts its own popup, endpoint, nonce and explicit approval',async()=>{
