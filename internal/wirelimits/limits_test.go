@@ -7,6 +7,9 @@ import (
 )
 
 func TestLogicalBudgets(t *testing.T) {
+	if _, capped := Capabilities()["toolsPerExecution"]; capped || Capabilities()["toolDefinitionBytes"] != Definitions {
+		t.Fatal("capabilities must advertise byte budgets without a fixed tool count")
+	}
 
 	for _, path := range []string{"/v2/jobs", "/v2/conversations", "/v2/admission"} {
 		body := `{"prompt":"` + strings.Repeat("<", 32000) + `"}`

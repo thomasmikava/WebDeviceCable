@@ -17,31 +17,35 @@ import (
 )
 
 type App struct {
-	relayCancels    map[string]context.CancelFunc
-	updater         *updates.Manager
-	updating        bool
-	launchIntents   map[string]*LaunchIntent
-	permissions     map[string]*PermissionRequest
-	config          Config
-	inputs          map[string]*nativeInput
-	actions         map[string]configuredAction
-	commands        map[string]*commandRun
-	pairingRequests map[string]*pairingRequest
-	conversations   map[string]*commandConversation
-	identity        *ecdsa.PrivateKey
-	channels        map[string]*secureChannel
-	mu              sync.Mutex
-	state           State
-	leases          map[string]Lease
-	dir             string
-	lock            *flock.Flock
-	adminKey        string
-	sessions        map[string]session
-	native          []NativeStatus
-	nativeChecking  bool
-	nativeDone      chan struct{}
-	closed          bool
-	now             func() time.Time
+	connectionRevision uint64
+	connectionChanged  chan struct{}
+	connectionWaiters  int
+	connectionClosing  bool
+	relayCancels       map[string]context.CancelFunc
+	updater            *updates.Manager
+	updating           bool
+	launchIntents      map[string]*LaunchIntent
+	permissions        map[string]*PermissionRequest
+	config             Config
+	inputs             map[string]*nativeInput
+	actions            map[string]configuredAction
+	commands           map[string]*commandRun
+	pairingRequests    map[string]*pairingRequest
+	conversations      map[string]*commandConversation
+	identity           *ecdsa.PrivateKey
+	channels           map[string]*secureChannel
+	mu                 sync.Mutex
+	state              State
+	leases             map[string]Lease
+	dir                string
+	lock               *flock.Flock
+	adminKey           string
+	sessions           map[string]session
+	native             []NativeStatus
+	nativeChecking     bool
+	nativeDone         chan struct{}
+	closed             bool
+	now                func() time.Time
 }
 type session struct {
 	CSRF    string
@@ -187,6 +191,8 @@ func (a *App) Close() error {
 	}
 	a.mu.Lock()
 	a.closed = true
+	a.connectionClosing = true
+	a.notifyConnections()
 	for _, cancel := range a.relayCancels {
 		cancel()
 	}
@@ -247,7 +253,8 @@ func (a *App) update(fn func(*State) error) error {
 	// Bound retained history as output limits grow; replay receipts remain durable.
 	total := 0
 	for _, j := range next.Jobs {
-		total += len(j.Output) + len(j.JSON)
+		details, _ := jsonData(j.ToolOperations)
+		total += len(j.Output) + len(j.JSON) + len(details)
 	}
 	for total > 20<<20 {
 		oldest := -1
@@ -260,7 +267,8 @@ func (a *App) update(fn func(*State) error) error {
 			break
 		}
 		j := next.Jobs[oldest]
-		total -= len(j.Output) + len(j.JSON)
+		details, _ := jsonData(j.ToolOperations)
+		total -= len(j.Output) + len(j.JSON) + len(details)
 		next.Jobs = append(next.Jobs[:oldest], next.Jobs[oldest+1:]...)
 	}
 	after, e := jsonData(next)

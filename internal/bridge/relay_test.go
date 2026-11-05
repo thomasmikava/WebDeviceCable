@@ -79,7 +79,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 		t.Fatalf("project credential missing: %v", e)
 	}
 	key = project.APIKey
-	status, b = request("POST", "/relay/v1/enrollments", map[string]string{"appUser": "admin-1"}, "")
+	status, b = request("POST", "/relay/v1/enrollments", map[string]any{"appUser": "admin-1", "logoURL": "https://kings.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}}, "")
 	if status != 201 {
 		t.Fatalf("enroll %d %s", status, b)
 	}
@@ -88,7 +88,20 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 		t.Fatal(e)
 	}
 	inspect := object(t, f.rawReq("POST", "/api/relay/inspect", f.origin, "", "", map[string]string{"url": remote.URL, "code": enrollment.Code}, true), 200)
-	object(t, f.rawReq("POST", "/api/relay/connect", f.origin, "", "", map[string]any{"url": remote.URL, "code": enrollment.Code, "expected": inspect}, true), 201)
+	if inspect["logoURL"] != "https://kings.example/logo.svg" || inspect["requestedPermissions"].(map[string]any)["automaticApprovals"] != true {
+		t.Fatal("relay suggestions lost", inspect)
+	}
+	tampered := map[string]any{}
+	for k, v := range inspect {
+		tampered[k] = v
+	}
+	tampered["logoURL"] = "https://kings.example/changed.svg"
+	object(t, f.rawReq("POST", "/api/relay/connect", f.origin, "", "", map[string]any{"url": remote.URL, "code": enrollment.Code, "expected": tampered}, true), 409)
+	logoID, err := f.a.storeLogo([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24z"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object(t, f.rawReq("POST", "/api/relay/connect", f.origin, "", "", map[string]any{"url": remote.URL, "code": enrollment.Code, "expected": inspect, "automatic": false, "logoId": logoID}, true), 201)
 	path := "/relay/v1/connections/" + enrollment.ConnectionID
 	for end := time.Now().Add(time.Second); ; {
 		_, b = request("GET", path, nil, "admin-1")
@@ -112,6 +125,9 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 	var caps struct{ Pairing Pairing }
 	if e = json.Unmarshal(b, &caps); e != nil {
 		t.Fatal(e)
+	}
+	if caps.Pairing.Automatic || caps.Pairing.LogoID != logoID {
+		t.Fatal("owner override was not honored", caps.Pairing)
 	}
 	if caps.Pairing.AppUser != "admin-1" || caps.Pairing.Relay != nil || caps.Pairing.Transport != "relay" {
 		t.Fatalf("invalid/redaction: %s", b)

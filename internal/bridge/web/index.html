@@ -11,7 +11,7 @@
     <main id="main-content" tabindex="-1">
       <section data-page="apps">
         <div class="page-heading"><h1>Connections</h1><div class="actions"><button id="connect-server" class="button secondary">Connect server</button><button id="connect-app" class="button primary"><span data-icon="plus"></span>Connect app</button></div></div>
-        <section id="connection-requests" hidden aria-labelledby="connection-requests-title"><div class="section-heading"><h2 id="connection-requests-title">Connection requests</h2></div><div id="connection-request-list"></div></section>
+        <section id="connection-requests" hidden aria-labelledby="connection-requests-title"><div class="section-heading"><h2 id="connection-requests-title">Connection requests</h2></div><span id="connection-request-announcement" class="sr-only" role="status"></span><div id="connection-request-list"></div></section>
         <div id="apps-section-heading" class="section-heading"><h2>Connected apps <span id="app-list-count" class="subtle-count"></span></h2></div>
         <div id="app-list" class="connections-list"></div>
         <div id="apps-empty" class="connection-empty" hidden>
@@ -94,7 +94,6 @@
       <label>Single-use pairing code<input name="code" type="password" required autocomplete="off" spellcheck="false"></label>
     </details>
     <div id="relay-review" class="relay-identity" role="status" hidden></div>
-    <p>Connecting does not grant automatic execution, shell access or folder access.</p>
   </div><div class="dialog-actions"><button class="button secondary" id="relay-decline" type="button" hidden>Decline</button><button class="button primary" id="relay-submit" type="submit">Review connection</button></div></form>
 </dialog>
 <dialog id="command-dialog" aria-labelledby="command-title">

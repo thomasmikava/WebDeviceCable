@@ -79,6 +79,10 @@ export declare function launchRequest(endpoint: string, origin: string, keys: {
     appId: string;
     name: string;
     appUser: string;
+    logoURL?: string;
+    requestedPermissions?: {
+        automaticApprovals?: boolean;
+    };
 }, pinned?: RunnerIdentity): Promise<{
     identity: RunnerIdentity;
     status: string;

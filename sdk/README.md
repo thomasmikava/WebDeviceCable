@@ -61,3 +61,5 @@ The equivalent jsDelivr URL is `https://cdn.jsdelivr.net/npm/@webdevicecable/sdk
 For self-hosting, copy `index.js`, `secure.js` and `storage.js` together from the package into one static directory and import its `index.js`. Keep the three files from the same release. Use the local `.tgz` artifact before the first npm publication.
 
 For server-to-desktop connections, use the separate [`@webdevicecable/relay`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/relay.md) Node package and Docker relay. MIT licensed.
+
+Version 0.2.1 adds optional `logoURL` and `requestedPermissions.automaticApprovals` to connection review. It removes the fixed tool-count cap while keeping byte/schema budgets, supports optional/nullable tool inputs and open objects, and exposes authenticated `context.reportOperation()` details for dispatcher tools marked `operationDetails:true`. New features require the corresponding desktop capabilities; existing pairings remain valid.

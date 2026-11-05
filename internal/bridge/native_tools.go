@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -162,7 +161,7 @@ func nativeToolCallID(raw json.RawMessage) (string, error) {
 	}
 	return "", errors.New("invalid call ID")
 }
-func claudeToolArgs(base []string, config string, definitions []map[string]any) []string {
+func claudeToolArgs(base []string, config string) []string {
 	out := []string{}
 	for _, arg := range base {
 		if arg != "--safe-mode" {
@@ -183,11 +182,10 @@ func claudeToolArgs(base []string, config string, definitions []map[string]any) 
 			out[i+1] = "Use supplied inputs and only explicit WebDeviceCable MCP tools. WDC enforces the user's app and folder permissions."
 		}
 	}
-	names := []string{}
-	for _, tool := range definitions {
-		names = append(names, "mcp__wdc__"+tool["name"].(string))
-	}
-	out = append(out, "--allowedTools", strings.Join(names, ","))
+	// Strict MCP configuration exposes only this execution's private adapter.
+	// Its exact snapshot is checked at initialization and on every call; a
+	// server-scoped rule keeps launch arguments independent of catalog size.
+	out = append(out, "--allowedTools", "mcp__wdc__*")
 	return out
 }
 func (e *claudeEvent) isolatedTools(dir, version string, definitions []map[string]any) bool {

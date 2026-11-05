@@ -23,6 +23,7 @@ export interface JobRequest {
     inputs?: string[];
 }
 export interface Job {
+    toolOperations?: ToolOperationRecord[];
     id: string;
     pairingId: string;
     status: JobStatus;
@@ -124,6 +125,9 @@ export interface CommandAction {
     sessions: boolean;
 }
 export interface Capabilities {
+    toolInputSchemaVersion?: number;
+    toolOperationDetailsVersion?: number;
+    connectionReviewVersion?: number;
     scopedToolsVersion?: number;
     limits?: Record<string, number>;
     routingVersion?: number;
@@ -205,8 +209,21 @@ export interface AppToolDefinition {
     description: string;
     inputSchema: Record<string, unknown>;
     readOnly?: boolean;
+    operationDetails?: boolean;
+}
+export interface ToolOperation {
+    id: string;
+    title: string;
+    version?: string;
+}
+export interface ToolOperationRecord extends ToolOperation {
+    callId: string;
+    toolId: string;
+    status: 'running' | 'returned' | 'unconfirmed';
+    reportedAt: string;
 }
 export interface ToolCallbackContext {
+    reportOperation: (operation: ToolOperation) => Promise<void>;
     idempotencyKey: string;
     jobId: string;
     conversationId?: string;
@@ -233,6 +250,22 @@ export interface PermissionStatus {
         automatic: boolean;
     }[];
 }
+/** Suggestions reviewed by the desktop owner before connecting. */
+export interface ConnectionReviewOptions {
+    logoURL?: string;
+    requestedPermissions?: {
+        automaticApprovals?: boolean;
+    };
+}
+export interface PairingOptions extends ConnectionReviewOptions {
+    appId: string;
+    name: string;
+    appUser: string;
+    baseURL?: string;
+    timeoutMs?: number;
+    launchInstalled?: boolean;
+}
+export declare function connectionReviewOptions(options: ConnectionReviewOptions, origin?: string): ConnectionReviewOptions;
 export interface ClientOptions {
     minimumRoutingVersion?: number;
     baseURL?: string;
@@ -246,6 +279,9 @@ export interface ClientOptions {
 }
 export interface BridgeTransport {
     reset(): void;
+    /** Check an older peer's advertised count limit before installing callbacks. */
+    checkToolCount?(count: number): void;
+    checkToolFeatures?(schema: boolean, operation: boolean): void;
     fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
     close(): Promise<void>;
 }
@@ -256,6 +292,9 @@ export declare class BridgeJobError extends BridgeError {
 export declare class BridgeClient {
     private options;
     private transport;
+    private legacyToolCountLimit?;
+    private toolInputSchemaVersion?;
+    private toolOperationDetailsVersion?;
     private executions;
     private sessions;
     private activeCalls;
@@ -285,14 +324,7 @@ export declare class BridgeClient {
     }>;
     private static pairWithKeys;
     /** Call directly from a click handler. Approval happens in the authenticated local panel. */
-    static requestPairing(options: {
-        appId: string;
-        name: string;
-        appUser: string;
-        baseURL?: string;
-        timeoutMs?: number;
-        launchInstalled?: boolean;
-    }): Promise<{
+    static requestPairing(options: PairingOptions): Promise<{
         connection: ConnectionKeys;
         pairing: Pairing;
     }>;
@@ -320,6 +352,7 @@ export declare class BridgeClient {
     private settleSubmission;
     private drainTools;
     private dispatchTool;
+    private reportOperation;
     registerGroups(groups: ActionGroups): Promise<{
         groups: ActionGroup[];
     }>;
@@ -353,6 +386,7 @@ export declare class BridgeClient {
     private stop;
     close(): Promise<void>;
     submit(request: JobRequest): Promise<Job>;
+    private checkTools;
     lookup(idempotencyKey: string): Promise<Job | null>;
     get(id: string): Promise<Job>;
     cancel(id: string): Promise<Job>;

@@ -29,8 +29,9 @@ func TestPairingRequestsNeedLocalApprovalAndAppearOnConnections(t *testing.T) {
 		t.Fatal("approval created duplicate invitations")
 	}
 	state = object(t, f.req("GET", "/api/state", f.origin, "", "", nil, true), 200)
-	if len(state["pairingRequests"].([]any)) != 0 {
-		t.Fatal("answered request stayed pending")
+	approved := state["pairingRequests"].([]any)
+	if len(approved) != 1 || approved[0].(map[string]any)["status"] != "approved" || approved[0].(map[string]any)["pairingId"] == nil || approved[0].(map[string]any)["invitation"] != nil {
+		t.Fatal("approved handoff must remain visible without invitation credentials")
 	}
 	request := object(t, f.req("GET", path, f.origin, "", "", nil, true), 200)
 	invitation := request["invitation"].(string)

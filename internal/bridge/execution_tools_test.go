@@ -172,8 +172,14 @@ func TestToolSnapshotCanonicalizationAndSchemaLimits(t *testing.T) {
 		t.Fatal("restricted tools admitted")
 	}
 	mode = ""
-	if _, _, err = snapshotTools(executionCatalog(33, "fixture"), &mode); err == nil {
-		t.Fatal("tool count not bounded")
+	for _, count := range []int{33, 64, 300} {
+		catalog, _, err := snapshotTools(executionCatalog(count, "fixture"), &mode)
+		if err != nil || len(catalog) != count {
+			t.Fatal("catalog rejected by count rather than bytes", count, err)
+		}
+	}
+	if _, _, err = snapshotTools(executionCatalog(700, "fixture"), &mode); err == nil {
+		t.Fatal("catalog byte budget was removed with the count cap")
 	}
 	bad := executionCatalog(1, "fixture")
 	bad[0].InputSchema = json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false,"description":"` + strings.Repeat("x", 8192) + `"}`)

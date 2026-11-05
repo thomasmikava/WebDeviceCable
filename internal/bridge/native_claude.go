@@ -388,7 +388,7 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 			failRun(e)
 			return
 		}
-		args = claudeToolArgs(args, configPath, definitions)
+		args = claudeToolArgs(args, configPath)
 	}
 	process, err := startNativeProcess(ctx, path, dir, args, conversationStderr{c})
 	if err != nil {

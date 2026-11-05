@@ -11,7 +11,7 @@ function peer(){
   const client=new BridgeClient({origin:'https://example.test',connection:{pairingId:'a'.repeat(64),identity:{deviceId:'device',endpoint:'',publicKey:''},privateKey:{},publicKey:''}},{reset(){},async close(){},async fetch(path,init={}){
     requests.push({path,...init});let body=init.body?JSON.parse(init.body):{};
     if(peerState.beforeRequest){const response=await peerState.beforeRequest(path,body);if(response)return response;}
-    if(path==='/v2/capabilities')return Response.json({scopedToolsVersion:peerState.version});
+    if(path==='/v2/capabilities')return Response.json({scopedToolsVersion:peerState.version,toolInputSchemaVersion:peerState.schemaVersion,toolOperationDetailsVersion:peerState.operationVersion,limits:peerState.limits});
     if(path==='/v2/lease')return Response.json({lease:'lease',expiresAt:new Date(Date.now()+60000).toISOString()});
     if(path==='/v2/conversations'){
       const conversation={id:'conversation-'+ ++session,status:'open',toolSetHash:'session-hash-'+session};
@@ -32,7 +32,7 @@ function peer(){
     if(path.startsWith('/v2/jobs/'))return Response.json(jobs.get(path.split('/')[3]));
     return Response.json({status:'closed'});
   }});
-  const peerState={client,requests,calls,completed,results,claims,jobs,beforeRequest:null,beforeResponse:null,beforeSessionResponse:null,version:1,failClaim:false};
+  const peerState={client,requests,calls,completed,results,claims,jobs,beforeRequest:null,beforeResponse:null,beforeSessionResponse:null,version:1,schemaVersion:1,operationVersion:1,failClaim:false};
   return peerState;
 }
 const callback=(job,id='call',name='search')=>({id,name,arguments:{value:id},jobId:job.id,conversationId:job.request.conversationId,requestIdempotencyKey:job.request.idempotencyKey,toolSetHash:job.request.toolSetHash});
@@ -70,11 +70,41 @@ test('preflight is read-only; invalid tools fail locally and unsupported desktop
     await wait(300);assert.equal(p.requests.some(request=>request.path==='/v2/tool-calls/poll'),false);
     assert.throws(()=>p.client.session({mode:'restricted',tools:[tool(()=>{})]}),error=>error.code==='invalid_mode');
     assert.throws(()=>p.client.session({id:'existing-context',tools:[tool(()=>{})]}),error=>error.code==='invalid_session');
-    await assert.rejects(p.client.submit({kind:'action',idempotencyKey:'bad-schema',tools:[{...tool(()=>{}),inputSchema:{type:'object',properties:{},required:[],additionalProperties:true}}]}),error=>error.category==='validation');
-    await assert.rejects(p.client.submit({kind:'action',idempotencyKey:'too-many',tools:Array.from({length:33},(_,i)=>tool(()=>{},'tool_'+i))}),error=>error.code==='invalid_tools');
+    await assert.rejects(p.client.submit({kind:'action',idempotencyKey:'bad-schema',tools:[{...tool(()=>{}),inputSchema:{type:'object',properties:{},required:[],additionalProperties:true,$ref:'unsupported'}}]}),error=>error.category==='validation');
+    const tooLarge=Array.from({length:600},(_,i)=>({...tool(()=>{},'tool_'+i),description:'x'.repeat(2000)}));
+    await assert.rejects(p.client.submit({kind:'action',idempotencyKey:'too-large',tools:tooLarge}),error=>error.code==='tool_set_too_large');
+    assert.throws(()=>p.client.session({tools:tooLarge}),error=>error.code==='tool_set_too_large');
     assert.equal(p.requests.some(request=>request.path==='/v2/jobs'),false);
     const session=p.client.session({tools:[tool(()=>{})]});await assert.rejects(session.send({prompt:'x',tools:[]}),error=>error.code==='invalid_tools');
   }finally{await p.client.close();}
+});
+
+test('300 tools work in preflight, standalone jobs and continuing sessions, including the last callback',async()=>{
+  const p=peer(),seen=[];await p.client.connect();
+  try {
+    const tools=Array.from({length:300},(_,i)=>tool((_args,context)=>{seen.push(context);return i;},'tool_'+i));
+    await p.client.preflight({kind:'action',tools});
+    assert.equal(JSON.parse(p.requests.find(request=>request.path==='/v2/admission').body).request.tools.length,300);
+    const chat=p.client.session({tools});
+    const [job,turn]=await Promise.all([p.client.submit({kind:'action',idempotencyKey:'large-task',tools}),chat.send({prompt:'Continue',idempotencyKey:'large-chat'})]);
+    assert.equal(JSON.parse(p.requests.find(request=>request.path==='/v2/jobs').body).tools.length,300);
+    assert.equal(JSON.parse(p.requests.find(request=>request.path==='/v2/conversations').body).tools.length,300);
+    p.calls.push(callback(job,'task-last','tool_299'),callback(turn,'chat-last','tool_299'));
+    await until(()=>p.results.length===2);
+    assert.equal(seen.length,2);assert.equal(seen.filter(context=>context.conversationId===chat.id).length,1);
+    assert.ok(p.results.every(result=>result.result===299));
+    await chat.close();
+  } finally {await p.client.close();}
+});
+
+test('older desktop count caps produce an update requirement before submission or callback registration',async()=>{
+  const p=peer();p.limits={toolsPerExecution:32};await p.client.connect();
+  const tools=Array.from({length:33},(_,i)=>tool(()=>assert.fail('Unsupported tools ran'),'tool_'+i));
+  try {
+    for(const execute of [()=>p.client.preflight({kind:'action',tools}),()=>p.client.openSession({tools}),()=>p.client.submit({kind:'action',idempotencyKey:'legacy-count',tools})])await assert.rejects(execute(),error=>error.code==='desktop_update_required');
+    assert.equal(p.client.executions.size,0);
+    assert.equal(p.requests.some(request=>['/v2/admission','/v2/jobs','/v2/conversations','/v2/tool-calls/poll'].includes(request.path)),false);
+  } finally {await p.client.close();}
 });
 
 test('callbacks are bounded to four, unmatched executions stay unclaimed, completion releases handlers',async()=>{
@@ -256,4 +286,29 @@ test('session creation responses cannot restore snapshots after closure or recon
       assert.equal(p.requests.some(request=>request.path.endsWith('/turns')),false);
     }finally{releaseOld?.();await p.client.close();}
   }
+});
+
+
+test('natural tool inputs preflight and operation reporting bind to the claimed callback',async()=>{
+ const p=peer();await p.client.connect();let context;
+ try {
+  const definition={...tool(async(args,ctx)=>{context=ctx;assert.deepEqual(args,{value:'call'});await ctx.reportOperation({id:'rename_page',title:'Renaming a page',version:'v1'});return true;}),operationDetails:true,inputSchema:{type:'object',properties:{value:{type:['string','null']},arguments:{type:'object',additionalProperties:true}},required:['value'],additionalProperties:false}};
+  await p.client.preflight({kind:'action',tools:[definition]});assert.equal(p.client.executions.size,0);
+  const job=await p.client.submit({kind:'action',idempotencyKey:'natural-inputs',tools:[definition]});p.calls.push(callback(job));await until(()=>p.results.length===1);
+  const report=p.requests.find(request=>request.path.endsWith('/operation'));assert.deepEqual(JSON.parse(report.body),{id:'rename_page',title:'Renaming a page',version:'v1'});
+  assert.ok(p.requests.findIndex(request=>request.path.endsWith('/claim'))<p.requests.indexOf(report));
+  await assert.rejects(context.reportOperation({id:'x',title:'Bad\nlabel'}),error=>error.code==='invalid_operation');
+  p.completed.push({jobId:job.id,requestIdempotencyKey:'natural-inputs',toolSetHash:job.request.toolSetHash});await until(()=>context.signal.aborted);
+  await assert.rejects(context.reportOperation({id:'x',title:'Ended'}),error=>error.code==='execution_ended');
+ } finally {await p.client.close();}
+});
+
+test('new tool features fail before submission against older desktops',async()=>{
+ for(const feature of ['schemaVersion','operationVersion']) {
+  const p=peer();p[feature]=undefined;await p.client.connect();
+  try {const definition=feature==='schemaVersion'?{...tool(()=>{}),inputSchema:{type:'object',additionalProperties:true}}:{...tool(()=>{}),operationDetails:true};
+   for(const action of [()=>p.client.preflight({kind:'action',tools:[definition]}),()=>p.client.openSession({tools:[definition]}),()=>p.client.submit({kind:'action',idempotencyKey:'unsupported-features',tools:[definition]})])await assert.rejects(action(),error=>error.code==='desktop_update_required');
+   assert.equal(p.client.executions.size,0);assert.equal(p.requests.some(request=>['/v2/admission','/v2/jobs','/v2/conversations'].includes(request.path)),false);
+  } finally {await p.client.close();}
+ }
 });

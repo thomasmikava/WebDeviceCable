@@ -1,6 +1,6 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
 import { BridgeClient } from './index.js';
-import type { ActionGroups } from './index.js';
+import type { ActionGroups, ConnectionReviewOptions } from './index.js';
 export { BridgeError, BridgeJobError } from './index.js';
 export type * from './index.js';
 export interface RelayOptions {
@@ -73,7 +73,7 @@ export declare class RelayClient extends BridgeClient {
     readonly relay: RelayOptions;
     constructor(relay: RelayOptions);
     status(): Promise<RelayStatus>;
-    static enroll(options: Pick<RelayOptions, 'baseURL' | 'apiKey'> & {
+    static enroll(options: Pick<RelayOptions, 'baseURL' | 'apiKey'> & ConnectionReviewOptions & {
         appUser: string;
     }): Promise<RelayEnrollment>;
     static revoke(options: Pick<RelayOptions, 'baseURL' | 'apiKey' | 'connectionId'> & {

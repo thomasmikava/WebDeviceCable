@@ -54,6 +54,10 @@ loop:
 			}
 		}
 	}
+	a.mu.Lock()
+	a.connectionClosing = true
+	a.notifyConnections()
+	a.mu.Unlock()
 	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	server.Shutdown(deadline)

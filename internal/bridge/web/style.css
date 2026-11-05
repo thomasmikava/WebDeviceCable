@@ -65,15 +65,28 @@ details[open] > summary > .chevron { transform: rotate(180deg); }
 /* Connections: the application and its destination are the primary content. */
 #connection-requests { margin-bottom: 32px; }
 #connection-requests h2 { color: var(--accent); }
-.connection-request { padding: 20px; margin-bottom: 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); }
-.connection-request-heading { display: flex; align-items: center; gap: 10px; }
-.connection-request-heading > .icon { color: var(--accent); }
-.connection-request-heading strong { font-size: 15px; font-weight: 550; overflow-wrap: anywhere; }
-.connection-request-origin { margin: 12px 0 3px; font-size: 14px; overflow-wrap: anywhere; }
-.connection-request-account { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-.connection-request-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
-.connection-request-actions small { color: var(--muted); font-size: 12px; }
-.connection-request-actions .actions { margin: 0; }
+.connection-request { padding: 22px; margin-bottom: 14px; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); }
+.connection-request-heading { display: flex; align-items: center; gap: 14px; }
+.connection-request-identity { min-width: 0; }
+.connection-request-identity h3 { margin:0 0 4px; font-size:17px; font-weight:600; line-height:1.35; overflow-wrap:anywhere; }
+.connection-request-identity small { display:block; color:var(--muted); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.connection-request-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; padding-top:16px; margin-top:20px; border-top:1px solid var(--border); }
+.connection-request-footer .actions { margin:0; flex-wrap:nowrap; }
+.connection-details { min-width:0; color:var(--muted); font-size:12px; }
+.connection-details summary { display:flex; align-items:center; gap:8px; padding:8px 0; }
+.connection-details dl { margin:10px 0 0; display:grid; gap:4px; }
+.connection-details dt { font-weight:500; }.connection-details dd { margin:0 0 8px; overflow-wrap:anywhere; }
+.connection-request:has(.connection-details[open]) .connection-request-footer { align-items:flex-start; }
+.connection-request-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+.connection-pending { border-color:var(--border); }
+.connection-loading { display:flex; align-items:center; gap:10px; margin:22px 0 2px; color:var(--muted); font-size:13px; line-height:1.6; }
+.connection-loading .icon { flex:none; width:16px; height:16px; }
+.connection-placeholder { display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:22px; }
+.connection-placeholder>div { display:grid;gap:12px; }
+.connection-placeholder span { display:block;height:12px;border-radius:4px;background:var(--surface-raised); }
+.connection-placeholder span:first-child { width:45%;height:9px; }
+.connection-server-note { margin:0; color:var(--muted); font-size:12px; line-height:1.6; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .connections-list { display: grid; gap: 14px; }
 .app-connection { position: relative; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 20px; }
 .connection-main { display: grid; grid-template-columns: minmax(0,1fr) 20px minmax(150px,.85fr) auto; align-items: center; column-gap: 22px; }
@@ -536,3 +549,38 @@ details.route-editor > .route-note, details.route-editor > .text-button { margin
 
 .provider-mark > .icon { color:var(--canvas); width:22px; height:22px; }
 .provider-mark.small > .icon { width:15px; height:15px; }
+
+/* Connection review keeps the app's requested settings visible before approval. */
+.app-mark img{width:100%;height:100%;object-fit:contain;border-radius:10px}
+.connection-review{display:grid;gap:14px;padding:20px 0 0}
+.connection-review>.check-line{padding:14px 16px;border:1px solid var(--border);border-radius:9px;background:var(--surface-raised)}
+.connection-review>.muted{font-size:12px;line-height:1.65;margin:0}
+.logo-current{display:flex;align-items:center;gap:20px;padding-top:4px}
+.app-name-field{display:grid;gap:8px;margin-bottom:24px;color:var(--text)}
+.app-name-field>label{margin:0;color:var(--text)}
+.app-name-field .invalid{color:var(--danger)}
+.logo-preview .app-mark{width:88px;height:88px;border-radius:14px}
+.logo-preview .app-mark>.icon{width:36px;height:36px}
+.logo-preview .app-mark img{border-radius:14px}
+.logo-identity{display:grid;justify-items:start;gap:5px;min-width:0}
+.logo-identity strong{font-size:15px;font-weight:550;overflow-wrap:anywhere}
+.logo-identity small,.logo-format-hint,.logo-link-form small{font-size:12px;color:var(--muted);line-height:1.6}
+.logo-identity>.button{margin-top:7px}
+.logo-format-hint{margin:18px 0 22px}
+.logo-link-form{padding-top:20px;border-top:1px solid var(--border)}
+.logo-link-form label{margin:0 0 10px;color:var(--text)}
+.logo-link-input{display:flex;gap:8px;margin-bottom:8px}
+.logo-link-input>input{flex:1;min-width:0}
+.logo-status,.logo-error{font-size:12px;line-height:1.6;margin:16px 0 0}
+.logo-status{color:var(--muted)}.logo-error{color:var(--danger)}
+.logo-actions{align-items:center;justify-content:space-between;gap:12px}
+.logo-save-actions{display:flex;gap:10px;margin-left:auto}
+@media(max-width:380px){.logo-actions{align-items:stretch;flex-direction:column}.logo-actions>.text-button{align-self:flex-start}.logo-save-actions{width:100%;justify-content:flex-end}.logo-link-input{flex-direction:column}.logo-link-input>.button{align-self:flex-end}}
+.connection-review>.check-line{margin:0}.connection-request-heading .app-mark{width:44px;height:44px;flex:none}
+
+.connection-request-heading .app-mark img{border-radius:6px}
+
+@media(max-width:560px){.connection-request{padding:18px}.connection-request-footer{gap:12px;flex-wrap:wrap}.connection-request-footer>.actions{margin-left:auto}.connection-review>.check-line{padding:12px}.connection-request-identity h3{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.connection-loading .spinner{animation:none}}
+
+.tool-operations{list-style:none;padding:0;margin:12px 0;display:grid;gap:8px}.tool-operations li{display:flex;justify-content:space-between;gap:16px;font-size:13px}.tool-operations small{color:var(--muted);white-space:nowrap}

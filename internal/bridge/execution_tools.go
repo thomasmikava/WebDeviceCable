@@ -24,9 +24,6 @@ func jsonData(value any) ([]byte, error) {
 // Normalize definitions before hashing. Schema object order and caller order do
 // not change execution identity. No caller-supplied hash is trusted.
 func snapshotTools(tools []AppTool, mode *string) ([]AppTool, string, error) {
-	if len(tools) > wirelimits.Tools {
-		return nil, "", fail(400, "invalid_tools", "At most 32 app tools are supported.")
-	}
 	if len(tools) > 0 {
 		if *mode == "" {
 			*mode = "app-tools"
@@ -44,7 +41,7 @@ func snapshotTools(tools []AppTool, mode *string) ([]AppTool, string, error) {
 		if len(tool.InputSchema) == 0 {
 			return nil, "", fail(400, "invalid_tools", "An input schema is required.")
 		}
-		if err := checkOutputSchema(tool.InputSchema); err != nil {
+		if err := checkToolSchema(tool.InputSchema); err != nil {
 			return nil, "", fail(400, "invalid_tools", err.Error())
 		}
 		var schema any
@@ -54,7 +51,7 @@ func snapshotTools(tools []AppTool, mode *string) ([]AppTool, string, error) {
 			return nil, "", err
 		}
 		tool.InputSchema, _ = jsonData(schema)
-		if err := checkOutputSchema(tool.InputSchema); err != nil {
+		if err := checkToolSchema(tool.InputSchema); err != nil {
 			return nil, "", fail(400, "invalid_tools", err.Error())
 		}
 		tool.Hash = ""

@@ -42,7 +42,7 @@ try {
  for(let i=0;i<150;i++){try{base=JSON.parse(await readFile(dir+'/desktop/runner.json','utf8')).url;break}catch{}await wait(50)}assert.ok(base,stderr);
  control=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+await readFile(dir+'/desktop/admin.key','utf8')}}).then(r=>r.json());
  if(native){for(let i=0;i<250;i++){const state=await api('/state',undefined,'GET');if(!state.nativeChecking&&state.native.length)break;await wait(100)}await api('/sharing',{names:true,models:true,versions:true},'PATCH')}
- const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7'});
+ const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7',logoURL:origin+'/logo.svg',requestedPermissions:{automaticApprovals:true}});
  const pendingClient=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin});
  assert.equal((await pendingClient.status()).enrollmentStatus,'pending');await pendingClient.close();
  const declined=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'decline-fixture'});
@@ -51,10 +51,12 @@ try {
  assert.equal((await declinedClient.status()).enrollmentStatus,'declined');await declinedClient.close();
  await RelayClient.revoke({baseURL:url,apiKey:key,connectionId:declined.connectionId,appUser:'decline-fixture'});
  const expected=await api('/relay/inspect',{url,code:enrollment.code});assert.equal(expected.appUser,'admin-7');
- await api('/relay/connect',{url,code:enrollment.code,expected});
+ assert.equal(expected.logoURL,origin+'/logo.svg');assert.equal(expected.requestedPermissions.automaticApprovals,true);
+ const upload=await fetch(base+'/api/logos/upload',{method:'POST',headers:{Origin:base,'X-Bridge-Session':control.session,'X-Bridge-CSRF':control.csrf,'Content-Type':'image/svg+xml'},body:'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24z"/></svg>'});assert.equal(upload.status,201);const logo=await upload.json();
+ await api('/relay/connect',{url,code:enrollment.code,expected,automatic:false,logoId:logo.logoId});
  backend=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin,groups:[{id:'ai',name:'Kings AI',kind:'ai',children:[{id:'generation',name:'Generation',kind:'ai'},{id:'images',name:'Images',kind:'ai'}]}]});
  for(let i=0;i<100;i++){if((await backend.status()).connected)break;await wait(50)}
- await backend.connect();const caps=await backend.capabilities();assert.equal(caps.leaseSeconds,45);assert.equal(caps.pairing.appUser,'admin-7');
+ await backend.connect();const caps=await backend.capabilities();assert.equal(caps.leaseSeconds,45);assert.equal(caps.pairing.appUser,'admin-7');assert.equal(caps.pairing.automatic,false);assert.equal(caps.pairing.logoId,logo.logoId);
  secondEnrollment=await RelayClient.enroll({baseURL:url,apiKey:secondProject.apiKey,appUser:'admin-7'});
  const secondExpected=await api('/relay/inspect',{url,code:secondEnrollment.code});assert.equal(secondExpected.appId,'other-website');
  await api('/relay/connect',{url,code:secondEnrollment.code,expected:secondExpected});

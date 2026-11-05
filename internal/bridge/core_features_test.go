@@ -381,7 +381,7 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 	object(t, f.rawReq("POST", "/api/launch-intents", "", f.a.adminKey, "", map[string]string{"uri": uri}, false), 409)
 	ephemeral, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nonce := secret()
-	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
+	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "logoURL": "https://website.example:8443/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
 	signed, _ := signBytes(key, payload)
 	response := f.rawReq("POST", "/v2/connect", origin, "", "", signed, false)
 	object(t, response, 200)
@@ -389,11 +389,17 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 		t.Fatal("launch granted access without consent")
 	}
 	object(t, f.rawReq("POST", "/v2/connect", origin, "", "", signed, false), 409)
+	if f.a.pairingRequests[requestID].LogoURL != "https://website.example:8443/logo.svg" || !f.a.pairingRequests[requestID].RequestedPermissions.AutomaticApprovals {
+		t.Fatal("signed onboarding suggestions lost")
+	}
 	if f.a.pairingRequests[requestID].Origin != origin || f.a.pairingRequests[requestID].PublicKey != publicKey(key) {
 		t.Fatal("launch identity lost")
 	}
 	object(t, f.req("POST", "/api/pairing-requests/"+requestID+"/decision", f.origin, "", "", map[string]bool{"approve": true}, true), 200)
 	for _, inv := range f.a.state.Invitations {
+		if !inv.Pairing.Automatic {
+			t.Fatal("reviewed automatic approval was not granted")
+		}
 		if inv.Pairing.ClientPublicKey != publicKey(key) {
 			t.Fatal("invitation not bound to requesting key")
 		}
@@ -431,9 +437,9 @@ func TestFileEnabledCommandRoundTrip(t *testing.T) {
 	}
 }
 func TestClaudeToolProfilePreservesExplicitIsolation(t *testing.T) {
-	args := claudeToolArgs(claudeArgs(ExecutionTarget{}, nativeUUID()), "private-mcp.json", []map[string]any{{"name": "wdc_read"}})
+	args := claudeToolArgs(claudeArgs(ExecutionTarget{}, nativeUUID()), "private-mcp.json")
 	text := strings.Join(args, " ")
-	for _, control := range []string{"--restricted", "--strict-mcp-config", "--tools  ", "--setting-sources  ", "--no-session-persistence", "--disable-slash-commands", "--no-chrome", "claudeMdExcludes", "syncClaudeAiSkills", "syncClaudeAiPlugins", "disableAllHooks", "mcp__wdc__wdc_read"} {
+	for _, control := range []string{"--restricted", "--strict-mcp-config", "--tools  ", "--setting-sources  ", "--no-session-persistence", "--disable-slash-commands", "--no-chrome", "claudeMdExcludes", "syncClaudeAiSkills", "syncClaudeAiPlugins", "disableAllHooks", "--allowedTools mcp__wdc__*"} {
 		if !strings.Contains(text, control) {
 			t.Fatal("missing tool isolation", control)
 		}

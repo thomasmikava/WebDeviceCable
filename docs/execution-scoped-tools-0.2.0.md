@@ -1,5 +1,7 @@
 # Execution-scoped tools: 0.2.0 release handoff
 
+Historical release record: the published 0.2.0 packages below retain their original 32-tool cap. Version 0.2.1 removes that fixed count cap across SDK, desktop and relay capabilities while retaining byte/schema budgets. See [current integration limits](integrate.md#optional-app-tools-and-folders).
+
 Prepared on 5 November 2026. At the end of implementation, nothing had been published, deployed, installed, tagged or committed. The user subsequently authorized publishing both npm packages on 5 November 2026. Desktop/relay deployment and installation remain separate release actions.
 
 ## Publication completed

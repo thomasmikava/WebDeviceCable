@@ -1,6 +1,6 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
-import { BridgeClient, BridgeError } from './index.js';
-import type { ActionGroups, BridgeTransport } from './index.js';
+import { BridgeClient, BridgeError, connectionReviewOptions } from './index.js';
+import type { ActionGroups, BridgeTransport, ConnectionReviewOptions } from './index.js';
 import { nonce } from './secure.js';
 export { BridgeError, BridgeJobError } from './index.js';
 export type * from './index.js';
@@ -77,15 +77,17 @@ export class RelayClient extends BridgeClient {
     const base = endpoint(relay.baseURL);
     const identity = {deviceId:'',publicKey:'',endpoint:base};
     if (!/^[a-f0-9]{64}$/.test(relay.connectionId) || !relay.account.appUser) throw new Error('A paired account connection is required.');
-    let checked=false;
+    let checked=false,legacyToolCountLimit:number|undefined,inputSchemaVersion:number|undefined,operationDetailsVersion:number|undefined;
     const transport: BridgeTransport = {
       reset() {checked=false;},
+      checkToolCount(count) {if(legacyToolCountLimit!==undefined&&legacyToolCountLimit>0&&count>legacyToolCountLimit)throw new BridgeError('relay_update_required','Update the WDC relay to use this tool catalog. This relay still advertises a limit on the number of tools per execution.',409);},
+      checkToolFeatures(schema,operation) {if(schema&&inputSchemaVersion!==1||operation&&operationDetailsVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to support these tool input schemas and operation details.',409);},
       async fetch(path, init = {}, lease = '') {
         await relay.authorize?.();
         if(!checked){
-          let capability:{scopedToolsVersion?:number};
+          let capability:{toolInputSchemaVersion?:number;toolOperationDetailsVersion?:number;scopedToolsVersion?:number;limits?:Record<string,number>};
           try{capability=await relayRequest(relay,'/relay/v1/capabilities');}catch(error){if(error instanceof BridgeError&&error.status===404)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.0 or later.',409);throw error;}
-          if(capability.scopedToolsVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.0 or later.',409);checked=true;
+          if(capability.scopedToolsVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.0 or later.',409);legacyToolCountLimit=capability.limits?.toolsPerExecution;inputSchemaVersion=capability.toolInputSchemaVersion;operationDetailsVersion=capability.toolOperationDetailsVersion;checked=true;
         }
         const response = await fetch(base+'/relay/v1/connections/'+relay.connectionId+'/request', {
           method:'POST', redirect:'error', signal:init.signal ?? AbortSignal.timeout(45000),
@@ -112,8 +114,16 @@ export class RelayClient extends BridgeClient {
     await this.relay.authorize?.();
     return relayRequest(this.relay,'/relay/v1/connections/'+this.relay.connectionId,{headers:{'X-WDC-Account':this.relay.account.appUser}});
   }
-  static enroll(options: Pick<RelayOptions,'baseURL'|'apiKey'> & {appUser:string}):Promise<RelayEnrollment>{
-    return relayRequest(options,'/relay/v1/enrollments',{method:'POST',body:JSON.stringify({appUser:options.appUser})});
+  static enroll(options: Pick<RelayOptions,'baseURL'|'apiKey'> & ConnectionReviewOptions & {appUser:string}):Promise<RelayEnrollment>{
+    const suggestions=connectionReviewOptions(options);
+    return (async()=>{
+      if(options.logoURL||options.requestedPermissions){
+        let capability:{connectionReviewVersion?:number};
+        try{capability=await relayRequest(options,'/relay/v1/capabilities');}catch(error){if(error instanceof BridgeError&&error.status===404)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.1 or later to review connection settings.',409);throw error;}
+        if(capability.connectionReviewVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.1 or later to review connection settings.',409);
+      }
+      return relayRequest<RelayEnrollment>(options,'/relay/v1/enrollments',{method:'POST',body:JSON.stringify({appUser:options.appUser,...suggestions})});
+    })();
   }
   static revoke(options: Pick<RelayOptions,'baseURL'|'apiKey'|'connectionId'> & {appUser:string}):Promise<{revoked:boolean}>{
     if (!/^[a-f0-9]{64}$/.test(options.connectionId) || !options.appUser) throw new Error('A paired account connection is required.');

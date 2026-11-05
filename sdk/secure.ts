@@ -235,7 +235,7 @@ export class SecureTransport {
 }
 
 /** Signed launch rendezvous. The invitation itself is encrypted to an ephemeral key. */
-export async function launchRequest(endpoint:string, origin:string, keys:{privateKey:CryptoKey;publicKey:string}, details:{requestId:string;appId:string;name:string;appUser:string}, pinned?:RunnerIdentity):Promise<{identity:RunnerIdentity;status:string;invitation:string}> {
+export async function launchRequest(endpoint:string, origin:string, keys:{privateKey:CryptoKey;publicKey:string}, details:{requestId:string;appId:string;name:string;appUser:string;logoURL?:string;requestedPermissions?:{automaticApprovals?:boolean}}, pinned?:RunnerIdentity):Promise<{identity:RunnerIdentity;status:string;invitation:string}> {
   endpoint=localURL(endpoint);checkOrigin(origin);
   try {
   const ephemeral=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},false,['deriveBits']);
@@ -243,7 +243,10 @@ export async function launchRequest(endpoint:string, origin:string, keys:{privat
   const request={...details,origin,publicKey:keys.publicKey,nonce:nonce(),timestamp:Date.now(),ephemeralKey};
   const bytes=encode.encode(JSON.stringify(request)), signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys.privateKey,bytes);
   const response=await fetch(endpoint+'/v2/connect',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(5000),headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({payload:base64url(bytes),signature:base64url(new Uint8Array(signature))})});
-  if(!response.ok) throw new BridgeError('launch_required','Open WebDeviceCable to continue.',response.status);
+  if(!response.ok) {
+    if(response.status===400&&(details.logoURL||details.requestedPermissions))throw new BridgeSecurityError('The requested connection settings could not be verified. Update WDC desktop to 0.2.1 or later and try again. No unsigned approval was accepted.');
+    throw new BridgeError('launch_required','Open WebDeviceCable to continue.',response.status);
+  }
   const signed=await boundedJSON<Signed>(response); let preview:Record<string,unknown>;try{preview=JSON.parse(decode.decode(unbase64url(signed.payload)));}catch{throw new BridgeSecurityError('Invalid launch response.');}
   const identity:RunnerIdentity={endpoint,deviceId:String(preview.deviceId),publicKey:String(preview.publicKey)};
   if(pinned&&(pinned.publicKey!==identity.publicKey||pinned.deviceId!==identity.deviceId||pinned.endpoint!==endpoint))throw new BridgeSecurityError('The runner identity changed during approval.');
@@ -255,7 +258,8 @@ export async function launchRequest(endpoint:string, origin:string, keys:{privat
   const key=await derive(shared,salt,details.requestId,'launch'), envelope=data.encrypted as Encrypted;
   if(envelope.sessionId!==details.requestId)throw new BridgeSecurityError('Launch channel mismatch.');
   const plaintext=await crypto.subtle.decrypt({name:'AES-GCM',iv:unbase64url(envelope.iv),additionalData:encode.encode(`ai-bridge/v2/${details.requestId}/launch`),tagLength:128},key,unbase64url(envelope.data));
-  const result=JSON.parse(decode.decode(new Uint8Array(plaintext))) as {status:string;invitation:string};
+  const result=JSON.parse(decode.decode(new Uint8Array(plaintext))) as {status:string;invitation:string;connectionReviewVersion?:number};
+  if((details.logoURL||details.requestedPermissions)&&result.connectionReviewVersion!==1)throw new BridgeError('desktop_update_required','Update WDC desktop to 0.2.1 or later to review this app’s logo and requested permissions.',409);
   if(result.invitation){const invitation=parseInvitation(result.invitation);if(invitation.publicKey!==identity.publicKey||invitation.deviceId!==identity.deviceId||invitation.endpoint!==endpoint)throw new BridgeSecurityError('Invitation changed the approved runner identity.');}
   if(!/^[a-f0-9]{64}$/.test(identity.deviceId)||!['pending','approved','rejected'].includes(result.status)||typeof result.invitation!=='string')throw new BridgeSecurityError('Invalid launch approval.');
   return {identity,...result};

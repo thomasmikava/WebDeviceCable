@@ -139,3 +139,52 @@ func TestEncryptedFramesRequirePinnedSignatureAndBinding(t *testing.T) {
 		t.Fatal("cross-operation direction verified")
 	}
 }
+
+func TestConnectionSuggestionsRequireReviewCapableDesktop(t *testing.T) {
+	config := Config{Directory: t.TempDir(), AdminKey: strings.Repeat("a", 64)}
+	s, err := Open(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	project := (registryHarness{t, s}).create(config.AdminKey, "review-project")
+	request := func(path, key string, input any) (int, []byte) {
+		raw, _ := json.Marshal(input)
+		r := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+key)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w.Code, w.Body.Bytes()
+	}
+	status, body := request("/relay/v1/enrollments", project.APIKey, map[string]any{"appUser": "alice", "logoURL": project.Project.Origin + "/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}})
+	if status != 201 {
+		t.Fatal(status, string(body))
+	}
+	var enrollment struct{ Code string }
+	_ = json.Unmarshal(body, &enrollment)
+	key, _ := newPrivate()
+	client, _ := makeV2Client(&connection{PrivateKey: key}, nil, nil)
+	inv := invitation{V: 2, Secret: ID(), Endpoint: "http://127.0.0.1:47321", DeviceID: ID(), PublicKey: b64.EncodeToString(elliptic.Marshal(client.key.Curve, client.key.X, client.key.Y)), AppID: project.Project.AppID, AppUser: "alice", Origin: project.Project.Origin, ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
+	claim := func() (int, []byte) {
+		raw, _ := json.Marshal(inv)
+		return request("/connector/v1/claim", "", map[string]string{"code": enrollment.Code, "invitation": "aib2." + b64.EncodeToString(raw), "token": strings.Repeat("t", 64)})
+	}
+	status, body = claim()
+	if status != 409 || !bytes.Contains(body, []byte("desktop_update_required")) {
+		t.Fatal(status, string(body))
+	}
+	// An unsupported desktop must neither consume the code nor change its suggestions.
+	status, body = request("/connector/v1/inspect", "", map[string]string{"code": enrollment.Code})
+	if status != 200 || !bytes.Contains(body, []byte(`"automaticApprovals":true`)) || !bytes.Contains(body, []byte("/logo.svg")) {
+		t.Fatal(status, string(body))
+	}
+	inv.ConnectionReviewVersion = 1
+	status, body = claim()
+	if status != 201 {
+		t.Fatal(status, string(body))
+	}
+	status, _ = claim()
+	if status != 410 {
+		t.Fatal("single-use code protection changed", status)
+	}
+}

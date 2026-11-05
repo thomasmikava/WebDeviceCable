@@ -21,7 +21,6 @@ const (
 	Envelope        = 4 << 20
 	Poll            = 8 << 20
 	LiveDefinitions = 8 << 20
-	Tools           = 32
 )
 
 func CreationRequest(method, path string) bool {
@@ -67,5 +66,5 @@ func Check(method, path, body string) string {
 }
 
 func Capabilities() map[string]int {
-	return map[string]int{"toolsPerExecution": Tools, "inputSchemaBytes": 8192, "inputSchemaDepth": 12, "toolDefinitionBytes": Definitions, "executionRequestBytes": Creation, "ordinaryRequestBytes": Ordinary, "encryptedEnvelopeBytes": Envelope, "liveDefinitionBytes": LiveDefinitions, "pollResponseBytes": Poll}
+	return map[string]int{"inputSchemaBytes": 8192, "inputSchemaDepth": 12, "toolDefinitionBytes": Definitions, "executionRequestBytes": Creation, "ordinaryRequestBytes": Ordinary, "encryptedEnvelopeBytes": Envelope, "liveDefinitionBytes": LiveDefinitions, "pollResponseBytes": Poll}
 }

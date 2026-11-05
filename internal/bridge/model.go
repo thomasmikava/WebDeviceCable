@@ -49,6 +49,8 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
+	DisplayName     string             `json:"displayName,omitempty"`
+	LogoID          string             `json:"logoId,omitempty"`
 	GroupsDeclared  bool               `json:"groupsDeclared,omitempty"`
 	Relay           *RelayBinding      `json:"relay,omitempty"`
 	Transport       string             `json:"transport,omitempty"`
@@ -95,35 +97,36 @@ type JobRequest struct {
 	Inputs         []string          `json:"inputs,omitempty"`
 }
 type Job struct {
-	InputNames      []string           `json:"inputNames,omitempty"`
-	Turn            int                `json:"turn,omitempty"`
-	ID              string             `json:"id"`
-	PairingID       string             `json:"pairingId"`
-	Request         JobRequest         `json:"request"`
-	RequestHash     string             `json:"requestHash,omitempty"`
-	LeaseID         string             `json:"leaseId,omitempty"`
-	Status          string             `json:"status"`
-	Code            string             `json:"code,omitempty"`
-	Detail          string             `json:"detail,omitempty"`
-	Output          string             `json:"output,omitempty"`
-	JSON            json.RawMessage    `json:"json,omitempty"`
-	Artifacts       []Artifact         `json:"artifacts,omitempty"`
-	Usage           *TokenUsage        `json:"usage,omitempty"`
-	ActualProvider  string             `json:"actualProvider,omitempty"`
-	ActualModel     string             `json:"actualModel,omitempty"`
-	Billing         string             `json:"billing"`
-	Revision        uint64             `json:"revision"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	StartedAt       *time.Time         `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time         `json:"finishedAt,omitempty"`
-	ActionHash      string             `json:"actionHash,omitempty"`
-	ActionTitle     string             `json:"actionTitle,omitempty"`
-	ExitCode        *int               `json:"exitCode,omitempty"`
-	OutputTruncated bool               `json:"outputTruncated,omitempty"`
-	Plan            *ExecutionPlan     `json:"plan,omitempty"`
-	Execution       *ExecutionMetadata `json:"execution,omitempty"`
-	Error           *Failure           `json:"error,omitempty"`
-	Diagnostic      string             `json:"diagnostic,omitempty"`
+	ToolOperations  []ToolOperationRecord `json:"toolOperations,omitempty"`
+	InputNames      []string              `json:"inputNames,omitempty"`
+	Turn            int                   `json:"turn,omitempty"`
+	ID              string                `json:"id"`
+	PairingID       string                `json:"pairingId"`
+	Request         JobRequest            `json:"request"`
+	RequestHash     string                `json:"requestHash,omitempty"`
+	LeaseID         string                `json:"leaseId,omitempty"`
+	Status          string                `json:"status"`
+	Code            string                `json:"code,omitempty"`
+	Detail          string                `json:"detail,omitempty"`
+	Output          string                `json:"output,omitempty"`
+	JSON            json.RawMessage       `json:"json,omitempty"`
+	Artifacts       []Artifact            `json:"artifacts,omitempty"`
+	Usage           *TokenUsage           `json:"usage,omitempty"`
+	ActualProvider  string                `json:"actualProvider,omitempty"`
+	ActualModel     string                `json:"actualModel,omitempty"`
+	Billing         string                `json:"billing"`
+	Revision        uint64                `json:"revision"`
+	CreatedAt       time.Time             `json:"createdAt"`
+	StartedAt       *time.Time            `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time            `json:"finishedAt,omitempty"`
+	ActionHash      string                `json:"actionHash,omitempty"`
+	ActionTitle     string                `json:"actionTitle,omitempty"`
+	ExitCode        *int                  `json:"exitCode,omitempty"`
+	OutputTruncated bool                  `json:"outputTruncated,omitempty"`
+	Plan            *ExecutionPlan        `json:"plan,omitempty"`
+	Execution       *ExecutionMetadata    `json:"execution,omitempty"`
+	Error           *Failure              `json:"error,omitempty"`
+	Diagnostic      string                `json:"diagnostic,omitempty"`
 }
 type Receipt struct {
 	LeaseHash   string `json:"leaseHash,omitempty"`
@@ -172,6 +175,11 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 	j.Code = code
 	j.Detail = detail
 	j.FinishedAt = &now
+	for i := range j.ToolOperations {
+		if j.ToolOperations[i].Status == "running" {
+			j.ToolOperations[i].Status = "unconfirmed"
+		}
+	}
 	j.Request.Prompt = ""
 	j.Request.Arguments = nil
 	j.Request.OutputSchema = nil

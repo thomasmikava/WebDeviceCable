@@ -62,3 +62,5 @@ See [RELAY.md](./RELAY.md) for the complete pairing flow, `RelayClient` construc
 The package does not include the Docker server or desktop application. For direct browser integration, use [`@webdevicecable/sdk`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/integrate.md). MIT licensed.
 
 Named installations and profiles are chosen locally in WDC, per connection and workflow. Existing `codex`/`claude` IDs remain the default entries; generated program IDs identify additional installations. Check each selected entry's capabilities before submitting work. Custom harnesses require explicit local grants and do not inherit native isolation guarantees. See [AI programs](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/ai-programs.md).
+
+Version 0.2.1 adds optional logo/default-approval suggestions to enrollment and the same execution-scoped input-schema and operation-detail features as the browser SDK. Update the desktop and relay runtime together before deploying consumers of these features. Existing pairings and operation receipts are retained.

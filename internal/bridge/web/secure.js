@@ -397,8 +397,11 @@ export async function launchRequest(endpoint, origin, keys, details, pinned) {
         const request = { ...details, origin, publicKey: keys.publicKey, nonce: nonce(), timestamp: Date.now(), ephemeralKey };
         const bytes = encode.encode(JSON.stringify(request)), signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, bytes);
         const response = await fetch(endpoint + '/v2/connect', { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ payload: base64url(bytes), signature: base64url(new Uint8Array(signature)) }) });
-        if (!response.ok)
+        if (!response.ok) {
+            if (response.status === 400 && (details.logoURL || details.requestedPermissions))
+                throw new BridgeSecurityError('The requested connection settings could not be verified. Update WDC desktop to 0.2.1 or later and try again. No unsigned approval was accepted.');
             throw new BridgeError('launch_required', 'Open WebDeviceCable to continue.', response.status);
+        }
         const signed = await boundedJSON(response);
         let preview;
         try {
@@ -423,6 +426,8 @@ export async function launchRequest(endpoint, origin, keys, details, pinned) {
             throw new BridgeSecurityError('Launch channel mismatch.');
         const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unbase64url(envelope.iv), additionalData: encode.encode(`ai-bridge/v2/${details.requestId}/launch`), tagLength: 128 }, key, unbase64url(envelope.data));
         const result = JSON.parse(decode.decode(new Uint8Array(plaintext)));
+        if ((details.logoURL || details.requestedPermissions) && result.connectionReviewVersion !== 1)
+            throw new BridgeError('desktop_update_required', 'Update WDC desktop to 0.2.1 or later to review this app’s logo and requested permissions.', 409);
         if (result.invitation) {
             const invitation = parseInvitation(result.invitation);
             if (invitation.publicKey !== identity.publicKey || invitation.deviceId !== identity.deviceId || invitation.endpoint !== endpoint)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thomasmikava/WebDeviceCable/internal/onboarding"
 	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
@@ -26,6 +27,7 @@ type relayInput struct {
 	Code string `json:"code"`
 }
 type relayInfo struct {
+	onboarding.Options
 	AppID        string `json:"appId"`
 	Name         string `json:"name"`
 	Origin       string `json:"origin"`
@@ -116,15 +118,37 @@ func inspectRelay(ctx context.Context, in relayInput) (relayInfo, error) {
 	if e = validatePairing(Pairing{AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser, Mode: "restricted"}); e != nil || !validStorageID(info.ConnectionID) {
 		return info, fail(400, "invalid_relay", "The relay returned an invalid project identity.")
 	}
+	if err := info.Options.Validate(info.Origin); err != nil {
+		return info, fail(400, "invalid_logo", err.Error())
+	}
 	return info, nil
 }
+
+// Owner routes hold mu. Network waits must not delay other connection requests,
+// job callbacks, or the panel's live notifications. Returns with mu held.
+func (a *App) connectionNetwork(call func()) {
+	a.mu.Unlock()
+	defer a.mu.Lock()
+	call()
+}
+
+func (a *App) inspectConnectionRelay(ctx context.Context, in relayInput) (relayInfo, error) {
+	var info relayInfo
+	var err error
+	a.connectionNetwork(func() { info, err = inspectRelay(ctx, in) })
+	if a.closed || a.connectionClosing {
+		return info, fail(503, "runner_stopped", "WebDeviceCable is stopping.")
+	}
+	return info, err
+}
+
 func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWriter, *http.Request) error) http.HandlerFunc, origin string) {
 	mux.HandleFunc("POST /api/relay/inspect", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in relayInput
 		if e := decode(w, r, &in); e != nil {
 			return e
 		}
-		info, e := inspectRelay(r.Context(), in)
+		info, e := a.inspectConnectionRelay(r.Context(), in)
 		if e != nil {
 			return e
 		}
@@ -136,12 +160,16 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		if err := decode(w, r, &in); err != nil {
 			return err
 		}
-		if _, err := inspectRelay(r.Context(), in); err != nil {
+		if _, err := a.inspectConnectionRelay(r.Context(), in); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		if _, err := relayJSON(ctx, relayHTTPClient(), in.URL+"/connector/v1/decline", "", map[string]string{"code": in.Code}, nil); err != nil {
+		var err error
+		a.connectionNetwork(func() {
+			_, err = relayJSON(ctx, relayHTTPClient(), in.URL+"/connector/v1/decline", "", map[string]string{"code": in.Code}, nil)
+		})
+		if err != nil {
 			return fail(502, "relay_unavailable", "Could not decline this invitation. Try again.")
 		}
 		writeJSON(w, 200, map[string]bool{"declined": true})
@@ -149,21 +177,34 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 	}))
 	mux.HandleFunc("POST /api/relay/connect", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
-			URL      string    `json:"url"`
-			Code     string    `json:"code"`
-			Expected relayInfo `json:"expected"`
+			URL       string    `json:"url"`
+			Code      string    `json:"code"`
+			Expected  relayInfo `json:"expected"`
+			Automatic *bool     `json:"automatic"`
+			LogoID    string    `json:"logoId"`
 		}
 		if e := decode(w, r, &in); e != nil {
 			return e
 		}
-		info, e := inspectRelay(r.Context(), relayInput{in.URL, in.Code})
+		info, e := a.inspectConnectionRelay(r.Context(), relayInput{in.URL, in.Code})
 		if e != nil {
 			return e
 		}
 		if info != in.Expected {
 			return fail(409, "relay_identity_changed", "Review the relay project and account again.")
 		}
-		result, e := a.createInvitation(invitationInput{AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser}, origin)
+		automatic := info.RequestedPermissions.AutomaticApprovals
+		if in.Automatic != nil {
+			automatic = *in.Automatic
+		}
+		if e := a.checkLogo(in.LogoID); e != nil {
+			return e
+		}
+		a.pendingPairingRequests()
+		if len(a.pairingRequests) >= 32 {
+			return fail(429, "pairing_limit", "Too many connection requests. Try again shortly.")
+		}
+		result, e := a.createInvitation(invitationInput{LogoID: in.LogoID, Automatic: automatic, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser}, origin)
 		if e != nil {
 			return e
 		}
@@ -180,13 +221,32 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		}); e != nil {
 			return e
 		}
+		pairID := result["pairing"].(Pairing).ID
+		a.pairingRequests[pairID] = &pairingRequest{Options: info.Options, ID: pairID, PairingID: pairID, LogoID: in.LogoID, RelayURL: in.URL, ConnectionID: info.ConnectionID, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser, Status: "approved", ExpiresAt: result["expiresAt"].(time.Time)}
+		a.notifyConnections()
+		confirmed := false
+		defer func() {
+			if !confirmed {
+				delete(a.pairingRequests, pairID)
+				a.notifyConnections()
+			}
+		}()
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		var claim struct{ ConnectionID string }
-		if _, e = relayJSON(ctx, relayHTTPClient(), in.URL+"/connector/v1/claim", "", map[string]string{"code": in.Code, "invitation": invitation, "token": binding.Token}, &claim); e != nil || claim.ConnectionID != info.ConnectionID {
+		var status int
+		var err error
+		a.connectionNetwork(func() {
+			status, err = relayJSON(ctx, relayHTTPClient(), in.URL+"/connector/v1/claim", "", map[string]string{"code": in.Code, "invitation": invitation, "token": binding.Token}, &claim)
+		})
+		if err != nil || claim.ConnectionID != info.ConnectionID {
+			if status == 409 {
+				return fail(409, "desktop_update_required", "Update WDC desktop to review the requested connection settings.")
+			}
 			return fail(502, "relay_enrollment_unknown", "Enrollment was not confirmed. Inspect the relay before creating another code.")
 		}
 		// control holds the app lock; start without trying to take it again.
+		confirmed = true
 		a.startRelayLocked(mux, origin, info.Origin, result["pairing"].(Pairing).ID, binding)
 		writeJSON(w, 201, map[string]string{"connectionId": binding.ConnectionID})
 		return nil

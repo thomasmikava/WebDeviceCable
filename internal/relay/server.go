@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/thomasmikava/WebDeviceCable/internal/onboarding"
 	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 	_ "modernc.org/sqlite"
 )
@@ -29,6 +30,7 @@ const Grace = 45 * time.Second
 
 type Config struct{ Directory, AdminKey string }
 type ticket struct {
+	onboarding.Options
 	ProjectID, AppUser, CodeHash, ConnectionID string
 	Expires                                    time.Time
 	Declined                                   bool
@@ -241,7 +243,7 @@ func (s *Server) Handler() http.Handler {
 		if s.project(w, r) == nil {
 			return
 		}
-		jsonOut(w, 200, map[string]any{"scopedToolsVersion": 1, "limits": wirelimits.Capabilities()})
+		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
 	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
@@ -270,6 +272,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		onboarding.Options
 		AppUser string `json:"appUser"`
 	}
 	if !read(w, r, &in, 4096) {
@@ -277,6 +280,10 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.AppUser == "" || len(in.AppUser) > 200 {
 		problem(w, 400, "invalid_account")
+		return
+	}
+	if err := in.Options.Validate(p.Origin); err != nil {
+		problem(w, 400, "invalid_logo")
 		return
 	}
 	s.mu.Lock()
@@ -293,7 +300,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	code := ID()
 	id := ID()
-	t := ticket{ProjectID: p.ID, AppUser: in.AppUser, CodeHash: hash(code), ConnectionID: id, Expires: time.Now().Add(5 * time.Minute)}
+	t := ticket{Options: in.Options, ProjectID: p.ID, AppUser: in.AppUser, CodeHash: hash(code), ConnectionID: id, Expires: time.Now().Add(5 * time.Minute)}
 	if e := s.put("ticket", t.CodeHash, t); e != nil {
 		problem(w, 500, "storage_error")
 		return
@@ -315,7 +322,7 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := s.projects[t.ProjectID]
-	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID})
+	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID, "logoURL": t.LogoURL, "requestedPermissions": t.RequestedPermissions})
 }
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Code, Invitation, Token string }
@@ -333,6 +340,10 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	p := s.projects[t.ProjectID]
 	if e != nil || inv.AppID != p.AppID || inv.AppUser != t.AppUser || inv.Origin != p.Origin {
 		problem(w, 400, "identity_mismatch")
+		return
+	}
+	if (t.LogoURL != "" || t.RequestedPermissions.AutomaticApprovals) && inv.ConnectionReviewVersion != 1 {
+		problem(w, 409, "desktop_update_required")
 		return
 	}
 	private, e := newPrivate()

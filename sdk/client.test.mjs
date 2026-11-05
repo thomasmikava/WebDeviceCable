@@ -306,11 +306,11 @@ test('interactive pairing only accepts its own popup, endpoint, nonce and explic
  globalThis.window={location:{origin:peer.origin},open(url){popupURL=url;return popup},addEventListener(type,fn){if(type==='message')listeners.add(fn)},removeEventListener(type,fn){listeners.delete(fn)}};
  const emit=event=>{for(const fn of listeners)fn(event)};
  try{
-  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice'});
+  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',logoURL:peer.origin+'/logo.png',requestedPermissions:{automaticApprovals:true}});
   const requestId=new URLSearchParams(new URL(popupURL).hash.slice(1)).get('connect-request');
-  const event={source:popup,origin:peer.identity.endpoint,data:{requestId,type:'wdc:pairing-ready'}};
+  const event={source:popup,origin:peer.identity.endpoint,data:{requestId,type:'wdc:pairing-ready',connectionReviewVersion:1}};
   emit({...event,source:{}});emit({...event,origin:'https://evil.example'});emit({...event,data:{...event.data,requestId:'bad'}});assert.equal(posted,undefined);
-  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');
+  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');assert.equal(posted.data.logoURL,peer.origin+'/logo.png');assert.deepEqual(posted.data.requestedPermissions,{automaticApprovals:true});
   emit({...event,data:{requestId,type:'wdc:pairing-approved',invitation:peer.invitation}});
   assert.equal((await pending).pairing.appId,'writer');assert.equal(listeners.size,0);assert.equal(posted.data.type,'wdc:pairing-connected');
   const rejected=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice'});
@@ -457,4 +457,16 @@ test('workflow declarations retain native operation hints, recovery aliases and 
   const client=new BridgeClient({connection:{pairingId:'a'.repeat(64),identity:{deviceId:'b'.repeat(64),publicKey:'',endpoint:'http://127.0.0.1:47321'},privateKey:{},publicKey:''},origin:'https://app.example'},transport);
   await client.registerGroups([{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai',children:[{id:'render',name:'Render',kind:'ai',operation:'image',replaces:['legacy']}]}]);
   assert.deepEqual(seen[0].groups,[{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai'},{id:'images.render',name:'Render',operation:'image',replaces:['legacy'],kind:'ai',parentId:'images'}]);
+});
+
+test('a legacy connection window cannot silently ignore requested approval settings',async()=>{
+ const saved=globalThis.window;const listeners=new Set();let opened,posted=false;
+ const popup={closed:false,close(){this.closed=true},postMessage(){posted=true}};
+ globalThis.window={location:{origin:'https://writer.example'},open(url){opened=url;return popup},addEventListener(type,fn){if(type==='message')listeners.add(fn)},removeEventListener(type,fn){listeners.delete(fn)}};
+ try {
+  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',launchInstalled:false,requestedPermissions:{automaticApprovals:true}});
+  const requestId=new URLSearchParams(new URL(opened).hash.slice(1)).get('connect-request');
+  for(const fn of listeners)fn({source:popup,origin:'http://127.0.0.1:47321',data:{type:'wdc:pairing-ready',requestId}});
+  await assert.rejects(pending,error=>error.code==='desktop_update_required');assert.equal(posted,false);assert.equal(popup.closed,true);assert.equal(listeners.size,0);
+ }finally{globalThis.window=saved;}
 });

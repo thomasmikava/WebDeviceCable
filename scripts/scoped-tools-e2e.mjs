@@ -9,6 +9,7 @@ import {resolve} from 'node:path';
 import {BridgeClient} from '../internal/bridge/web/index.js';
 import {RelayClient,RelayAdminClient} from '../internal/bridge/web/relay.js';
 
+const discovery=process.argv.includes('--discovery');
 const provider=process.argv.find(arg=>arg.startsWith('--native='))?.split('=')[1];
 assert.ok(!provider||['codex','claude'].includes(provider));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -56,6 +57,24 @@ try{
   const direct=new BridgeClient({origin,connection:paired.connection});clients.push(direct);await direct.connect();
   for(const [transport,client]of [['direct',direct],['relay',backend]]){
     const pairing=(await client.capabilities()).pairing;
+    if(discovery){
+      let version='1';const seen=[];const word='saffron-'+crypto.randomUUID().slice(0,8);
+      const tools=[
+        {id:'list_domains',title:'List domains',description:'list_domains: discover capability domains before choosing an operation.',readOnly:true,inputSchema:{type:'object',properties:{},additionalProperties:false},execute:()=>({domains:[{id:'verification',description:'Read a synthetic secret token.'}]})},
+        {id:'list_tools_by_domain',title:'List tools by domain',description:'list_tools_by_domain: discover exact operation IDs, versions and argument schemas. Use the verification domain.',readOnly:true,inputSchema:{type:'object',properties:{domain:{type:'string'},query:{type:['string','null']}},required:['domain'],additionalProperties:false},execute:args=>{assert.equal(args.domain,'verification');return {tools:[{operationId:'get_token',version,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value']}}]};}},
+        {id:'execute_tool',title:'Execute operation',description:'execute_tool: execute a discovered operation with its exact version and arguments object. A secret token is only available in the actual result.',operationDetails:true,inputSchema:{type:'object',properties:{operationId:{type:'string'},version:{type:'string'},arguments:{type:'object',additionalProperties:true}},required:['operationId','version','arguments'],additionalProperties:false},execute:async(args,context)=>{assert.equal(args.operationId,'get_token');assert.equal(args.version,version);assert.equal(args.arguments.value,word);await context.reportOperation({id:'get_token',title:'Reading a verification token',version});const marker=transport+'-'+crypto.randomUUID();seen.push({marker,context,version});return {marker};}},
+      ];
+      await client.preflight({kind:'text',provider:provider??'codex',prompt:'Validate discovery inputs',tools});
+      if(!provider){const job=await client.submit({kind:'text',provider:'codex',prompt:'Pending discovery fixture',idempotencyKey:'discovery-admission',tools});assert.equal(job.status,'awaiting_approval');await client.cancel(job.id);console.log(transport,'discovery schema and metadata capabilities admitted');continue;}
+      await api('/pairings/'+pairing.id,{automatic:true},'PATCH');
+      const session=client.session({provider,tools});
+      const first=await session.run({prompt:`Remember ${word}. You must call list_domains, then list_tools_by_domain for verification, then execute_tool with the discovered get_token operation version and arguments.value equal to ${word}. Report its secret marker and the word.`,timeoutSeconds:180});
+      assert.equal(seen.length,1);assert.ok(first.output.includes(seen[0].marker));assert.equal(first.toolOperations?.[0]?.id,'get_token');assert.equal(first.toolOperations?.[0]?.status,'returned');
+      const sessionID=session.id;version='2';
+      const next=await session.run({prompt:'The backend catalog has changed. Discover its current operation version again and execute get_token with the exact word I asked you to remember. Report the new secret marker and remembered word.',timeoutSeconds:180});
+      assert.equal(session.id,sessionID);assert.equal(seen.length,2);assert.equal(seen[1].version,'2');assert.ok(next.output.includes(seen[1].marker));assert.ok(next.output.includes(word));assert.equal(next.toolOperations?.[0]?.version,'2');assert.equal(next.request.toolSetHash,first.request.toolSetHash);
+      await session.close();console.log(provider,transport,'discovery, natural JSON arguments, operation details and catalog changes with continuing native context passed');continue;
+    }
     const seen=[],chatTools=catalog(30,transport+'-chat','value',seen),ruleTools=catalog(3,transport+'-rules','rule',seen);
     assert.ok(Buffer.byteLength(JSON.stringify(chatTools))>40960);
     if(!provider){
@@ -65,10 +84,14 @@ try{
       assert.equal((await client.lookup('chat-admission')).id,jobs[0].id);
       await assert.rejects(client.submit({kind:'text',provider:'codex',prompt:'Pending chat fixture',idempotencyKey:'chat-admission',tools:ruleTools}),error=>error.code==='idempotency_conflict');
       await client.cancel(jobs[1].id);assert.equal(seen.length,0);
-      const maximum=Array.from({length:32},(_,index)=>({id:'max_'+index,title:'\0'.repeat(100),description:'\0'.repeat(2000),inputSchema:{type:'object',properties:{},required:[],additionalProperties:false,description:'<'.repeat(8000)},execute:()=>assert.fail('Preflight installed a handler')}));
+      const manyTools=catalog(300,transport+'-large','value',seen);
+      const large=await client.submit({kind:'text',provider:'codex',prompt:'Large catalog fixture',idempotencyKey:'large-catalog',tools:manyTools});
+      assert.equal(large.status,'awaiting_approval');assert.ok(large.request.toolSetHash);
+      assert.equal((await client.lookup('large-catalog')).id,large.id);await client.cancel(large.id);
+      const maximum=Array.from({length:40},(_,index)=>({id:'max_'+index,title:'\0'.repeat(100),description:'\0'.repeat(2000),inputSchema:{type:'object',properties:{},required:[],additionalProperties:false,description:'<'.repeat(8000)},execute:()=>assert.fail('Preflight installed a handler')}));
       const admission=await client.preflight({kind:'text',provider:'codex',prompt:'<'.repeat(32768),tools:maximum});
       assert.equal(admission.available,false);assert.equal(admission.code,'native_disabled');
-      console.log(transport,'HTTP 30/3 catalogs, scoped cancellation, receipts and conflict passed');continue;
+      console.log(transport,'HTTP 30/3 and 300-tool catalogs, escaped 40-tool preflight, scoped cancellation, receipts and conflict passed');continue;
     }
     await api('/pairings/'+pairing.id,{automatic:true},'PATCH');
     const session=client.session({provider,tools:chatTools});

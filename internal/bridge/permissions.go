@@ -16,12 +16,13 @@ import (
 )
 
 type AppTool struct {
-	ID          string          `json:"id"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
-	ReadOnly    bool            `json:"readOnly"`
-	Hash        string          `json:"hash,omitempty"`
+	ID               string          `json:"id"`
+	Title            string          `json:"title"`
+	Description      string          `json:"description"`
+	InputSchema      json.RawMessage `json:"inputSchema"`
+	ReadOnly         bool            `json:"readOnly"`
+	OperationDetails bool            `json:"operationDetails,omitempty"`
+	Hash             string          `json:"hash,omitempty"`
 }
 
 // ToolGrant is accepted only in legacy control requests; apps own tool authorization.
@@ -52,6 +53,7 @@ type PermissionRequest struct {
 	Status                string          `json:"status"`
 	CreatedAt             time.Time       `json:"createdAt"`
 	Result                json.RawMessage `json:"-"`
+	Operation             *ToolOperation  `json:"operation,omitempty"`
 	Before                string          `json:"before,omitempty"`
 	After                 string          `json:"after,omitempty"`
 	changed               chan struct{}
@@ -183,9 +185,6 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err = decode(w, r, &in); err != nil {
 			return err
 		}
-		if len(in.Tools) > 32 {
-			return fail(400, "invalid_permission", "Too many tools.")
-		}
 		if len(in.Tools) > 0 {
 			return fail(400, "invalid_permission", "App tools are execution-scoped and authorized by the application.")
 		}
@@ -258,6 +257,7 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 
 	mux.HandleFunc("GET /v2/tool-calls", poll)
 	mux.HandleFunc("POST /v2/tool-calls/poll", poll)
+	mux.HandleFunc("POST /v2/tool-calls/{id}/operation", paired(a.reportToolOperation))
 	mux.HandleFunc("POST /v2/tool-calls/{id}/claim", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		op := a.permissions[r.PathValue("id")]
 		lease, err := a.liveLease(r, p)
@@ -298,6 +298,16 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 				return fail(409, "result_conflict", "This call already has a different result.")
 			}
 		} else if op.Status == "dispatched" {
+			if op.Operation != nil {
+				if err := a.update(func(s *State) error {
+					if j := findJob(s, op.JobID); j != nil {
+						completeToolOperation(j, op.ID, "returned")
+					}
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
 			op.Result = append(json.RawMessage(nil), in.Result...)
 			op.Status = "completed"
 			a.signalPermission(op)
@@ -347,7 +357,7 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := decode(w, r, &in); err != nil {
 			return err
 		}
-		if len(in.Tools) > 32 || len(in.Folders) > 16 {
+		if len(in.Folders) > 16 {
 			return fail(400, "grant_limit", "Too many grants.")
 		}
 
@@ -583,7 +593,7 @@ func (a *App) invokeNativeTool(ctx context.Context, job, name string, args json.
 			a.mu.Unlock()
 			return nil, fail(403, "unknown_tool", "This app tool is not registered.")
 		}
-		if err := validateJSONOutput(tool.InputSchema, string(args)); err != nil {
+		if err := validateToolArguments(tool.InputSchema, args); err != nil {
 			a.mu.Unlock()
 			return nil, fail(400, "invalid_tool_arguments", "Arguments do not match the registered schema.")
 		}

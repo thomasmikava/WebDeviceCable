@@ -3,6 +3,8 @@ const $ = id => document.getElementById(id);
 let securityNoticeShown = false;
 let csrf = '', controlSession = '', state, demo, demoPairID, invitation, lastState = '';
 const controlStorageKey='wdc-control-session';
+let connectionWatch, connectionSnapshot, refreshWork, connectionRequestCount=0;
+const connectionLoads=new Map(), connectionViews=new Map();
 try { controlSession=localStorage.getItem(controlStorageKey)??''; } catch { /* Reopen the private link when browser storage is unavailable. */ }
 function storeControlSession() { try { localStorage.setItem(controlStorageKey,controlSession); } catch { /* This panel still works for the current visit. */ } }
 function forgetControlSession() { try { if(localStorage.getItem(controlStorageKey)===controlSession)localStorage.removeItem(controlStorageKey); } catch {} controlSession=''; }
@@ -46,7 +48,7 @@ function action(fn) { return async event => {
   const key = focusControl?.closest('[data-key]')?.dataset.key, actionName = focusControl?.dataset.action;
   target?.setAttribute('aria-busy', 'true');
   if (control) { control.disabled = true; control.prepend(spinner); }
-  try { clearErrors(); await fn(event); await refresh(); } catch (error) { notify(error); }
+  try { clearErrors(); await fn(event); await refresh(true); } catch (error) { notify(error); }
   finally {
     target?.removeAttribute('aria-busy'); spinner.remove(); if (control) control.disabled = false;
     const dialog=document.querySelector('dialog[open]');
@@ -69,7 +71,7 @@ async function saveArtifact(job, artifact) {
   const link=el('a',{href:url,download:artifact.name}); document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
-function lock() { forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
+function lock() {connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
 let currentView;
 function route() {
   const view = ['apps','activity','commands','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'apps';
@@ -167,6 +169,7 @@ function appRow(pair) {
   const items = el('div',{class:'action-menu'},
     menuAction('Program settings',() => openRouting(pair)),
     menuAction('Connection details',() => openConnectionDetails(pair)),
+    menuAction('Edit app',() => openAppAppearance(pair)),
     menuAction(pair.paused ? 'Resume requests' : 'Pause requests',() => api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({paused:!pair.paused})})),
     state.programs?.some(item=>item.type==='custom') ? menuAction('Custom AI program access',()=>openProgramAccess(pair)) : null,
     state.commands.length || grants ? menuAction('Command access',() => openCommandAccess(pair)) : null,
@@ -189,7 +192,7 @@ function appRow(pair) {
   if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openCommandAccess(pair),'text-button'));
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},el('span',{class:'app-mark','aria-hidden':'true'},icon('app')),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
       el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
     el('div',{class:'connection-settings'},choice,el('label',{class:'connection-approval'},el('span',{class:'choice-label'},'Request approval'),selectWrap(approval))),
     access.children.length ? access : null);
@@ -222,6 +225,7 @@ function jobCard(job, history = false) {
   else if (job.status === 'blocked') content.append(el('p', {class:'job-detail'}, job.detail || 'This client is unavailable.', el('a', {href:'#settings'}, 'Details')));
   else if (job.code === 'tab_disconnected') content.append(el('p', {class:'job-detail'}, 'The requesting tab disconnected.'));
   else if (job.status === 'timed_out') content.append(el('p', {class:'job-detail'}, 'The request timed out.'));
+  if (job.toolOperations?.length) content.append(el('ul',{class:'tool-operations'},...job.toolOperations.map(operation=>el('li',{},el('span',{class:'tool-operation-title'},operation.title),el('small',{},operation.status==='running'?'In progress':operation.status==='returned'?'Result returned':'Outcome unconfirmed')))));
   if (job.inputNames?.length) content.append(el('p',{class:'job-detail'},icon('document'),job.inputNames.join(' · ')));
   for (const artifact of job.artifacts ?? []) { const save=button(artifact.mediaType.startsWith('image/')?'Save image':'Save file',()=>saveArtifact(job,artifact));save.prepend(icon('download'));content.append(save); }
   if(job.status==='failed')content.append(el('p',{class:'job-detail'},job.error?.message || job.detail));
@@ -230,6 +234,7 @@ function jobCard(job, history = false) {
   if(definition) details.push(['Program',definition.exec[0]]);
   if (job.execution?.name) details.push(['Executed',job.execution.name]);
   if (job.execution?.model) details.push(['Model',job.execution.model]);
+  for(const operation of job.toolOperations ?? []) details.push(['App operation',`${operation.id}${operation.version ? ' · '+operation.version : ''}`]);
   if (job.execution?.version) details.push(['Version', `${job.execution.version}${job.execution.versionSource === 'configured' ? ' (configured)' : ''}`]);
   if (job.plan?.model) details.push(['Requested model',job.plan.model]);
   if (job.plan?.reasoning) details.push(['Requested reasoning',job.plan.reasoning]);
@@ -247,8 +252,8 @@ function render() {
   const approvals = state.jobs.filter(j => j.status === 'awaiting_approval');
   const pendingCount=approvals.length+(state.permissions?.length??0);$('approval-count').textContent=pendingCount;$('approval-count').hidden=!pendingCount;
   $('runner-state').textContent = state.enabled ? 'Device ready' : 'Requests paused'; $('runner-state').dataset.status = state.enabled ? 'ready' : 'paused'; $('toggle-runner').setAttribute('aria-checked',String(state.enabled));
-  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length || !state.pairingRequests?.length;
-  $('apps-empty').hidden = !!apps.length || !!state.pairingRequests?.length; $('connect-app').hidden = !apps.length;
+  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length || !connectionRequestCount;
+  $('apps-empty').hidden = !!apps.length || !!connectionRequestCount; $('connect-app').hidden = !apps.length;
   $('native-list').replaceChildren(...state.providers.map(nativeChip));
   preserveList($('app-list'),apps.map(appRow));
   const byTime=(a,b)=>b.createdAt.localeCompare(a.createdAt);
@@ -287,15 +292,50 @@ function render() {
     if(pair && catalog!==routingCatalog && (pair.routing?.revision ?? 0)===routingRevision){routingCatalog=catalog;refreshRoutingLabels(pair);}
   }
 }
-async function refresh() {
-  if (!csrf) return;
-  const next = await api('/state'); next.pairings.sort((a,b) => a.id.localeCompare(b.id));
-  if (next.securityReset && !securityNoticeShown) { securityNoticeShown = true; notify('Security updated. Reconnect your apps.'); }
-  const serialized = JSON.stringify(next); state = next;
-  if ($('runner-state').dataset.status === 'offline') { $('runner-state').textContent = next.enabled ? 'Device ready' : 'Requests paused'; $('runner-state').dataset.status = next.enabled ? 'ready' : 'paused'; }
-  if (serialized !== lastState) { lastState = serialized; render(); }
-  void handleLaunches();
+function applyConnectionSnapshot(next) {
+  if(connectionSnapshot && connectionSnapshot.revision>(next.connectionRevision??-1))Object.assign(next,{connectionRevision:connectionSnapshot.revision,pairingRequests:connectionSnapshot.pairingRequests,launches:connectionSnapshot.launches});
+  return next;
 }
+function refresh(force=false) {
+  if(!csrf)return Promise.resolve();
+  if(refreshWork)return force?refreshWork.then(()=>refresh()):refreshWork;
+  refreshWork=(async()=>{
+    const session=controlSession;const result=await api('/state');if(session!==controlSession || !csrf)return;const next=applyConnectionSnapshot(result);
+    next.pairings=next.pairings.map(pair=>({...pair,reportedName:pair.name,name:pair.displayName||pair.name})).sort((a,b)=>a.id.localeCompare(b.id));
+    if(next.securityReset && !securityNoticeShown){securityNoticeShown=true;notify('Security updated. Reconnect your apps.');}
+    const serialized=JSON.stringify(next);state=next;syncIncomingRegistration();
+    for(const [id,item]of connectionLoads)if(item.submitted && next.relayConnections?.some(binding=>binding.connectionId===item.info.connectionId))connectionLoads.delete(id);
+    if($('runner-state').dataset.status==='offline'){$('runner-state').textContent=next.enabled?'Device ready':'Requests paused';$('runner-state').dataset.status=next.enabled?'ready':'paused';}
+    const expired=[...connectionLoads.values()].some(item=>!item.expired&&!item.submitted&&item.expiresAt<Date.now());
+    if(serialized!==lastState || expired){lastState=serialized;render();}
+    void handleLaunches();
+  })().finally(()=>{refreshWork=undefined;});
+  return refreshWork;
+}
+function watchConnections() {
+  connectionWatch?.abort();const controller=new AbortController();connectionWatch=controller;
+  void(async()=>{
+    let after;
+    while(!controller.signal.aborted && csrf){
+      try {
+        const response=await api('/connection-events'+(after===undefined?'':`?after=${after}`),{signal:controller.signal});
+        if(controller.signal.aborted)return;
+        after=response.revision;
+        if(state && response.revision>=(state.connectionRevision??-1)){
+          const advanced=response.revision>(state.connectionRevision??-1);
+          const changed=JSON.stringify([state.pairingRequests,state.launches])!==JSON.stringify([response.pairingRequests,response.launches]);
+          connectionSnapshot=response;Object.assign(state,{connectionRevision:response.revision,pairingRequests:response.pairingRequests,launches:response.launches});
+          syncIncomingRegistration();if(changed){lastState='';render();void handleLaunches();}
+          if(advanced)void refresh(true).catch(()=>{});
+        }
+      } catch {
+        if(controller.signal.aborted || !csrf)return;
+        await new Promise(resolve=>{const timer=setTimeout(done,1000);function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
+      }
+    }
+  })();
+}
+
 function openConnect() {
   clearErrors(); $('invite-manual-copy')?.remove(); $('invite-copy-hint').textContent='Paste it into your app. Expires in 5 minutes.';
   $('invite-form').reset(); for(const detail of $('invite-form').querySelectorAll('details'))detail.open=false;
@@ -303,28 +343,35 @@ function openConnect() {
   $('invite-commands-section').hidden=!state.commands.length; commandPicker($('invite-commands'),{},$('invite-command-consent')); $('connect-dialog').showModal();
 }
 $('connect-app').onclick=openConnect; $('connect-first').onclick=openConnect;
-let reviewedRelay, configuringRelay, processingLaunch=false;
+let reviewedRelay, configuringRelay, processingLaunch=false, relayReviewGeneration=0;
 function relayInput() { const data=new FormData($('relay-form'));return {url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()}; }
 function showRelayReview(info) {
   reviewedRelay=info;
-  $('relay-review').replaceChildren(el('strong',{},info.name),el('span',{},info.origin),el('span',{},`Account: ${info.appUser}`),
+  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),el('small',{},info.origin))),el('span',{},`Account: ${info.appUser}`),connectionReview(info,`relay:${info.connectionId}`),
     el('small',{},'This server can request work while the website is closed. Your local approvals and permissions still apply.'));
   $('relay-review').hidden=false; $('relay-submit').textContent='Approve and choose models'; $('relay-decline').hidden=false;
 }
 function openRelay() {
-  clearErrors(); reviewedRelay=undefined; $('relay-form').reset(); $('relay-review').replaceChildren(); $('relay-review').hidden=true;
+  clearErrors(); relayReviewGeneration++;reviewedRelay=undefined; $('relay-form').reset(); $('relay-review').replaceChildren(); $('relay-review').hidden=true;
   $('relay-submit').textContent='Review connection'; $('relay-decline').hidden=true; $('relay-manual').open=true; $('relay-dialog').showModal();
 }
 $('connect-server').onclick=openRelay;
 $('close-relay').onclick=()=>$('relay-dialog').close();
-$('relay-form').oninput=()=>{reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').hidden=true;$('relay-decline').hidden=true;};
+$('relay-form').oninput=event=>{if(!['url','code'].includes(event.target.name))return;relayReviewGeneration++;reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').hidden=true;$('relay-decline').hidden=true;};
 $('relay-decline').onclick=action(async()=>{
   await api('/relay/decline',{method:'POST',body:JSON.stringify(relayInput())});$('relay-dialog').close();notify('Connection declined.','success');
 });
 $('relay-form').onsubmit=action(async()=>{
   const input=relayInput();
-  if(!reviewedRelay){showRelayReview(await api('/relay/inspect',{method:'POST',body:JSON.stringify(input)}));return;}
-  const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay})});
+  if(!reviewedRelay){
+    const generation=++relayReviewGeneration;
+    $('relay-review').hidden=false;$('relay-review').replaceChildren(el('div',{class:'connection-loading',role:'status'},icon('loader','spinner'),el('span',{},'Loading connection details…')));
+    try{const info=await api('/relay/inspect',{method:'POST',body:JSON.stringify(input)});if(generation===relayReviewGeneration && $('relay-dialog').open)showRelayReview(info);}
+    catch(error){if(generation===relayReviewGeneration)$('relay-review').replaceChildren(el('p',{class:'connection-server-note',role:'alert'},'Couldn’t load the connection. Check the URL and pairing code, then try again.'));throw error;}
+    return;
+  }
+  await pendingLogo(reviewDrafts.get(`relay:${reviewedRelay.connectionId}`));
+  const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay,...reviewDecision(`relay:${reviewedRelay.connectionId}`)})});
   configuringRelay={relayUrl:input.url,connectionId:result.connectionId}; $('relay-dialog').close();
   notify('Approved. Waiting for the website to finish connecting; program settings will open automatically.','success');
 });
@@ -336,16 +383,19 @@ async function handleLaunches() {
       const pair=state.pairings.find(item=>item.id===binding?.pairingId && !item.revoked);
       if(pair?.groupsDeclared && !document.querySelector('dialog[open]')){configuringRelay=undefined;location.hash='apps';openRouting(pair);}
     }
-    const intent=state.launches?.[0]; if(!intent || document.querySelector('dialog[open]'))return;
-    await api(`/launch-intents/${intent.requestId}/dismiss`,{method:'POST',body:'{}'});
+    const intent=state.launches?.find(item=>item.kind); if(!intent || document.querySelector('dialog[open]'))return;
+    if(intent.kind==='settings'){await api(`/launch-intents/${intent.requestId}/dismiss`,{method:'POST',body:'{}'});}
     if(intent.kind==='settings'){
       const binding=state.relayConnections?.find(item=>item.relayUrl===intent.relayUrl && item.connectionId===intent.connectionId);
       const pair=state.pairings.find(item=>item.id===binding?.pairingId && !item.revoked);
       if(!pair)throw new Error('This server connection is not paired with this WDC device. Connect it from the website first.');
       location.hash='apps';openRouting(pair);return;
     }
-    openRelay();$('relay-form').elements.url.value=intent.relayUrl;$('relay-form').elements.code.value=intent.code;
-    showRelayReview(await api('/relay/inspect',{method:'POST',body:JSON.stringify(relayInput())}));$('relay-manual').open=false;
+    if(!connectionLoads.has(intent.requestId)){
+      const item={id:intent.requestId,origin:intent.relayUrl,loading:true,expiresAt:Date.now()+300000,input:{url:intent.relayUrl,code:intent.code}};
+      connectionLoads.set(item.id,item);render();
+      void inspectConnection(item);
+    }
   } catch(error){notify(error);} finally {processingLaunch=false;}
 }
 $('show-invitation-form').onclick=()=>{$('connect-start').hidden=true;$('invite-form').hidden=false;$('connect-title').textContent='Create an invitation';$('invite-form').elements.name.focus();};
@@ -493,14 +543,14 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refre
 let refreshTimer,booting=false;
 document.addEventListener('invalid', event => { let parent = event.target.parentElement; while (parent) { if (parent.tagName === 'DETAILS') parent.open = true; parent = parent.parentElement; } }, true);
 async function boot() {
-  if(booting)return;booting=true;clearInterval(refreshTimer);
+  if(booting)return;booting=true;clearInterval(refreshTimer);connectionWatch?.abort();
   try {
     const key = new URLSearchParams(location.hash.slice(1)).get('key');
     let session;
     if (key) { history.replaceState(null, '', '/'); session=await api('/session', {method:'POST',headers:{Authorization:`Bearer ${key}`}}); }
     else session=await api('/session');
-    csrf=session.csrf; controlSession=session.session; storeControlSession();
-    $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(); initPairingRequest();
+    connectionSnapshot=undefined;csrf=session.csrf; controlSession=session.session; storeControlSession();
+    $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(true); watchConnections(); initPairingRequest();
     refreshTimer=setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'Runner offline'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
   } catch { lock(); } finally {booting=false;}
 }
@@ -682,7 +732,7 @@ function openRouting(pair) {
   $('routing-command-access').hidden=!state.commands.length && !Object.keys(pair.actions??{}).length;
   clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair)]);
   $('routing-title').textContent=`Programs and models · ${pair.name}`;
-  $('routing-context').textContent=`${pair.origin} · Set a default, then customize any workflow or stage. Pairing does not enable automatic execution.`;
+  $('routing-context').textContent=`${pair.origin} · Choose a default AI program, then customize individual workflows if needed.`;
   $('routing-default').replaceChildren(routeEditor(pair,null,pair.routing?.default));
   const append=(parent='')=>(pair.groups ?? []).filter(group=>!group.hidden && (group.parentId ?? '')===parent).map(group=>{
     const row=routeEditor(pair,group,pair.routing?.groups?.[group.id]);
@@ -740,7 +790,7 @@ function initPairingRequest() {
   if (!/^[a-f0-9]{64}$/.test(requestId ?? '') || !window.opener) return;
   const opener = window.opener;
   let sending = false, registered = false, delivered = false;
-  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId},'*'); };
+  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId,connectionReviewVersion:1},'*'); };
   const timer = setInterval(announce,500); announce();
   const stop = () => {clearInterval(timer);clearInterval(poll);window.removeEventListener('message',receive);};
   const expires = setTimeout(stop,300000);
@@ -751,11 +801,16 @@ function initPairingRequest() {
       stop();clearTimeout(expires);history.replaceState(null,'','#apps');notify('App connected','success');return;
     }
     if (incomingPairing || event.data.type !== 'wdc:pairing-request' || !validWebsite(event.origin)) return;
-    const {appId,name,appUser} = event.data;
+    const {appId,name,appUser,logoURL,requestedPermissions} = event.data;
     if (![appId,name,appUser].every(value => typeof value === 'string' && value.trim()) || appId.length > 100 || name.length > 100 || appUser.length > 200) return;
-    incomingPairing = {requestId,opener,origin:event.origin,appId,name,appUser};clearInterval(timer);
-    try {await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser})});registered=true;await refresh();}
-    catch(error){notify(error);stop();}
+    incomingPairing = {requestId,opener,origin:event.origin,appId,name,appUser,registered:()=>{registered=true;},cancel:()=>{delivered=true;opener.postMessage({type:'wdc:pairing-rejected',requestId},event.origin);stop();clearTimeout(expires);}};clearInterval(timer);
+    const item={id:requestId,name,origin:event.origin,loading:true,expiresAt:Date.now()+300000};connectionLoads.set(requestId,item);render();
+    const register=async()=>{
+      item.loading=true;item.error=undefined;render();
+      try{await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser,logoURL,requestedPermissions})});registered=true;connectionLoads.delete(requestId);await refresh();}
+      catch(error){if(connectionLoads.get(requestId)!==item)return;item.loading=false;item.error=error.message;item.retry=register;render();}
+    };
+    void register();
   }
   const poll = setInterval(async () => {
     if(!registered || delivered || sending) return;
@@ -770,16 +825,196 @@ function initPairingRequest() {
   window.addEventListener('pagehide',() => {if(registered && !delivered) void api(`/pairing-requests/${requestId}/decision`,{method:'POST',keepalive:true,body:JSON.stringify({approve:false})}).catch(()=>{});},{once:true});
 }
 function validWebsite(origin) {try{const url=new URL(origin);return url.origin===origin&&(url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname));}catch{return false;}}
+const reviewDrafts=new Map(), logoBlobs=new Map();
+function appMark(id) {
+  const mark=el('span',{class:'app-mark','aria-hidden':'true'},icon('app'));
+  if(id) {
+    if(!logoBlobs.has(id))logoBlobs.set(id,controlFetch(`/logos/${id}`).then(response=>response.blob()).then(blob=>URL.createObjectURL(blob)).catch(()=>{logoBlobs.delete(id);return null;}));
+    void logoBlobs.get(id).then(url=>{if(url)mark.replaceChildren(el('img',{src:url,alt:''}));});
+  }
+  return mark;
+}
+function reviewDraft(info,key) {
+  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:info.requestedPermissions?.automaticApprovals===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false});
+  return reviewDrafts.get(key);
+}
+function reviewMark(info,key) {
+  const draft=reviewDraft(info,key);
+  draft.heading=appMark(draft.logoId);
+  if(!draft.loaded && draft.initialURL) {
+    draft.loaded=true;
+    draft.loadingPromise=api('/logos',{method:'POST',body:JSON.stringify({url:draft.initialURL,origin:info.origin})}).then(result=>{
+      draft.logoId=result.logoId;
+      const mark=appMark(result.logoId);draft.heading.replaceWith(mark);draft.heading=mark;
+    }).catch(()=>{});
+  }
+  return draft.heading;
+}
+function pendingLogo(draft) {return draft?.pending??(!draft?.edited?draft?.loadingPromise:undefined);}
+function reviewDecision(key) {const draft=reviewDrafts.get(key);return {automatic:draft?.automatic??false,logoId:draft?.logoId??''};}
+function connectionReview(info,key) {
+  const draft=reviewDraft(info,key),automatic=el('input',{type:'checkbox','aria-label':`Approve requests automatically for ${info.name}`,'data-action':'Automatic approvals'});automatic.checked=draft.automatic;
+  automatic.onchange=()=>{draft.automatic=automatic.checked;};
+  return el('div',{class:'connection-review'},el('label',{class:'check-line'},automatic,el('span',{},'Approve requests automatically',el('small',{},'Turn off to review each AI request before it runs.'))),el('small',{class:'muted'},'Connecting will not share your computer’s folders or give this app permission to run commands.'));
+}
+function openAppAppearance(pair) {
+  const dialog=makeDialog('app-appearance-dialog','Edit app'),original=pair.logoId??'';
+  let selected=original,previewedURL='',busy=false,saving=false,closed=false;
+  const controller=new AbortController();
+  const preview=el('div',{class:'logo-preview',role:'img','aria-label':`${selected?'Current logo':'No logo'} for ${pair.name}`},appMark(selected));
+  const caption=el('small',{},selected?'Current logo':'No logo');
+  const status=el('p',{class:'logo-status',role:'status',hidden:''});
+  const error=el('p',{class:'logo-error',role:'alert',hidden:''});
+  const name=el('input',{type:'text',id:'app-display-name',required:'',maxlength:'100',autocomplete:'off','aria-describedby':'app-name-hint'});name.value=pair.name;
+  const nameHint=el('small',{id:'app-name-hint',class:'field-hint'},'Only changes how this app appears in WDC.');
+  const file=el('input',{type:'file',accept:'image/png,image/jpeg,image/gif,image/svg+xml',hidden:'',tabindex:'-1','aria-label':'Choose logo image'});
+  const url=el('input',{type:'url',id:'logo-image-url',placeholder:'https://example.com/logo.png',maxlength:'2048','aria-describedby':'logo-url-hint'});
+  function message(text,isError=false) {
+    status.hidden=isError||!text;status.textContent=isError?'':text;
+    error.hidden=!isError;error.textContent=isError?text:'';
+  }
+  function updateControls() {
+    const unpreviewed=Boolean(url.value.trim())&&url.value.trim()!==previewedURL;
+    const nextName=name.value.trim();
+    const nameError=!nextName?'Enter a name.':new TextEncoder().encode(nextName).length>100?'Use a shorter name.':/[\u0000-\u001f\u007f-\u009f]/u.test(nextName)?'Use a single-line name.':'';
+    name.disabled=busy;name.setCustomValidity(nameError);
+    nameHint.textContent=nameError||'Only changes how this app appears in WDC.';
+    nameHint.classList.toggle('invalid',Boolean(nameError));
+    upload.disabled=busy;url.disabled=busy;load.disabled=busy||!url.value.trim();
+    remove.hidden=!selected;remove.disabled=busy;
+    save.disabled=busy||(selected===original&&nextName===pair.name)||unpreviewed||Boolean(nameError);
+    dialog.querySelector('.dialog-heading button').disabled=saving;
+    dialog.setAttribute('aria-busy',String(busy));
+  }
+  name.oninput=()=>updateControls();
+  function showPreview(id) {
+    selected=id;preview.replaceChildren(appMark(id));
+    caption.textContent=id?(id===original?'Current logo':'New logo'):'No logo';
+    preview.setAttribute('aria-label',`${caption.textContent} for ${pair.name}`);
+  }
+  async function choose(work,source) {
+    if(busy||closed)return;
+    const focusControl=document.activeElement;
+    busy=true;message('Loading image…');updateControls();
+    try {
+      const result=await work();if(closed)return;
+      showPreview(result.logoId);previewedURL=source;url.value=source;
+      message(selected===original?'This is already the current logo.':'Preview updated. Save changes to apply.');
+    } catch(failure) {
+      if(!closed)message(failure.message,true);
+    } finally {
+      busy=false;
+      if(!closed){updateControls();if(document.activeElement===document.body&&focusControl instanceof HTMLElement&&dialog.contains(focusControl))focusControl.focus({preventScroll:true});}
+    }
+  }
+  const upload=el('button',{type:'button',class:'button secondary',onclick:()=>file.click()},'Upload image');
+  file.onchange=()=>{
+    const image=file.files?.[0];file.value='';if(!image)return;
+    if(image.size>262144){message('Choose an image smaller than 256 KiB.',true);return;}
+    void choose(()=>api('/logos/upload',{method:'POST',signal:controller.signal,headers:{'Content-Type':image.type||'application/octet-stream'},body:image}),'');
+  };
+  const load=el('button',{type:'submit',class:'button secondary'},'Preview');
+  const linkForm=el('form',{class:'logo-link-form'},el('label',{for:'logo-image-url'},'Or use an image URL'),el('div',{class:'logo-link-input'},url,load),el('small',{id:'logo-url-hint'},'Paste a link directly to the image.'));
+  linkForm.onsubmit=event=>{
+    event.preventDefault();if(!url.reportValidity())return;
+    const source=url.value.trim();if(!source)return;
+    void choose(()=>api('/logos',{method:'POST',signal:controller.signal,body:JSON.stringify({url:source,origin:pair.origin})}),source);
+  };
+  url.oninput=()=>{message(url.value.trim()&&url.value.trim()!==previewedURL?'Preview the image before saving.':'');updateControls();};
+  const remove=el('button',{type:'button',class:'text-button danger',onclick:()=>{
+    showPreview('');url.value='';previewedURL='';message('Logo removed from preview. Save changes to apply.');updateControls();(save.disabled?upload:save).focus();
+  }},'Remove logo');
+  const cancel=el('button',{type:'button',class:'button secondary',onclick:()=>{if(!saving)dialog.close();}},'Cancel');
+  const save=el('button',{type:'button',class:'button primary',onclick:async()=>{
+    if(save.disabled||closed)return;
+    busy=true;saving=true;message('Saving…');updateControls();cancel.disabled=true;
+    try {
+      const displayName=name.value.trim()===(pair.reportedName??pair.name)?'':name.value.trim();
+      await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({displayName,logoId:selected})});
+      dialog.close();await refresh(true);
+    } catch(failure) {if(!closed)message(failure.message,true);}
+    finally {busy=false;saving=false;cancel.disabled=false;if(!closed)updateControls();}
+  }},'Save changes');
+  dialog.addEventListener('close',()=>{closed=true;controller.abort();});
+  dialog.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
+  dialog.addEventListener('click',event=>{if(saving&&event.target===dialog)event.stopPropagation();});
+  dialog.append(el('div',{class:'dialog-body logo-body'},
+    el('div',{class:'app-name-field'},el('label',{for:'app-display-name'},'Display name'),name,nameHint),
+    el('div',{class:'logo-current'},preview,el('div',{class:'logo-identity'},el('strong',{},'Logo'),caption,upload),file),
+    el('p',{class:'logo-format-hint'},'PNG, JPG, GIF or SVG · up to 256 KiB'),linkForm,status,error),
+    el('div',{class:'dialog-actions logo-actions'},remove,el('div',{class:'logo-save-actions'},cancel,save)));
+  updateControls();dialog.showModal();name.focus();
+}
+function syncIncomingRegistration() {
+  if(!incomingPairing || !state?.pairingRequests?.some(item=>item.id===incomingPairing.requestId))return;
+  incomingPairing.registered();connectionLoads.delete(incomingPairing.requestId);
+}
+function visibleConnectionRequests() {
+  const paired=new Set(state.pairings.map(pair=>pair.id));
+  const requests=(state.pairingRequests??[]).filter(item=>!item.pairingId||!paired.has(item.pairingId)).map(item=>item.status==='approved'?{...item,submitted:true}:item);
+  const ids=new Set(requests.map(item=>item.id));
+  const relayApprovals=new Set((state.pairingRequests??[]).filter(item=>item.status==='approved'&&item.connectionId).map(item=>`${item.relayUrl}:${item.connectionId}`));
+  for(const item of connectionLoads.values())if(!ids.has(item.id)&&!relayApprovals.has(`${item.input?.url}:${item.info?.connectionId}`)){if(!item.submitted && item.expiresAt<Date.now()){item.expired=true;item.loading=false;item.error='This request expired. Start a new connection from the app.';}requests.push(item.info?{...item,...item.info,id:item.id}:item);ids.add(item.id);}
+  for(const intent of state.launches??[])if(intent.kind!=='settings'&&!ids.has(intent.requestId))requests.push({id:intent.requestId,origin:intent.origin||intent.relayUrl,loading:true});
+  return requests;
+}
 function renderConnectionRequests() {
-  const requests = state.pairingRequests ?? [];
-  $('connection-requests').hidden = !requests.length;
-  $('connection-request-count').textContent = requests.length; $('connection-request-count').hidden = !requests.length;
-  document.title = requests.length ? `(${requests.length}) WebDeviceCable` : 'WebDeviceCable';
-  preserveList($('connection-request-list'),requests.map(request => el('article',{class:'connection-request','data-key':request.id},
-    el('div',{class:'connection-request-heading'},icon('external'),el('strong',{},request.name)),
-    el('p',{class:'connection-request-origin'},request.origin),
-    el('details',{class:'job-details'},disclosure('Account details'),el('dl',{},el('dt',{},'Account ID'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId))),
-    el('div',{class:'connection-request-actions'},el('small',{},'Asks before running requests'),el('div',{class:'actions'},button('Decline',()=>api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:false})})),button('Connect',()=>api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true})}),'primary'))))));
+  const requests=visibleConnectionRequests();connectionRequestCount=requests.length;
+  $('connection-requests').hidden=!requests.length;
+  $('connection-request-count').textContent=requests.length;$('connection-request-count').hidden=!requests.length;
+  document.title=requests.length?`(${requests.length}) WebDeviceCable`:'WebDeviceCable';
+  const previous=new Map(connectionViews);
+  const rows=requests.map(request=>{
+    const signature=JSON.stringify(request),cached=connectionViews.get(request.id);
+    if(cached?.signature===signature)return cached.node;
+    const ready=!request.loading&&!request.error&&!request.submitted && !!request.name;
+    const title=request.name??'New connection';
+    const heading=el('div',{class:'connection-request-heading'},ready?reviewMark(request,request.id):appMark(request.logoId??reviewDrafts.get(request.id)?.logoId),el('div',{class:'connection-request-identity'},el('h3',{},title),el('small',{},request.origin)));
+    const card=el('article',{class:`connection-request${ready?'':' connection-pending'}`,'data-key':request.id,tabindex:'-1','aria-label':`${title} connection request`},heading);
+    connectionViews.set(request.id,{signature,node:card,name:request.name});
+    if(!ready){
+      card.append(el('div',{class:'connection-loading',role:request.error?'alert':'status'},icon(request.error?'inbox':'loader',request.error?'':'spinner'),el('span',{},request.error??(request.submitted?'Connecting…':'Loading connection details…'))));
+      if(request.submitted&&!request.error)card.append(el('div',{class:'connection-placeholder','aria-hidden':'true'},...Array.from({length:2},()=>el('div',{},el('span'),el('span')))));
+      if(request.error){card.append(el('div',{class:'connection-request-actions'},button('Dismiss',()=>dismissConnection(request)),request.expired?null:button('Try again',()=>request.input?inspectConnection(connectionLoads.get(request.id)):request.retry())));}
+      return card;
+    }
+    const details=el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},el('dt',{},'Account'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId)));
+    card.append(connectionReview(request,request.id));
+    if(request.input)card.append(el('p',{class:'connection-server-note'},'This app can send requests even when its website is closed.'));
+    card.append(el('div',{class:'connection-request-footer'},details,el('div',{class:'actions'},button('Decline',()=>declineConnection(request)),button('Connect',()=>approveConnection(request),'primary'))));
+    if(cached?.node.querySelector('details')?.open)details.open=true;
+    return card;
+  });
+  const root=$('connection-request-list'),active=document.activeElement,key=active?.closest('[data-key]')?.dataset.key,actionName=active?.dataset.action;
+  const retained=new Set(rows);for(const node of [...root.children])if(!retained.has(node))node.remove();
+  let cursor=root.firstElementChild;for(const row of rows){if(row===cursor)cursor=cursor.nextElementSibling;else root.insertBefore(row,cursor);}
+  const ids=new Set(requests.map(item=>item.id));for(const id of connectionViews.keys())if(!ids.has(id))connectionViews.delete(id);
+  if(key && !active.isConnected){const row=connectionViews.get(key)?.node;if(row)([...row.querySelectorAll('[data-action]')].find(node=>node.dataset.action===actionName)??row).focus({preventScroll:true});}
+  const arrived=requests.find(request=>!previous.has(request.id)||request.name && previous.get(request.id)?.name!==request.name);
+  if(arrived)$('connection-request-announcement').textContent=arrived.submitted?`${arrived.name} is connecting.`:arrived.name?`${arrived.name} wants to connect.`:'A new connection request is loading.';
+}
+async function inspectConnection(item) {
+  item.loading=true;item.error=undefined;if(state)render();
+  try{
+    // Show the card before inspecting the relay or dismissing its launch notification.
+    await api(`/launch-intents/${item.id}/dismiss`,{method:'POST',body:'{}'});
+    const info=await api('/relay/inspect',{method:'POST',body:JSON.stringify(item.input)});
+    if(connectionLoads.get(item.id)!==item)return;
+    item.info=info;item.loading=false;
+  }catch(error){if(connectionLoads.get(item.id)===item){item.loading=false;item.error=error.message;}}
+  if(state)render();
+}
+function dismissConnection(request) {if(incomingPairing?.requestId===request.id)incomingPairing.cancel();connectionLoads.delete(request.id);if(state)render();}
+async function declineConnection(request) {
+  if(request.input){await api('/relay/decline',{method:'POST',body:JSON.stringify(request.input)});connectionLoads.delete(request.id);}
+  else {await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:false})});if(incomingPairing?.requestId===request.id)incomingPairing.cancel();}
+}
+async function approveConnection(request) {
+  await pendingLogo(reviewDrafts.get(request.id));
+  if(!request.input){await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true,...reviewDecision(request.id)})});return;}
+  const item=connectionLoads.get(request.id);
+  const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...item.input,expected:item.info,...reviewDecision(item.id)})});
+  item.submitted=true;configuringRelay={relayUrl:item.input.url,connectionId:result.connectionId};render();
 }
 
 // Permissions stay out of the main connection layout until the user needs them.

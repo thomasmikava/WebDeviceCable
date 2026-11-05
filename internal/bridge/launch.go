@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/thomasmikava/WebDeviceCable/internal/onboarding"
 )
 
 type LaunchIntent struct {
@@ -92,12 +94,14 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 		intent.Expires = a.now().Add(5 * time.Minute)
 		intent.Used = map[string]bool{}
 		a.launchIntents[intent.ID] = &intent
+		a.notifyConnections()
 		writeJSON(w, 201, map[string]bool{"ok": true})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/launch-intents/{id}/dismiss", control(func(w http.ResponseWriter, r *http.Request) error {
 		if intent := a.launchIntents[r.PathValue("id")]; intent != nil {
 			intent.Handled = true
+			a.notifyConnections()
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return nil
@@ -108,6 +112,7 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 			return err
 		}
 		var in struct {
+			onboarding.Options
 			ID        string `json:"requestId"`
 			Origin    string `json:"origin"`
 			PublicKey string `json:"publicKey"`
@@ -143,12 +148,16 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 		if err = validatePairing(Pairing{AppID: in.AppID, Name: in.Name, AppUser: in.AppUser, Origin: in.Origin, Mode: "restricted"}); err != nil {
 			return fail(400, "invalid_pairing", err.Error())
 		}
+		if err := in.Options.Validate(in.Origin); err != nil {
+			return fail(400, "invalid_logo", err.Error())
+		}
 		request := a.pairingRequests[in.ID]
 		if request == nil {
-			request = &pairingRequest{ID: in.ID, AppID: in.AppID, Name: in.Name, AppUser: in.AppUser, Origin: in.Origin, PublicKey: in.PublicKey, Status: "pending", ExpiresAt: intent.Expires}
+			request = &pairingRequest{Options: in.Options, ID: in.ID, AppID: in.AppID, Name: in.Name, AppUser: in.AppUser, Origin: in.Origin, PublicKey: in.PublicKey, Status: "pending", ExpiresAt: intent.Expires}
 			a.pairingRequests[in.ID] = request
+			a.notifyConnections()
 		}
-		if request.AppID != in.AppID || request.AppUser != in.AppUser || request.Name != in.Name || request.PublicKey != in.PublicKey {
+		if request.Options != in.Options || request.AppID != in.AppID || request.AppUser != in.AppUser || request.Name != in.Name || request.PublicKey != in.PublicKey {
 			return fail(409, "identity_mismatch", "The connection identity changed.")
 		}
 		raw, _ := b64.DecodeString(in.Ephemeral)
@@ -172,7 +181,7 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(map[string]string{"status": request.Status, "invitation": request.Invitation})
+		body, _ := json.Marshal(map[string]any{"status": request.Status, "invitation": request.Invitation, "connectionReviewVersion": 1})
 		encrypted, err := sealMessage(cipher, in.ID, "launch", body)
 		if err != nil {
 			return err
@@ -190,7 +199,7 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 func (a *App) pendingLaunchIntents() []LaunchIntent {
 	result := []LaunchIntent{}
 	for _, intent := range a.launchIntents {
-		if intent.Kind != "" && !intent.Handled && a.now().Before(intent.Expires) {
+		if !intent.Handled && a.now().Before(intent.Expires) && (intent.Kind != "" || a.pairingRequests[intent.ID] == nil) {
 			result = append(result, *intent)
 		}
 	}

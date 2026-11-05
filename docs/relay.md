@@ -157,3 +157,8 @@ Streaming contracts follow [OpenAI Responses](https://developers.openai.com/api/
 Run `npm ci --prefix tests/relay-contract`, `go test -race ./internal/relay ./internal/bridge`, `npm run test:package`, and `node scripts/relay-e2e.mjs` after building `.cache/bin/webdevicecable` and `wdc-relay:local`. `RORIDO_WDC_SDK=/path/to/rorido/apps/main-fe/node_modules/@webdevicecable/sdk/index.js` exercises Rorido's installed published browser package. `--native` additionally runs synthetic Codex/Claude text, JSON, session, callback and Codex image-generation/edit checks through the Docker relay. All harness state and volumes are disposable; no existing app database is used.
 
 After packaging, set `WDC_RELAY_SDK=dist/relay-client/cjs/relay.js` or `WDC_RELAY_SDK=dist/relay-client/relay.js` to exercise the shipped CommonJS or ESM entry with the same Docker harness. The harness always registers its projects through the management API and checks independent projects on one desktop, cross-project isolation, key rotation, restart and project revocation alongside the direct client. CI exercises both formats and verifies their runtime exports and TypeScript declarations.
+
+
+## Connection review preview
+
+The unpublished 0.2.1 preview accepts `logoURL` and `requestedPermissions: { automaticApprovals: true }` on `RelayClient.enroll`, matching browser pairing. Suggestions are stored with the enrollment ticket and reviewed on the desktop; the user can change them before approval. They do not alter existing connections. See [connection review](connection-review.md) for local testing, image limits and rollout requirements.

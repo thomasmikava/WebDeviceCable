@@ -28,15 +28,16 @@ import (
 var b64 = base64.RawURLEncoding
 
 type invitation struct {
-	V         int    `json:"v"`
-	Secret    string `json:"secret"`
-	Endpoint  string `json:"endpoint"`
-	DeviceID  string `json:"deviceId"`
-	PublicKey string `json:"publicKey"`
-	AppID     string `json:"appId"`
-	AppUser   string `json:"appUser"`
-	Origin    string `json:"origin"`
-	ExpiresAt int64  `json:"expiresAt"`
+	ConnectionReviewVersion int    `json:"connectionReviewVersion,omitempty"`
+	V                       int    `json:"v"`
+	Secret                  string `json:"secret"`
+	Endpoint                string `json:"endpoint"`
+	DeviceID                string `json:"deviceId"`
+	PublicKey               string `json:"publicKey"`
+	AppID                   string `json:"appId"`
+	AppUser                 string `json:"appUser"`
+	Origin                  string `json:"origin"`
+	ExpiresAt               int64  `json:"expiresAt"`
 }
 type signed struct {
 	Payload   string `json:"payload"`
@@ -298,7 +299,15 @@ func (c *v2Client) exchange(ctx context.Context, ch *channel, pairing, method, p
 	if authorization != "" {
 		binding["authorization"] = authorization
 	}
-	raw, _ := json.Marshal(binding)
+	// This is signed JSON data, not HTML. Escaping '<', '>' and '&' here can
+	// expand an admitted catalog beyond the encrypted-envelope byte budget.
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(binding); err != nil {
+		return nil, err
+	}
+	raw := bytes.TrimSuffix(payload.Bytes(), []byte("\n"))
 	signature, e := sign(c.key, raw)
 	if e != nil {
 		return nil, e

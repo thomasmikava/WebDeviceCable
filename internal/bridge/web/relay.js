@@ -1,5 +1,5 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
-import { BridgeClient, BridgeError } from './index.js';
+import { BridgeClient, BridgeError, connectionReviewOptions } from './index.js';
 import { nonce } from './secure.js';
 export { BridgeError, BridgeJobError } from './index.js';
 function endpoint(raw) {
@@ -65,9 +65,13 @@ export class RelayClient extends BridgeClient {
         const identity = { deviceId: '', publicKey: '', endpoint: base };
         if (!/^[a-f0-9]{64}$/.test(relay.connectionId) || !relay.account.appUser)
             throw new Error('A paired account connection is required.');
-        let checked = false;
+        let checked = false, legacyToolCountLimit, inputSchemaVersion, operationDetailsVersion;
         const transport = {
             reset() { checked = false; },
+            checkToolCount(count) { if (legacyToolCountLimit !== undefined && legacyToolCountLimit > 0 && count > legacyToolCountLimit)
+                throw new BridgeError('relay_update_required', 'Update the WDC relay to use this tool catalog. This relay still advertises a limit on the number of tools per execution.', 409); },
+            checkToolFeatures(schema, operation) { if (schema && inputSchemaVersion !== 1 || operation && operationDetailsVersion !== 1)
+                throw new BridgeError('relay_update_required', 'Update the WDC relay to support these tool input schemas and operation details.', 409); },
             async fetch(path, init = {}, lease = '') {
                 await relay.authorize?.();
                 if (!checked) {
@@ -82,6 +86,9 @@ export class RelayClient extends BridgeClient {
                     }
                     if (capability.scopedToolsVersion !== 1)
                         throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.0 or later.', 409);
+                    legacyToolCountLimit = capability.limits?.toolsPerExecution;
+                    inputSchemaVersion = capability.toolInputSchemaVersion;
+                    operationDetailsVersion = capability.toolOperationDetailsVersion;
                     checked = true;
                 }
                 const response = await fetch(base + '/relay/v1/connections/' + relay.connectionId + '/request', {
@@ -113,7 +120,23 @@ export class RelayClient extends BridgeClient {
         return relayRequest(this.relay, '/relay/v1/connections/' + this.relay.connectionId, { headers: { 'X-WDC-Account': this.relay.account.appUser } });
     }
     static enroll(options) {
-        return relayRequest(options, '/relay/v1/enrollments', { method: 'POST', body: JSON.stringify({ appUser: options.appUser }) });
+        const suggestions = connectionReviewOptions(options);
+        return (async () => {
+            if (options.logoURL || options.requestedPermissions) {
+                let capability;
+                try {
+                    capability = await relayRequest(options, '/relay/v1/capabilities');
+                }
+                catch (error) {
+                    if (error instanceof BridgeError && error.status === 404)
+                        throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
+                    throw error;
+                }
+                if (capability.connectionReviewVersion !== 1)
+                    throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
+            }
+            return relayRequest(options, '/relay/v1/enrollments', { method: 'POST', body: JSON.stringify({ appUser: options.appUser, ...suggestions }) });
+        })();
     }
     static revoke(options) {
         if (!/^[a-f0-9]{64}$/.test(options.connectionId) || !options.appUser)
