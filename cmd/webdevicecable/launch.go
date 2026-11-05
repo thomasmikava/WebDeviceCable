@@ -39,7 +39,7 @@ func launchConnectionAt(uri, dir string, port int) error {
 	}
 	response.Body.Close()
 	if response.StatusCode != 201 {
-		return errors.New("connection link expired or already opened; try again from the website")
+		return errors.New("this running WebDeviceCable version could not open the link; quit WDC, install the latest version, and try again from the website")
 	}
 	return openPanel(dir, info, false)
 }

@@ -17,31 +17,35 @@ import (
 )
 
 type App struct {
-	relayCancels    map[string]context.CancelFunc
-	updater         *updates.Manager
-	updating        bool
-	launchIntents   map[string]*LaunchIntent
-	permissions     map[string]*PermissionRequest
-	config          Config
-	inputs          map[string]*nativeInput
-	actions         map[string]configuredAction
-	commands        map[string]*commandRun
-	pairingRequests map[string]*pairingRequest
-	conversations   map[string]*commandConversation
-	identity        *ecdsa.PrivateKey
-	channels        map[string]*secureChannel
-	mu              sync.Mutex
-	state           State
-	leases          map[string]Lease
-	dir             string
-	lock            *flock.Flock
-	adminKey        string
-	sessions        map[string]session
-	native          []NativeStatus
-	nativeChecking  bool
-	nativeDone      chan struct{}
-	closed          bool
-	now             func() time.Time
+	connectionRevision uint64
+	connectionChanged  chan struct{}
+	connectionWaiters  int
+	connectionClosing  bool
+	relayCancels       map[string]context.CancelFunc
+	updater            *updates.Manager
+	updating           bool
+	launchIntents      map[string]*LaunchIntent
+	permissions        map[string]*PermissionRequest
+	config             Config
+	inputs             map[string]*nativeInput
+	actions            map[string]configuredAction
+	commands           map[string]*commandRun
+	pairingRequests    map[string]*pairingRequest
+	conversations      map[string]*commandConversation
+	identity           *ecdsa.PrivateKey
+	channels           map[string]*secureChannel
+	mu                 sync.Mutex
+	state              State
+	leases             map[string]Lease
+	dir                string
+	lock               *flock.Flock
+	adminKey           string
+	sessions           map[string]session
+	native             []NativeStatus
+	nativeChecking     bool
+	nativeDone         chan struct{}
+	closed             bool
+	now                func() time.Time
 }
 type session struct {
 	CSRF    string
@@ -126,6 +130,17 @@ func Open(dir string) (*App, error) {
 		}
 	}
 	a.state.IdentityKey = currentIdentity
+	if a.state.Programs == nil {
+		a.state.Programs = defaultPrograms()
+	}
+	for id, program := range a.state.Programs {
+		if id != program.ID {
+			return nil, errors.New("invalid AI program identity")
+		}
+		if err := validateProgram(program); err != nil {
+			return nil, err
+		}
+	}
 	if a.state.Sharing == nil {
 		a.state.Sharing = defaultSharing()
 	}
@@ -133,6 +148,9 @@ func Open(dir string) (*App, error) {
 		a.state.Conversations = map[string]*Conversation{}
 	}
 	a.closeConversations(&a.state, "", "runner_restarted", a.now())
+	for _, c := range a.state.Conversations {
+		c.Tools = nil
+	}
 	// No automatic replay after a crash: every outstanding request lost its originating tab lease.
 	for _, j := range a.state.Jobs {
 		if !terminal(j.Status) {
@@ -173,6 +191,8 @@ func (a *App) Close() error {
 	}
 	a.mu.Lock()
 	a.closed = true
+	a.connectionClosing = true
+	a.notifyConnections()
 	for _, cancel := range a.relayCancels {
 		cancel()
 	}
@@ -200,7 +220,7 @@ func (a *App) Close() error {
 	return a.lock.Close()
 }
 func (a *App) save(s *State) error {
-	b, e := json.Marshal(s)
+	b, e := jsonData(s)
 	if e != nil {
 		return e
 	}
@@ -212,7 +232,7 @@ func (a *App) save(s *State) error {
 
 // Transactions publish only after persistence succeeds. Call with mu held.
 func (a *App) update(fn func(*State) error) error {
-	b, _ := json.Marshal(a.state)
+	b, _ := jsonData(a.state)
 	var next State
 	if e := json.Unmarshal(b, &next); e != nil {
 		return e
@@ -220,10 +240,21 @@ func (a *App) update(fn func(*State) error) error {
 	if e := fn(&next); e != nil {
 		return e
 	}
+	for _, c := range next.Conversations {
+		if c.Status != "open" {
+			c.Tools = nil
+		}
+	}
+	for _, j := range next.Jobs {
+		if terminal(j.Status) {
+			j.Request.Tools = nil
+		}
+	}
 	// Bound retained history as output limits grow; replay receipts remain durable.
 	total := 0
 	for _, j := range next.Jobs {
-		total += len(j.Output) + len(j.JSON)
+		details, _ := jsonData(j.ToolOperations)
+		total += len(j.Output) + len(j.JSON) + len(details)
 	}
 	for total > 20<<20 {
 		oldest := -1
@@ -236,10 +267,11 @@ func (a *App) update(fn func(*State) error) error {
 			break
 		}
 		j := next.Jobs[oldest]
-		total -= len(j.Output) + len(j.JSON)
+		details, _ := jsonData(j.ToolOperations)
+		total -= len(j.Output) + len(j.JSON) + len(details)
 		next.Jobs = append(next.Jobs[:oldest], next.Jobs[oldest+1:]...)
 	}
-	after, e := json.Marshal(next)
+	after, e := jsonData(next)
 	if e != nil {
 		return e
 	}
@@ -343,6 +375,9 @@ func (a *App) tick() error {
 							j.ActualProvider = metadata.Provider
 							j.ActualModel = metadata.Model
 							j.Billing = "native_subscription"
+							if metadata.Kind == "custom" {
+								j.Billing = "program_defined"
+							}
 						}
 						run.mu.Unlock()
 					}

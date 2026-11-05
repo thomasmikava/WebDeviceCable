@@ -4,9 +4,11 @@ export { ConnectionStore } from './storage.js';
 export { BridgeError, BridgeSecurityError } from './secure.js';
 export type { ConnectionKeys, RunnerIdentity, Failure, ErrorCategory } from './secure.js';
 /** Local-only protocol client. Pairing keys belong to one app user and device. */
-export type Provider = 'codex' | 'claude';
+/** Stable local AI program ID. Built-in IDs resolve to the editable default entries. */
+export type Provider = 'codex' | 'claude' | (string & {});
 export type JobStatus = 'awaiting_approval' | 'queued' | 'running' | 'completed' | 'cancelled' | 'timed_out' | 'blocked' | 'interrupted' | 'failed';
 export interface JobRequest {
+    tools?: AppTool[];
     idempotencyKey: string;
     kind: 'connection-test' | 'text' | 'image-generate' | 'image-edit' | 'command' | 'action';
     provider?: Provider;
@@ -21,6 +23,7 @@ export interface JobRequest {
     inputs?: string[];
 }
 export interface Job {
+    toolOperations?: ToolOperationRecord[];
     id: string;
     pairingId: string;
     status: JobStatus;
@@ -29,9 +32,11 @@ export interface Job {
     output?: string;
     actualProvider?: Provider;
     actualModel?: string;
-    billing: 'none' | 'native_subscription';
+    billing: 'none' | 'native_subscription' | 'program_defined';
     revision: number;
-    request: JobRequest;
+    request: Omit<JobRequest, 'tools'> & {
+        toolSetHash?: string;
+    };
     createdAt: string;
     finishedAt?: string;
     actionTitle?: string;
@@ -67,6 +72,7 @@ export interface AdmissionStatus {
     code?: string;
 }
 export interface Pairing {
+    groupsDeclared?: boolean;
     id: string;
     appId: string;
     appUser: string;
@@ -80,6 +86,10 @@ export interface Pairing {
     actions?: Record<string, string>;
 }
 export interface Capability {
+    integration?: 'codex' | 'claude' | 'custom';
+    sessions?: boolean;
+    streaming?: boolean;
+    isolation?: 'native' | 'os-account';
     id: Provider;
     name: string;
     execution: boolean;
@@ -115,6 +125,13 @@ export interface CommandAction {
     sessions: boolean;
 }
 export interface Capabilities {
+    toolInputSchemaVersion?: number;
+    toolOperationDetailsVersion?: number;
+    connectionReviewVersion?: number;
+    scopedToolsVersion?: number;
+    limits?: Record<string, number>;
+    routingVersion?: number;
+    routingConfigured?: boolean;
     appToolPermissions?: 'application';
     fileTransfer: boolean;
     maxTextBytes: number;
@@ -128,10 +145,13 @@ export interface Capabilities {
     remoteAccess: false;
 }
 export interface ExecutionMetadata {
-    kind: 'command' | 'native' | 'connection-test';
+    toolSetHash?: string;
+    programId?: string;
+    integration?: 'codex' | 'claude' | 'custom';
+    kind: 'command' | 'native' | 'custom' | 'connection-test';
     name?: string;
     version?: string;
-    versionSource?: 'configured' | 'native';
+    versionSource?: 'configured' | 'native' | 'program';
     provider?: Provider;
     model?: string;
     reasoning?: string;
@@ -141,12 +161,19 @@ export interface ActionGroup {
     name: string;
     kind?: 'ai' | 'command';
     parentId?: string;
+    /** Image stages require a native image-capable program. */
+    operation?: 'text' | 'image';
+    /** Keep legacy routes addressable for recovery without displaying them. */
+    hidden?: boolean;
+    /** Copy an existing local route once when introducing this group. */
+    replaces?: string[];
 }
 export interface GroupDefinition extends ActionGroup {
     children?: GroupDefinition[];
 }
 export type ActionGroups = GroupDefinition[] | Record<string, string>;
 export interface Conversation {
+    toolSetHash: string;
     id: string;
     group?: string;
     status: 'open' | 'closed';
@@ -157,6 +184,7 @@ export interface Conversation {
     updatedAt: string;
 }
 export interface SessionOptions {
+    tools?: AppTool[];
     mode?: "restricted" | "app-tools" | "workspace";
     group?: string;
     provider?: Provider;
@@ -181,12 +209,30 @@ export interface AppToolDefinition {
     description: string;
     inputSchema: Record<string, unknown>;
     readOnly?: boolean;
+    operationDetails?: boolean;
+}
+export interface ToolOperation {
+    id: string;
+    title: string;
+    version?: string;
+}
+export interface ToolOperationRecord extends ToolOperation {
+    callId: string;
+    toolId: string;
+    status: 'running' | 'returned' | 'unconfirmed';
+    reportedAt: string;
+}
+export interface ToolCallbackContext {
+    reportOperation: (operation: ToolOperation) => Promise<void>;
+    idempotencyKey: string;
+    jobId: string;
+    conversationId?: string;
+    requestIdempotencyKey: string;
+    toolSetHash: string;
+    signal: AbortSignal;
 }
 export interface AppTool extends AppToolDefinition {
-    execute: (args: Record<string, unknown>, context: {
-        idempotencyKey: string;
-        signal: AbortSignal;
-    }) => unknown | Promise<unknown>;
+    execute: (args: Record<string, unknown>, context: ToolCallbackContext) => unknown | Promise<unknown>;
 }
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {
@@ -204,8 +250,24 @@ export interface PermissionStatus {
         automatic: boolean;
     }[];
 }
+/** Suggestions reviewed by the desktop owner before connecting. */
+export interface ConnectionReviewOptions {
+    logoURL?: string;
+    requestedPermissions?: {
+        automaticApprovals?: boolean;
+    };
+}
+export interface PairingOptions extends ConnectionReviewOptions {
+    appId: string;
+    name: string;
+    appUser: string;
+    baseURL?: string;
+    timeoutMs?: number;
+    launchInstalled?: boolean;
+}
+export declare function connectionReviewOptions(options: ConnectionReviewOptions, origin?: string): ConnectionReviewOptions;
 export interface ClientOptions {
-    tools?: AppTool[];
+    minimumRoutingVersion?: number;
     baseURL?: string;
     connection: ConnectionKeys;
     origin?: string;
@@ -217,6 +279,9 @@ export interface ClientOptions {
 }
 export interface BridgeTransport {
     reset(): void;
+    /** Check an older peer's advertised count limit before installing callbacks. */
+    checkToolCount?(count: number): void;
+    checkToolFeatures?(schema: boolean, operation: boolean): void;
     fetch(path: string, init?: RequestInit, lease?: string, invitation?: string): Promise<Response>;
     close(): Promise<void>;
 }
@@ -227,7 +292,13 @@ export declare class BridgeJobError extends BridgeError {
 export declare class BridgeClient {
     private options;
     private transport;
-    private toolHandlers;
+    private legacyToolCountLimit?;
+    private toolInputSchemaVersion?;
+    private toolOperationDetailsVersion?;
+    private executions;
+    private sessions;
+    private activeCalls;
+    private callbackCount;
     private toolsBusy;
     private toolsTimer?;
     private lifetime;
@@ -253,28 +324,19 @@ export declare class BridgeClient {
     }>;
     private static pairWithKeys;
     /** Call directly from a click handler. Approval happens in the authenticated local panel. */
-    static requestPairing(options: {
-        appId: string;
-        name: string;
-        appUser: string;
-        baseURL?: string;
-        timeoutMs?: number;
-        launchInstalled?: boolean;
-    }): Promise<{
+    static requestPairing(options: PairingOptions): Promise<{
         connection: ConnectionKeys;
         pairing: Pairing;
     }>;
     private static launchPairing;
     private request;
     get connected(): boolean;
-    registerTools(tools: AppTool[]): Promise<void>;
     permissions(): Promise<PermissionStatus>;
     permissionRequest(id: string): Promise<{
         id: string;
         status: string;
     }>;
     requestPermissions(request: {
-        tools?: string[];
         workspace?: boolean;
     }, options?: {
         wait?: boolean;
@@ -283,7 +345,14 @@ export declare class BridgeClient {
         id: string;
         status: string;
     }>;
+    private pollTools;
+    private release;
+    private observe;
+    private install;
+    private settleSubmission;
     private drainTools;
+    private dispatchTool;
+    private reportOperation;
     registerGroups(groups: ActionGroups): Promise<{
         groups: ActionGroup[];
     }>;
@@ -294,6 +363,8 @@ export declare class BridgeClient {
     run(input: RunOptions | string, signal?: AbortSignal): Promise<Job>;
     openSession(options: SessionOptions): Promise<Conversation>;
     sendSession(id: string, input: MessageOptions): Promise<Job>;
+    attachSession(id: string, options: SessionOptions): Promise<void>;
+    private releaseSession;
     getSession(id: string): Promise<Conversation>;
     closeSession(id: string): Promise<Conversation>;
     capabilities(): Promise<Capabilities>;
@@ -315,6 +386,7 @@ export declare class BridgeClient {
     private stop;
     close(): Promise<void>;
     submit(request: JobRequest): Promise<Job>;
+    private checkTools;
     lookup(idempotencyKey: string): Promise<Job | null>;
     get(id: string): Promise<Job>;
     cancel(id: string): Promise<Job>;
@@ -331,6 +403,7 @@ export declare class BridgeSession {
     private closed;
     private submitting;
     private uncertainKey?;
+    private releaseHandlers;
     constructor(client: BridgeClient, options: SessionOptions);
     get id(): string | undefined;
     send(input: MessageOptions | string): Promise<Job>;

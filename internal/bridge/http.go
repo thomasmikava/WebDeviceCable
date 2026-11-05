@@ -15,6 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
 //go:embed web/*
@@ -45,7 +49,11 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	if mt != "application/json" {
 		return fail(415, "json_required", "Use Content-Type: application/json.")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 40<<10)
+	limit := int64(wirelimits.Ordinary)
+	if wirelimits.CreationRequest(r.Method, r.URL.Path) {
+		limit = wirelimits.Creation
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if e := d.Decode(v); e != nil {
@@ -118,11 +126,14 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			return fn(w, r, p)
 		})
 	}
-	a.launchRoutes(mux, wrap, origin)
+	a.launchRoutes(mux, wrap, control, origin)
 	a.updateRoutes(mux, control, wrap)
 	a.permissionRoutes(mux, paired, control)
 	a.commandRoutes(mux, control)
+	a.programRoutes(mux, control)
 	a.pairingRequestRoutes(mux, control, origin)
+	a.connectionEventRoutes(mux, control)
+	a.logoRoutes(mux, control)
 	a.preferenceRoutes(mux, paired, control)
 	a.conversationRoutes(mux, paired, control)
 	a.nativeFileRoutes(mux, paired, control)
@@ -176,15 +187,20 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("DELETE /api/session", control(func(w http.ResponseWriter, r *http.Request) error {
 		delete(a.sessions, r.Header.Get("X-Bridge-Session"))
+		a.notifyConnections()
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return nil
 	}))
 	mux.HandleFunc("GET /api/state", control(func(w http.ResponseWriter, r *http.Request) error {
 		pairs := []Pairing{}
 		providersByPairing := map[string][]Capability{}
+		relayConnections := []map[string]string{}
 		for _, p := range a.state.Pairings {
 			pairs = append(pairs, publicPairing(p))
 			providersByPairing[p.ID] = a.capabilities(p)
+			if p.Relay != nil && !p.Revoked {
+				relayConnections = append(relayConnections, map[string]string{"relayUrl": p.Relay.URL, "connectionId": p.Relay.ConnectionID, "pairingId": p.ID})
+			}
 		}
 		jobs := []Job{}
 		for _, j := range a.state.Jobs {
@@ -192,7 +208,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			copy.Plan = j.Plan
 			jobs = append(jobs, copy)
 		}
-		writeJSON(w, 200, map[string]any{"updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.state.Conversations, "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
+		writeJSON(w, 200, map[string]any{"connectionRevision": a.connectionRevision, "updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.publicConversations(), "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/providers/check", control(func(w http.ResponseWriter, r *http.Request) error {
@@ -214,7 +230,9 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("PATCH /api/pairings/{id}", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
+			DisplayName                *string            `json:"displayName"`
 			Paused                     *bool              `json:"paused"`
+			LogoID                     *string            `json:"logoId"`
 			Automatic                  *bool              `json:"automatic"`
 			Revoke                     bool               `json:"revoke"`
 			Actions                    *map[string]string `json:"actions"`
@@ -226,6 +244,18 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		id := r.PathValue("id")
 		if a.state.Pairings[id] == nil {
 			return fail(404, "not_found", "Pairing not found.")
+		}
+		if in.DisplayName != nil {
+			name := strings.TrimSpace(*in.DisplayName)
+			if len(name) > 100 || !utf8.ValidString(name) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+				return fail(400, "invalid_name", "Choose a shorter display name without control characters.")
+			}
+			in.DisplayName = &name
+		}
+		if in.LogoID != nil {
+			if err := a.checkLogo(*in.LogoID); err != nil {
+				return err
+			}
 		}
 		var grants map[string]string
 		if in.Actions != nil {
@@ -245,6 +275,12 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			}
 			if in.Paused != nil {
 				p.Paused = *in.Paused
+			}
+			if in.DisplayName != nil {
+				p.DisplayName = *in.DisplayName
+			}
+			if in.LogoID != nil {
+				p.LogoID = *in.LogoID
 			}
 			if in.Automatic != nil {
 				p.Automatic = *in.Automatic
@@ -276,6 +312,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		}); e != nil {
 			return e
 		}
+		a.notifyConnections()
 		writeJSON(w, 200, publicPairing(a.state.Pairings[id]))
 		return nil
 	}))
@@ -408,11 +445,12 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		if e := a.update(func(s *State) error { s.Pairings[p.ID] = &p; delete(s.Invitations, key); return nil }); e != nil {
 			return e
 		}
+		a.notifyConnections()
 		writeJSON(w, 201, map[string]any{"pairing": a.remotePairing(&p)})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/capabilities", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		writeJSON(w, 200, map[string]any{"protocolVersion": 2, "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.capabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
+		writeJSON(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities(), "protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p), "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/actions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -480,7 +518,13 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		}
 		l.ExpiresAt = a.now().Add(pairingLeaseTTL(p))
 		a.leases[id] = l
-		writeJSON(w, 200, map[string]any{"expiresAt": l.ExpiresAt})
+		closedSessions := []string{}
+		for _, c := range a.state.Conversations {
+			if c.PairingID == p.ID && c.LeaseID == id && c.Status != "open" {
+				closedSessions = append(closedSessions, c.ID)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"expiresAt": l.ExpiresAt, "closedSessions": closedSessions})
 		return nil
 	}))
 	mux.HandleFunc("DELETE /v2/lease", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -566,7 +610,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		if r.Host != host {
 			writeError(w, fail(403, "host_denied", "Invalid local host."))
 			return

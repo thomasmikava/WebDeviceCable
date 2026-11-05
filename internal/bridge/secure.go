@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
 const channelLifetime = 15 * time.Minute
@@ -229,7 +231,11 @@ func decodeSecure(w http.ResponseWriter, r *http.Request, v any) error {
 	if e != nil || media != "application/json" {
 		return fail(415, "json_required", "JSON required.")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+	limit := int64(128 << 10)
+	if r.URL.Path == "/v2/request" {
+		limit = wirelimits.Envelope
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if e := d.Decode(v); e != nil {
@@ -241,7 +247,7 @@ func decodeSecure(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func (a *App) invitationBundle(token, endpoint string, p Pairing, expires time.Time) string {
-	payload, _ := json.Marshal(map[string]any{"v": 2, "secret": token, "endpoint": endpoint, "deviceId": a.state.DeviceID, "publicKey": publicKey(a.identity), "appId": p.AppID, "appUser": p.AppUser, "origin": p.Origin, "expiresAt": expires.UnixMilli()})
+	payload, _ := json.Marshal(map[string]any{"v": 2, "connectionReviewVersion": 1, "secret": token, "endpoint": endpoint, "deviceId": a.state.DeviceID, "publicKey": publicKey(a.identity), "appId": p.AppID, "appUser": p.AppUser, "origin": p.Origin, "expiresAt": expires.UnixMilli()})
 	return "aib2." + b64.EncodeToString(payload)
 }
 func (a *App) openChannel(w http.ResponseWriter, r *http.Request, endpoint string) error {
@@ -349,7 +355,7 @@ func (a *App) secureCall(w http.ResponseWriter, r *http.Request, mux http.Handle
 	if _, e = verifyBytes(in.PublicKey, signed); e != nil {
 		return fail(401, "invalid_signature", "Request signature verification failed.")
 	}
-	if in.Version != 2 || in.Kind != "ai-bridge-request" || in.SessionID != envelope.SessionID || in.Origin != channel.Origin || len(in.Body) > 40<<10 {
+	if in.Version != 2 || in.Kind != "ai-bridge-request" || in.SessionID != envelope.SessionID || in.Origin != channel.Origin {
 		return fail(400, "invalid_binding", "Invalid secure request binding.")
 	}
 	nonce, e := hex.DecodeString(in.Nonce)
@@ -414,6 +420,10 @@ func (a *App) secureCall(w http.ResponseWriter, r *http.Request, mux http.Handle
 	a.mu.Unlock()
 	if maintenance {
 		writeError(sw, fail(503, "bridge_updating", "WebDeviceCable is updating. Reconnect in a moment."))
+		return sw.finish()
+	}
+	if code := wirelimits.Check(in.Method, in.Path, in.Body); code != "" {
+		writeError(sw, fail(413, code, "The authenticated request exceeds its size budget."))
 		return sw.finish()
 	}
 	mux.ServeHTTP(sw, inner)

@@ -13,7 +13,7 @@ npm install --save-exact @webdevicecable/relay@@VERSION@
 ```
 
 ```js
-import { RelayClient, RelayAdminClient } from '@webdevicecable/relay';
+import { RelayClient, RelayAdminClient, relayConnectURL, relaySettingsURL } from '@webdevicecable/relay';
 ```
 
 ```js
@@ -45,10 +45,22 @@ const enrollment = await RelayClient.enroll({
   apiKey: process.env.WDC_PROJECT_KEY,
   appUser: String(authenticatedUser.id),
 });
-// Show the returned pairing instructions to this authenticated account.
+const launchUrl = relayConnectURL({baseURL: process.env.WDC_RELAY_URL, code: enrollment.code});
+// Return launchUrl only to this authenticated account. It opens local approval.
+// Keep code + URL under a manual fallback if the installed app cannot open.
 // After local approval, retain its connection ID on the backend.
 ```
+
+`relaySettingsURL({baseURL, connectionId})` reopens the paired connection's local program settings. Keep pending pairing separate from the active device until approval. `status()` distinguishes pending, declined and expired enrollment; a lost device remains paired until explicitly disconnected.
+
+Workflow groups support independent program, model and reasoning choices in WDC. Use `minimumRoutingVersion: 2` to require the updated desktop; model choices and native credentials stay local. SDK 0.2.0 also requires desktop and relay `scopedToolsVersion:1`; upgrade both transports together.
+
+Pass app tools to a continuing `session({tools})` or standalone `submit`, `run`, and `preflight`, never client construction. Sessions retain immutable definitions and handlers. New tools require an explicit new session with saved history; simultaneous executions can use different definitions for the same IDs.
 
 See [RELAY.md](./RELAY.md) for the complete pairing flow, `RelayClient` construction, groups, jobs, streaming, sessions, files, tool callbacks, provider-compatible routes and recovery. Your backend owns authorization, operation IDs and output validation. Never automatically replay an uncertain inference through another route.
 
 The package does not include the Docker server or desktop application. For direct browser integration, use [`@webdevicecable/sdk`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/integrate.md). MIT licensed.
+
+Named installations and profiles are chosen locally in WDC, per connection and workflow. Existing `codex`/`claude` IDs remain the default entries; generated program IDs identify additional installations. Check each selected entry's capabilities before submitting work. Custom harnesses require explicit local grants and do not inherit native isolation guarantees. See [AI programs](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/ai-programs.md).
+
+Version 0.2.1 adds optional logo/default-approval suggestions to enrollment and the same execution-scoped input-schema and operation-detail features as the browser SDK. Update the desktop and relay runtime together before deploying consumers of these features. Existing pairings and operation receipts are retained.

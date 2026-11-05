@@ -1,6 +1,6 @@
 /** Backend-only SDK. The project relay verifies the desktop's protocol-v2 frames. */
 import { BridgeClient } from './index.js';
-import type { ActionGroups, AppTool } from './index.js';
+import type { ActionGroups, ConnectionReviewOptions } from './index.js';
 export { BridgeError, BridgeJobError } from './index.js';
 export type * from './index.js';
 export interface RelayOptions {
@@ -12,8 +12,8 @@ export interface RelayOptions {
         appUser: string;
     };
     origin: string;
+    minimumRoutingVersion?: number;
     groups?: ActionGroups;
-    tools?: AppTool[];
     /** Recheck project authorization before every operation, including heartbeats/tools. */
     authorize?: () => Promise<void>;
 }
@@ -30,6 +30,7 @@ export interface RelayStatus {
     appUser: string;
     connected: boolean;
     revoked: boolean;
+    enrollmentStatus?: 'pending' | 'declined' | 'expired';
 }
 export interface RelayProject {
     id: string;
@@ -72,7 +73,7 @@ export declare class RelayClient extends BridgeClient {
     readonly relay: RelayOptions;
     constructor(relay: RelayOptions);
     status(): Promise<RelayStatus>;
-    static enroll(options: Pick<RelayOptions, 'baseURL' | 'apiKey'> & {
+    static enroll(options: Pick<RelayOptions, 'baseURL' | 'apiKey'> & ConnectionReviewOptions & {
         appUser: string;
     }): Promise<RelayEnrollment>;
     static revoke(options: Pick<RelayOptions, 'baseURL' | 'apiKey' | 'connectionId'> & {
@@ -81,3 +82,13 @@ export declare class RelayClient extends BridgeClient {
         revoked: boolean;
     }>;
 }
+/** A short-lived invitation opens a local review; it never approves execution. */
+export declare function relayConnectURL(options: {
+    baseURL: string;
+    code: string;
+}): string;
+/** Open the already-paired connection's local program settings. */
+export declare function relaySettingsURL(options: {
+    baseURL: string;
+    connectionId: string;
+}): string;

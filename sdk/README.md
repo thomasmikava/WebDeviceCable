@@ -16,7 +16,7 @@ import { BridgeClient, ConnectionStore } from '@webdevicecable/sdk';
 
 CommonJS frontend tooling can use `require('@webdevicecable/sdk')`. Browser execution requires HTTPS or localhost, WebCrypto, IndexedDB and streaming fetch. Choose one module format per application; the native ESM and CommonJS builds have separate class identities.
 
-Uses WDC's signed/encrypted protocol v2. The user chooses native programs and models inside WDC; the SDK does not include a provider model or a paid API fallback.
+Uses WDC's signed/encrypted protocol v2. The user chooses named AI programs, profiles, models and reasoning inside WDC. Group routes use stable program IDs; the original `codex` and `claude` IDs remain the default entries. Custom harnesses expose only their supported capabilities and require explicit OS account permission grants. See [AI programs](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/ai-programs.md). The SDK does not include a provider model or a paid API fallback.
 
 ## Connect from a button
 
@@ -41,6 +41,10 @@ console.log(job.output);
 
 Use the authenticated user's immutable ID. Keep one client per tab. Close the client and clear the account-scoped store on logout/account changes. Preserve the app's own authorization and output validation. See [INTEGRATE.md](./INTEGRATE.md) for lifecycle, streaming, consent and uncertain-outcome recovery.
 
+## Execution-scoped tools
+
+SDK 0.2.0 requires WDC desktop 0.2.0 or later. Pass `tools` to `session({tools})` or standalone `submit`, `run`, and `preflight`. Each execution snapshots its own catalog and handlers; a continuing session keeps that snapshot. Change tools by creating a new native session with saved history. Constructor tools and `registerTools()` were removed. Relay clients use the same execution API.
+
 ## URL imports and self-hosting
 
 The same npm release can be loaded without a bundler:
@@ -57,3 +61,5 @@ The equivalent jsDelivr URL is `https://cdn.jsdelivr.net/npm/@webdevicecable/sdk
 For self-hosting, copy `index.js`, `secure.js` and `storage.js` together from the package into one static directory and import its `index.js`. Keep the three files from the same release. Use the local `.tgz` artifact before the first npm publication.
 
 For server-to-desktop connections, use the separate [`@webdevicecable/relay`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/relay.md) Node package and Docker relay. MIT licensed.
+
+Version 0.2.1 adds optional `logoURL` and `requestedPermissions.automaticApprovals` to connection review. It removes the fixed tool-count cap while keeping byte/schema budgets, supports optional/nullable tool inputs and open objects, and exposes authenticated `context.reportOperation()` details for dispatcher tools marked `operationDetails:true`. New features require the corresponding desktop capabilities; existing pairings remain valid.

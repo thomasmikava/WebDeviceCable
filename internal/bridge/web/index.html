@@ -11,7 +11,7 @@
     <main id="main-content" tabindex="-1">
       <section data-page="apps">
         <div class="page-heading"><h1>Connections</h1><div class="actions"><button id="connect-server" class="button secondary">Connect server</button><button id="connect-app" class="button primary"><span data-icon="plus"></span>Connect app</button></div></div>
-        <section id="connection-requests" hidden aria-labelledby="connection-requests-title"><div class="section-heading"><h2 id="connection-requests-title">Connection requests</h2></div><div id="connection-request-list"></div></section>
+        <section id="connection-requests" hidden aria-labelledby="connection-requests-title"><div class="section-heading"><h2 id="connection-requests-title">Connection requests</h2></div><span id="connection-request-announcement" class="sr-only" role="status"></span><div id="connection-request-list"></div></section>
         <div id="apps-section-heading" class="section-heading"><h2>Connected apps <span id="app-list-count" class="subtle-count"></span></h2></div>
         <div id="app-list" class="connections-list"></div>
         <div id="apps-empty" class="connection-empty" hidden>
@@ -52,14 +52,14 @@
             <div class="setting-row test-setting"><div><strong>Connection test</strong><small>No AI is called.</small></div><button id="run-test" class="button secondary">Run test</button></div>
           </div></section>
         </div>
-        <section class="provider-section" aria-labelledby="providers-title"><div class="section-heading"><h2 id="providers-title">Installed AI clients</h2><button id="check-clients" class="text-button">Check again</button></div><div id="provider-list" class="provider-list"></div></section>
+        <section class="provider-section" aria-labelledby="providers-title"><div class="section-heading"><h2 id="providers-title">AI programs</h2><div class="actions"><button id="check-clients" class="text-button">Check all</button><button id="add-ai-program" class="button secondary">Add AI program</button></div></div><p class="muted">Choose an installation and sign-in for each connection or workflow. Default entries detect your installed clients automatically.</p><div id="provider-list" class="provider-list"></div><div id="restore-ai-defaults" class="actions"></div></section>
         <section class="update-card" aria-labelledby="updates-title">
           <div class="section-heading"><h2 id="updates-title">Updates</h2><span id="installed-version" class="muted"></span></div>
           <div class="setting-row"><div><strong>Automatic updates</strong><small>Installs when your sessions finish.</small></div><button id="automatic-updates" class="toggle" role="switch" aria-checked="false" aria-label="Automatic updates"><span></span></button></div>
           <div class="update-summary"><p id="update-status" role="status" aria-live="polite">Checking installation…</p><progress id="update-progress" aria-label="Update download" hidden></progress><div class="actions"><button id="check-updates" class="button secondary">Check for updates</button><button id="install-update" class="button primary" hidden>Update now</button><a id="manual-update" class="button secondary" href="https://github.com/thomasmikava/WebDeviceCable/releases/latest" target="_blank" rel="noreferrer" hidden>Download update</a></div></div>
         </section>
         <div class="settings-reference">
-          <details><summary>Permissions<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><p><strong>Restricted</strong> — supplied inputs and outputs only. The default for new apps.</p><p><strong>Commands</strong> — individually granted per app, using your account’s file and network permissions.</p><p><strong>Folders</strong> — select access in each connection’s Folder access. Changes ask first unless you enable automation.</p></div></details>
+          <details><summary>Permissions<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><p><strong>Restricted</strong> — supplied inputs and outputs only. The default for new apps.</p><p><strong>Custom AI programs</strong> — explicit per-connection grants, with your OS account’s file and network permissions. Their declared capabilities do not provide a native sandbox.</p><p><strong>Commands</strong> — individually granted per app, using your account’s file and network permissions.</p><p><strong>Folders</strong> — select access in each connection’s Folder access. Changes ask first unless you enable automation.</p></div></details>
           <details><summary>Privacy & local data<span data-icon="chevron" class="chevron"></span></summary><div class="detail-body"><p>Sign-in stays in the installed clients. Personal provider privacy settings apply. No paid API fallback or remote relay.</p><p>Closing a requesting app tab cancels its jobs within 12 seconds. Network loss or tab suspension can do the same. This panel can close independently.</p><p>Sharing switches omit structured metadata; program output can still identify its source. Diagnostics are off by default, bounded and redacted when shared.</p><p>Finished records discard their inputs. Sessions retain context until ended. Clearing history removes terminal output and WDC files, keeping minimal replay receipts. Native clients may keep their own cache.</p></div></details>
         </div>
         <div class="settings-footer"><button id="sign-out" class="text-button">Lock panel</button></div>
@@ -87,11 +87,14 @@
 <dialog id="relay-dialog" aria-labelledby="relay-title">
   <div class="dialog-heading"><h2 id="relay-title">Connect a server</h2><button id="close-relay" class="icon-button" aria-label="Close">×</button></div>
   <form id="relay-form"><div class="dialog-body">
-    <p>The server can request work while its website is closed. Your local program choices, approvals and permissions still apply.</p>
-    <label>Relay URL<input name="url" type="url" required placeholder="https://wdc.example.com" autocomplete="off"></label>
-    <label>Single-use pairing code<input name="code" type="password" required autocomplete="off" spellcheck="false"></label>
-    <p id="relay-review" role="status"></p>
-  </div><div class="dialog-actions"><button class="button primary" id="relay-submit" type="submit">Review connection</button></div></form>
+    <p>On your website, choose <strong>Connect WDC</strong> to open its invitation here. Approve it, then choose your programs and models.</p>
+    <details id="relay-manual"><summary>Connect manually</summary>
+      <p>If the website could not open WDC, copy these two values from its connection page.</p>
+      <label>Relay URL<input name="url" type="url" required placeholder="https://wdc.example.com" autocomplete="off"></label>
+      <label>Single-use pairing code<input name="code" type="password" required autocomplete="off" spellcheck="false"></label>
+    </details>
+    <div id="relay-review" class="relay-identity" role="status" hidden></div>
+  </div><div class="dialog-actions"><button class="button secondary" id="relay-decline" type="button" hidden>Decline</button><button class="button primary" id="relay-submit" type="submit">Review connection</button></div></form>
 </dialog>
 <dialog id="command-dialog" aria-labelledby="command-title">
   <div class="dialog-heading"><h2 id="command-title">Add command</h2><button id="close-command" class="icon-button" aria-label="Close command editor"><span data-icon="close"></span></button></div>
@@ -112,7 +115,25 @@
 </dialog>
 <dialog id="routing-dialog" aria-labelledby="routing-title">
   <div class="dialog-heading"><h2 id="routing-title">Program settings</h2><button id="close-routing" class="icon-button" aria-label="Close program settings"><span data-icon="close"></span></button></div>
-  <form id="routing-form"><div class="dialog-body"><p id="routing-context" class="dialog-context"></p><div id="routing-default"></div><div id="routing-groups"></div></div><div class="dialog-actions"><button id="routing-command-access" class="text-button" type="button">Command access</button><button class="button primary" type="submit">Save changes</button></div></form>
+  <form id="routing-form"><div class="dialog-body"><p id="routing-context" class="dialog-context"></p><div id="routing-default"></div><div id="routing-groups"></div></div><div class="dialog-actions"><button id="routing-program-access" class="text-button" type="button">Custom program access</button><button id="routing-command-access" class="text-button" type="button">Command access</button><button class="button primary" type="submit">Save changes</button></div></form>
+</dialog>
+<dialog id="ai-program-dialog" aria-labelledby="ai-program-title">
+  <div class="dialog-heading"><h2 id="ai-program-title">Add AI program</h2><button id="close-ai-program" class="icon-button" aria-label="Close AI program editor"><span data-icon="close"></span></button></div>
+  <form id="ai-program-form"><div class="dialog-body program-form">
+    <label>Display name<input name="name" required maxlength="100" placeholder="Work Codex"></label>
+    <label>Integration type<select name="type"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="custom">Custom · WDC JSONL interface</option></select></label>
+    <label>Executable path<input name="executable" placeholder="Automatic detection"></label>
+    <small id="ai-program-executable-help">Leave empty for automatic detection of Codex or Claude Code. Paths are used directly, without a shell.</small>
+    <label id="ai-program-args">Arguments · one per line<textarea name="arguments" rows="3"></textarea></label>
+    <label>Profile / config directory · optional<input name="profileDir" placeholder="Absolute path to a separate profile"></label>
+    <small id="ai-program-profile-help">Codex uses CODEX_HOME; Claude Code uses CLAUDE_CONFIG_DIR. Sign in through that client's own login flow. WDC never copies credentials.</small>
+    <p id="ai-program-warning" class="consent-line" hidden>Custom programs must implement the WDC interface or use a wrapper. They run with your OS account's file and network permissions. Each connection needs an explicit grant; native sandbox guarantees do not apply.</p>
+    <p class="muted">Changing executable, integration, arguments or profile ends affected requests and conversations. A changed account requires reconnecting affected applications.</p>
+  </div><div class="dialog-actions"><button id="reset-ai-program" class="text-button" type="button" hidden>Reset to automatic detection</button><button class="button primary" type="submit">Save AI program</button></div></form>
+</dialog>
+<dialog id="program-access-dialog" aria-labelledby="program-access-title">
+  <div class="dialog-heading"><h2 id="program-access-title">Custom AI program access</h2><button id="close-program-access" class="icon-button" aria-label="Close custom program access"><span data-icon="close"></span></button></div>
+  <form id="program-access-form"><div class="dialog-body"><p id="program-access-context"></p><div id="program-access-list"></div><label class="check-line consent-line"><input type="checkbox" name="consent"><span>Allow selected custom AI programs to run with my OS account's file and network permissions. These programs have no WDC native sandbox guarantee.</span></label></div><div class="dialog-actions"><button class="button primary" type="submit">Save access</button></div></form>
 </dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title"></h2><button id="close-confirm" class="icon-button" aria-label="Close confirmation"><span data-icon="close"></span></button></div><div class="dialog-body"><p id="confirm-description" class="muted"></p></div><div class="dialog-actions"><button id="cancel-confirm" class="button secondary">Cancel</button><button id="accept-confirm" class="button primary"></button></div></dialog>
 <div id="notice" class="toast" role="status" hidden><span id="notice-text"></span><button id="dismiss-notice" class="icon-button" aria-label="Dismiss"><span data-icon="close"></span></button></div>

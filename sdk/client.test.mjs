@@ -70,8 +70,13 @@ async function runner() {
     }
     assert.equal(request.publicKey, appKey); assert.equal(request.pairingId, pairingId); assert.equal(request.authorization, undefined);
     if (peer.handler) { const response = await peer.handler(context); if (response) return response; }
+    if (request.path === '/v2/capabilities')return context.json({scopedToolsVersion:1,protocolVersion:2,pairing,routingVersion:2});
     if (request.path === '/v2/lease') return context.json({ lease, expiresAt: new Date(Date.now() + 12000).toISOString() }, request.method === 'POST' ? 201 : 200);
-    if (request.path === '/v2/jobs') { assert.equal(request.lease, lease); return context.json({ id: 'job', status: 'queued', revision: 1 }, 202); }
+    if (request.path === '/v2/jobs') {
+      assert.equal(request.lease, lease);
+      const {tools:_tools,...execution}=JSON.parse(request.body);
+      return context.json({ id: 'job', status: 'queued', revision: 1, request:{...execution,toolSetHash:'hash'} }, 202);
+    }
     if (request.path.endsWith('/events')) return context.sse([{ id: 'job', revision: 2, status: 'completed', output: 'Two chunks.' }]);
     return context.json({ id: 'job', revision: 3, status: 'cancelled' });
   };
@@ -267,25 +272,31 @@ test('an unreadable submission response retains its operation key for recovery',
 });
 
 test('oversized Unicode tool results return a bounded error instead of stalling the callback', async () => {
-  const peer = await runner(), restore = peer.install(); let client, timer;
+  const peer = await runner(), restore = peer.install(); let client, timer, releaseCalls;
   try {
     const paired = await peer.pair();
     let receiveResult;
     const result = new Promise(resolve=>{receiveResult=resolve;});
-    peer.handler = context => {
-      if (context.request.path === '/v2/tools') return context.json({ok:true});
-      if (context.request.path === '/v2/tool-calls') return context.json({calls:[{id:'unicode-call',name:'read',arguments:{}}]});
+    const callbacksReady=new Promise(resolve=>{releaseCalls=resolve;});
+    peer.handler = async context => {
+      if (context.request.path === '/v2/tool-calls/poll') {
+        await callbacksReady;
+        return context.json({calls:[{id:'unicode-call',name:'read',arguments:{},jobId:'job',requestIdempotencyKey:'unicode-key',toolSetHash:'hash'}]});
+      }
       if (context.request.path.endsWith('/claim')) return context.json({ok:true});
       if (context.request.path.endsWith('/result')) { receiveResult(JSON.parse(context.request.body)); return context.json({ok:true}); }
     };
-    client = new BridgeClient({connection:paired.connection, origin:peer.origin, tools:[{
-      id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{}},execute:()=>({text:'🙂'.repeat(12000)}),
+    client = new BridgeClient({connection:paired.connection, origin:peer.origin});
+    await client.connect();
+    await client.submit({kind:'action',idempotencyKey:'unicode-key',tools:[{
+      id:'read',title:'Read',description:'Fixture',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},execute:()=>({text:'🙂'.repeat(12000)}),
     }]});
+    releaseCalls();
     await client.connect();
     const received = await Promise.race([result,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Tool callback stalled')),4000);})]);
     assert.match(received.result.error,/32 KiB/);
     assert.ok(new TextEncoder().encode(JSON.stringify(received)).length < 32768);
-  } finally { clearTimeout(timer); await client?.close().catch(()=>{}); restore(); }
+  } finally { releaseCalls?.();clearTimeout(timer); await client?.close().catch(()=>{}); restore(); }
 });
 
 test('interactive pairing only accepts its own popup, endpoint, nonce and explicit approval',async()=>{
@@ -295,11 +306,11 @@ test('interactive pairing only accepts its own popup, endpoint, nonce and explic
  globalThis.window={location:{origin:peer.origin},open(url){popupURL=url;return popup},addEventListener(type,fn){if(type==='message')listeners.add(fn)},removeEventListener(type,fn){listeners.delete(fn)}};
  const emit=event=>{for(const fn of listeners)fn(event)};
  try{
-  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice'});
+  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',logoURL:peer.origin+'/logo.png',requestedPermissions:{automaticApprovals:true}});
   const requestId=new URLSearchParams(new URL(popupURL).hash.slice(1)).get('connect-request');
-  const event={source:popup,origin:peer.identity.endpoint,data:{requestId,type:'wdc:pairing-ready'}};
+  const event={source:popup,origin:peer.identity.endpoint,data:{requestId,type:'wdc:pairing-ready',connectionReviewVersion:1}};
   emit({...event,source:{}});emit({...event,origin:'https://evil.example'});emit({...event,data:{...event.data,requestId:'bad'}});assert.equal(posted,undefined);
-  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');
+  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');assert.equal(posted.data.logoURL,peer.origin+'/logo.png');assert.deepEqual(posted.data.requestedPermissions,{automaticApprovals:true});
   emit({...event,data:{requestId,type:'wdc:pairing-approved',invitation:peer.invitation}});
   assert.equal((await pending).pairing.appId,'writer');assert.equal(listeners.size,0);assert.equal(posted.data.type,'wdc:pairing-connected');
   const rejected=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice'});
@@ -351,7 +362,7 @@ test('saved account binding is verified before opening a lease or registering gr
   const peer=await runner(), restore=peer.install();
   try {
     const {connection}=await peer.pair();
-    peer.handler=context => context.request.path==='/v2/capabilities' ? context.json({pairing:{appId:'writer',appUser:'alice',origin:peer.origin,deviceId:connection.identity.deviceId}}) : undefined;
+    peer.handler=context => context.request.path==='/v2/capabilities' ? context.json({scopedToolsVersion:1,pairing:{appId:'writer',appUser:'alice',origin:peer.origin,deviceId:connection.identity.deviceId}}) : undefined;
     const wrong=new BridgeClient({connection,origin:peer.origin,account:{appId:'writer',appUser:'bob'},groups:{chat:'Chat'}});
     await assert.rejects(wrong.connect(),error=>error.code==='identity_mismatch');
     assert.equal(peer.calls.some(call=>call.request.path==='/v2/lease'),false);
@@ -402,12 +413,12 @@ test('fragment removal, replay, malformed UTF-8 and unnegotiated framing fail cl
 test('app callbacks execute only after a successful claim and are not replayed',async()=>{
  const peer=await runner(),restore=peer.install();let client,calls=0,claimed=false;
  try{({client}=await peer.connect());peer.handler=c=>{
-  if(c.request.path==='/v2/tools')return c.json({tools:{}});
-  if(c.request.path==='/v2/tool-calls')return c.json({calls:[{id:'call',name:'create',arguments:{title:'A'}}]});
+  if(c.request.path==='/v2/tool-calls/poll')return c.json({calls:[{id:'call',name:'create',arguments:{title:'A'},jobId:'job',requestIdempotencyKey:'callback-key',toolSetHash:'hash'}]});
   if(c.request.path.endsWith('/claim')){if(claimed)return c.json({error:{code:'tool_call_consumed',message:'Already claimed'}},409);claimed=true;return c.json({id:'call'});}
   if(c.request.path.endsWith('/result')){assert.deepEqual(JSON.parse(c.request.body).result,{ok:true});return c.json({ok:true});}
  };
- await client.registerTools([{id:'create',title:'Create',description:'Create task',inputSchema:{type:'object',properties:{},additionalProperties:false},execute:(args,context)=>{calls++;assert.equal(context.idempotencyKey,'call');assert.deepEqual(args,{title:'A'});return {ok:true};}}]);
+ await client.submit({kind:'action',idempotencyKey:'callback-key',tools:[{id:'create',title:'Create',description:'Create task',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},execute:(args,context)=>{calls++;assert.equal(context.idempotencyKey,'call');assert.deepEqual(args,{title:'A'});return {ok:true};}}]});
+ for(let attempt=0;attempt<100&&calls<1;attempt++)await new Promise(resolve=>setTimeout(resolve,10));
  await client.drainTools();await client.drainTools();assert.equal(calls,1);
  }finally{await client?.close().catch(()=>{});restore();}
 });
@@ -418,8 +429,8 @@ test('permission helper waits for WDC review and reuses remembered access',async
   if(c.request.path==='/v2/permissions'&&c.request.method==='POST'){requests++;return c.json(requests===1?{id:'review',status:'pending'}:{id:'',status:'completed'});}
   if(c.request.path==='/v2/permissions/review'){reads++;return c.json({id:'review',status:reads===1?'pending':'completed'});}
  };
- assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
- assert.equal((await client.requestPermissions({tools:['search']})).status,'completed');assert.equal(reads,2);
+ assert.equal((await client.requestPermissions({workspace:true})).status,'completed');assert.equal(reads,2);
+ assert.equal((await client.requestPermissions({workspace:true})).status,'completed');assert.equal(reads,2);
  }finally{await client?.close().catch(()=>{});restore();}
 });
 
@@ -438,4 +449,24 @@ test('a signed update interruption never resubmits a job and reconnects with the
     await client.close();const other=await keypair();peer.signingKey=other.privateKey;
     await assert.rejects(client.connect(),BridgeSecurityError);
   }finally{await client?.close().catch(()=>{});restore();}
+});
+
+test('workflow declarations retain native operation hints, recovery aliases and hidden legacy routes', async () => {
+  const seen=[];
+  const transport={reset(){},close:async()=>{},fetch:async(path,init)=>{seen.push(JSON.parse(init.body));return Response.json({groups:[]});}};
+  const client=new BridgeClient({connection:{pairingId:'a'.repeat(64),identity:{deviceId:'b'.repeat(64),publicKey:'',endpoint:'http://127.0.0.1:47321'},privateKey:{},publicKey:''},origin:'https://app.example'},transport);
+  await client.registerGroups([{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai',children:[{id:'render',name:'Render',kind:'ai',operation:'image',replaces:['legacy']}]}]);
+  assert.deepEqual(seen[0].groups,[{id:'legacy',name:'Legacy',hidden:true},{id:'images',name:'Images',kind:'ai'},{id:'images.render',name:'Render',operation:'image',replaces:['legacy'],kind:'ai',parentId:'images'}]);
+});
+
+test('a legacy connection window cannot silently ignore requested approval settings',async()=>{
+ const saved=globalThis.window;const listeners=new Set();let opened,posted=false;
+ const popup={closed:false,close(){this.closed=true},postMessage(){posted=true}};
+ globalThis.window={location:{origin:'https://writer.example'},open(url){opened=url;return popup},addEventListener(type,fn){if(type==='message')listeners.add(fn)},removeEventListener(type,fn){listeners.delete(fn)}};
+ try {
+  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',launchInstalled:false,requestedPermissions:{automaticApprovals:true}});
+  const requestId=new URLSearchParams(new URL(opened).hash.slice(1)).get('connect-request');
+  for(const fn of listeners)fn({source:popup,origin:'http://127.0.0.1:47321',data:{type:'wdc:pairing-ready',requestId}});
+  await assert.rejects(pending,error=>error.code==='desktop_update_required');assert.equal(posted,false);assert.equal(popup.closed,true);assert.equal(listeners.size,0);
+ }finally{globalThis.window=saved;}
 });

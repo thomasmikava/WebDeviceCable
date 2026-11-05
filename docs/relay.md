@@ -88,16 +88,18 @@ One relay may host QA and production as separate projects with distinct app IDs,
 
 The backend package supports ESM (`import { RelayClient } from '@webdevicecable/relay'`) and CommonJS (`const { RelayClient } = require('@webdevicecable/relay')`), with TypeScript declarations for both. Both entries share the same runtime and error classes. When vendoring it as a Yarn workspace, include the workspace files in production images alongside `node_modules`; Yarn's workspace link does not contain those files.
 
-After the corresponding version is published, install `npm install --save-exact @webdevicecable/relay@0.1.0`. Before publication, or for offline installation, use `npm install /path/to/webdevicecable-relay-0.1.0.tgz`. The backend package is independent of the browser package and ships no server binary.
+Install `npm install --save-exact @webdevicecable/relay@0.2.0` after publication. Before publication, or for offline installation, use `npm install /path/to/webdevicecable-relay-0.2.0.tgz`. The backend package is independent of the browser package and ships no server binary.
 
 ```js
-import { RelayClient } from '@webdevicecable/relay';
+import { RelayClient, relayConnectURL, relaySettingsURL } from '@webdevicecable/relay';
 // WDC_PROJECT_KEY is the key returned by createProject, stored in this backend.
 const project = { baseURL: process.env.WDC_RELAY_URL, apiKey: process.env.WDC_PROJECT_KEY };
 // Derive appUser from authentication, never a request body. Save connectionId per owner.
 const enrollment = await RelayClient.enroll({ ...project, appUser: String(authenticatedUser.id) });
-// Display enrollment.code and relay URL in your authenticated settings page.
-// Desktop: Connect server → enter URL/code → review project/account → Approve.
+// Return only the short-lived launch URL to this authenticated account.
+const launchURL = relayConnectURL({baseURL: project.baseURL, code: enrollment.code});
+// Open it from a Connect WDC button; retain URL/code as a manual fallback.
+// Manual fallback: Connections → Connect server → Connect manually → enter URL/code.
 const client = new RelayClient({
   ...project, connectionId: saved.connectionId, origin: enrollment.origin,
   account: { appId: enrollment.appId, appUser: String(authenticatedUser.id) },
@@ -111,9 +113,15 @@ const job = await client.run({ group:'ai', prompt:'Summarize the supplied task.'
 await client.close();
 ```
 
+The app link opens the installed WDC app on its actual configured loopback port. It displays the relay's project, exact website and account for local approval, then opens program settings after the backend completes pairing and declares its groups. The URL carries only the five-minute single-use enrollment code and relay origin, never the project credential or desktop administration key. Keep these short-lived links out of analytics and logs. If app launch is blocked or unavailable, show **Open WDC again**, an install/update link and a collapsed manual fallback: **Connections → Connect server → Connect manually**, relay URL and code with copy buttons. No local port entry is required.
+
+Keep pending enrollment separate from the active connection. Reuse a live pending invitation on repeated clicks; cancellation revokes just that invitation. Promote the replacement only after local approval and cryptographic connection, then retire the old connection. Backend status returns `enrollmentStatus: pending | declined | expired` for an unclaimed code, scoped to its project/account. Offline devices stay paired. `relaySettingsURL({baseURL, connectionId})` opens an already-paired connection's program settings; it cannot create a pairing or grant execution. The local panel verifies both values against its existing binding.
+
 After local approval, choose programs/models for the app and feature groups in WDC. A new pairing does not automatically select a provider or grant automatic execution. Local approvals, Restricted/App tools/Workspace/Commands boundaries and sharing controls remain authoritative.
 
-The backend client also provides capabilities, groups, jobs/status/lookup/cancel, verified streaming snapshots, continuing `session()` conversations, upload/removeInput, artifact download/hash validation, and registered app-tool callbacks. See [the SDK API](../sdk/index.ts) for their types. `authorize` runs before every request, heartbeat and tool claim/result. Tool execution must enforce the application's domain authorization and use the stable callback ID for any external mutation. WDC claims callbacks once; an uncertain claim is never executed again. Kings requests no folders or shell access.
+For workflow options, use SDK 0.2.0 and a compatible desktop advertising `routingVersion: 2` and `scopedToolsVersion:1`; pass `minimumRoutingVersion: 2` when constructing the client. `routingConfigured` reports whether an app default has been chosen, without sharing model names. Migrate 0.1.x constructor tools and registration calls to execution-scoped tools before upgrading the desktop/relay and applications together. See [workflow routing](protocol.md#groups-sessions-diagnostics) for independent program/model/reasoning inheritance and migration aliases.
+
+The backend client also provides capabilities, groups, jobs/status/lookup/cancel, verified streaming snapshots, continuing `session()` conversations, upload/removeInput, artifact download/hash validation, and execution-scoped app-tool callbacks. Pass `tools` to `session`, `submit`, `run` or `preflight`, never the constructor. Tool snapshots, callback ownership and explicit history-backed replacement behave identically to the browser SDK. SDK 0.2.0 requires desktop and relay `scopedToolsVersion:1`; `/relay/v1/capabilities` advertises relay limits under project authentication. See [the SDK API](../sdk/index.ts) for their types. `authorize` runs before every request, heartbeat and tool claim/result. Tool execution must enforce the application's domain authorization and use the stable callback ID for any external mutation. WDC claims callbacks once; an uncertain claim is never executed again. Kings requests no folders or shell access.
 
 ## Ownership and failure recovery
 
@@ -149,3 +157,8 @@ Streaming contracts follow [OpenAI Responses](https://developers.openai.com/api/
 Run `npm ci --prefix tests/relay-contract`, `go test -race ./internal/relay ./internal/bridge`, `npm run test:package`, and `node scripts/relay-e2e.mjs` after building `.cache/bin/webdevicecable` and `wdc-relay:local`. `RORIDO_WDC_SDK=/path/to/rorido/apps/main-fe/node_modules/@webdevicecable/sdk/index.js` exercises Rorido's installed published browser package. `--native` additionally runs synthetic Codex/Claude text, JSON, session, callback and Codex image-generation/edit checks through the Docker relay. All harness state and volumes are disposable; no existing app database is used.
 
 After packaging, set `WDC_RELAY_SDK=dist/relay-client/cjs/relay.js` or `WDC_RELAY_SDK=dist/relay-client/relay.js` to exercise the shipped CommonJS or ESM entry with the same Docker harness. The harness always registers its projects through the management API and checks independent projects on one desktop, cross-project isolation, key rotation, restart and project revocation alongside the direct client. CI exercises both formats and verifies their runtime exports and TypeScript declarations.
+
+
+## Connection review preview
+
+The unpublished 0.2.1 preview accepts `logoURL` and `requestedPermissions: { automaticApprovals: true }` on `RelayClient.enroll`, matching browser pairing. Suggestions are stored with the enrollment ticket and reviewed on the desktop; the user can change them before approval. They do not alter existing connections. See [connection review](connection-review.md) for local testing, image limits and rollout requirements.

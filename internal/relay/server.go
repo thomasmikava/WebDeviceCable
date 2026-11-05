@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/thomasmikava/WebDeviceCable/internal/onboarding"
+	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,8 +30,10 @@ const Grace = 45 * time.Second
 
 type Config struct{ Directory, AdminKey string }
 type ticket struct {
+	onboarding.Options
 	ProjectID, AppUser, CodeHash, ConnectionID string
 	Expires                                    time.Time
+	Declined                                   bool
 }
 type connection struct {
 	ID         string
@@ -182,11 +186,20 @@ func read(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
-	if d.Decode(v) != nil || d.Decode(new(any)) != io.EOF {
-		problem(w, 400, "invalid_request")
-		return false
+	err := d.Decode(v)
+	if err == nil {
+		err = d.Decode(new(any))
+		if err == io.EOF {
+			return true
+		}
 	}
-	return true
+	var oversized *http.MaxBytesError
+	if limit == wirelimits.Envelope && errors.As(err, &oversized) {
+		problem(w, 413, "request_too_large")
+	} else {
+		problem(w, 400, "invalid_request")
+	}
+	return false
 }
 func (s *Server) project(w http.ResponseWriter, r *http.Request) *projectRecord {
 	key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -226,8 +239,15 @@ func (s *Server) Handler() http.Handler {
 		}
 		jsonOut(w, 200, map[string]bool{"ready": true})
 	})
+	m.HandleFunc("GET /relay/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if s.project(w, r) == nil {
+			return
+		}
+		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
+	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
+	m.HandleFunc("POST /connector/v1/decline", s.decline)
 	m.HandleFunc("POST /connector/v1/claim", s.claim)
 	m.HandleFunc("POST /connector/v1/{connection}/poll", s.poll)
 	m.HandleFunc("POST /connector/v1/{connection}/result", s.result)
@@ -252,6 +272,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		onboarding.Options
 		AppUser string `json:"appUser"`
 	}
 	if !read(w, r, &in, 4096) {
@@ -259,6 +280,10 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.AppUser == "" || len(in.AppUser) > 200 {
 		problem(w, 400, "invalid_account")
+		return
+	}
+	if err := in.Options.Validate(p.Origin); err != nil {
+		problem(w, 400, "invalid_logo")
 		return
 	}
 	s.mu.Lock()
@@ -275,7 +300,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	code := ID()
 	id := ID()
-	t := ticket{ProjectID: p.ID, AppUser: in.AppUser, CodeHash: hash(code), ConnectionID: id, Expires: time.Now().Add(5 * time.Minute)}
+	t := ticket{Options: in.Options, ProjectID: p.ID, AppUser: in.AppUser, CodeHash: hash(code), ConnectionID: id, Expires: time.Now().Add(5 * time.Minute)}
 	if e := s.put("ticket", t.CodeHash, t); e != nil {
 		problem(w, 500, "storage_error")
 		return
@@ -292,12 +317,12 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 	var t ticket
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || !s.projectActive(t.ProjectID) {
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || !s.projectActive(t.ProjectID) {
 		problem(w, 410, "pairing_expired")
 		return
 	}
 	p := s.projects[t.ProjectID]
-	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID})
+	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID, "logoURL": t.LogoURL, "requestedPermissions": t.RequestedPermissions})
 }
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Code, Invitation, Token string }
@@ -307,7 +332,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var t ticket
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || len(in.Token) != 64 || !s.projectActive(t.ProjectID) {
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || len(in.Token) != 64 || !s.projectActive(t.ProjectID) {
 		problem(w, 410, "pairing_expired")
 		return
 	}
@@ -315,6 +340,10 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	p := s.projects[t.ProjectID]
 	if e != nil || inv.AppID != p.AppID || inv.AppUser != t.AppUser || inv.Origin != p.Origin {
 		problem(w, 400, "identity_mismatch")
+		return
+	}
+	if (t.LogoURL != "" || t.RequestedPermissions.AutomaticApprovals) && inv.ConnectionReviewVersion != 1 {
+		problem(w, 409, "desktop_update_required")
 		return
 	}
 	private, e := newPrivate()
@@ -335,6 +364,30 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	s.connections[c.ID] = c
 	jsonOut(w, 201, map[string]string{"connectionId": c.ID})
 }
+
+// Declining requires the same single-use invitation as claiming. Persist a
+// short-lived tombstone so the account backend can distinguish it from expiry.
+func (s *Server) decline(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code string `json:"code"`
+	}
+	if !read(w, r, &in, 4096) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t ticket
+	if s.get("ticket", hash(in.Code), &t) != nil || time.Now().After(t.Expires) || t.Declined || !s.projectActive(t.ProjectID) {
+		problem(w, 410, "pairing_expired")
+		return
+	}
+	t.Declined = true
+	if s.put("ticket", t.CodeHash, t) != nil {
+		problem(w, 500, "storage_error")
+		return
+	}
+	jsonOut(w, 200, map[string]bool{"declined": true})
+}
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	p := s.project(w, r)
 	if p == nil {
@@ -343,6 +396,25 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connections[r.PathValue("connection")]
+	if c == nil {
+		var raw string
+		var t ticket
+		err := s.db.QueryRow("SELECT data FROM records WHERE kind='ticket' AND json_extract(data,'$.ConnectionID')=?", r.PathValue("connection")).Scan(&raw)
+		if err == nil && json.Unmarshal([]byte(raw), &t) == nil && t.ProjectID == p.ID && s.projectActive(p.ID) {
+			if account := r.Header.Get("X-WDC-Account"); account != "" && account != t.AppUser {
+				problem(w, 403, "account_mismatch")
+				return
+			}
+			state := "pending"
+			if time.Now().After(t.Expires) {
+				state = "expired"
+			} else if t.Declined {
+				state = "declined"
+			}
+			jsonOut(w, 200, map[string]any{"connectionId": t.ConnectionID, "appUser": t.AppUser, "connected": false, "revoked": false, "enrollmentStatus": state})
+			return
+		}
+	}
 	if c == nil || c.ProjectID != p.ID || !s.projectActive(p.ID) {
 		problem(w, 404, "connection_not_found")
 		return
@@ -416,8 +488,13 @@ func (s *Server) poll(w http.ResponseWriter, r *http.Request) {
 	for {
 		s.mu.Lock()
 		packets := []Packet{}
+		packetBytes := 0
 		for _, op := range s.operations {
 			if op.connection == c.ID && !op.claimed && time.Now().UnixMilli() < op.packet.Deadline {
+				if packetBytes+len(op.packet.Body) > wirelimits.Envelope {
+					continue
+				}
+				packetBytes += len(op.packet.Body)
 				op.claimed = true
 				packets = append(packets, op.packet)
 				if len(packets) == 8 {
@@ -589,14 +666,14 @@ func (s *Server) request(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in logicalRequest
-	if !read(w, r, &in, 128<<10) {
+	if !read(w, r, &in, wirelimits.Envelope) {
 		return
 	}
 	if in.Deadline <= time.Now().UnixMilli() || in.Deadline > time.Now().Add(time.Minute).UnixMilli() {
 		problem(w, 408, "request_expired")
 		return
 	}
-	if _, err := hex.DecodeString(in.ID); err != nil || len(in.ID) != 64 || len(in.Body) > 40<<10 {
+	if _, err := hex.DecodeString(in.ID); err != nil || len(in.ID) != 64 {
 		problem(w, 400, "invalid_request")
 		return
 	}
@@ -606,6 +683,10 @@ func (s *Server) request(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Method != "GET" && in.Method != "POST" && in.Method != "PUT" && in.Method != "DELETE" {
 		problem(w, 400, "invalid_method")
+		return
+	}
+	if code := wirelimits.Check(in.Method, in.Path, in.Body); code != "" {
+		problem(w, 413, code)
 		return
 	}
 	client, e := s.client(p.ID, r.PathValue("connection"), r.Header.Get("X-WDC-Account"))

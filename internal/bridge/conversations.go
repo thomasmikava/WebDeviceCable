@@ -8,23 +8,26 @@ import (
 )
 
 type Conversation struct {
-	Mode      string         `json:"mode,omitempty"`
-	ID        string         `json:"id"`
-	PairingID string         `json:"pairingId,omitempty"`
-	LeaseID   string         `json:"leaseId,omitempty"`
-	Group     string         `json:"group,omitempty"`
-	Plan      *ExecutionPlan `json:"plan,omitempty"`
-	Status    string         `json:"status"`
-	Code      string         `json:"code,omitempty"`
-	LastJobID string         `json:"lastJobId,omitempty"`
-	Turns     int            `json:"turns"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	Tools       []AppTool      `json:"tools,omitempty"`
+	ToolSetHash string         `json:"toolSetHash"`
+	Mode        string         `json:"mode,omitempty"`
+	ID          string         `json:"id"`
+	PairingID   string         `json:"pairingId,omitempty"`
+	LeaseID     string         `json:"leaseId,omitempty"`
+	Group       string         `json:"group,omitempty"`
+	Plan        *ExecutionPlan `json:"plan,omitempty"`
+	Status      string         `json:"status"`
+	Code        string         `json:"code,omitempty"`
+	LastJobID   string         `json:"lastJobId,omitempty"`
+	Turns       int            `json:"turns"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
 }
 
 func remoteConversation(c *Conversation) Conversation {
 	copy := *c
 	copy.Plan = nil
+	copy.Tools = nil
 	copy.LeaseID = ""
 	copy.PairingID = ""
 	return copy
@@ -77,12 +80,17 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 			return err
 		}
 		var in struct {
-			Mode     string `json:"mode"`
-			Group    string `json:"group"`
-			Provider string `json:"provider"`
-			Action   string `json:"action"`
+			Tools    []AppTool `json:"tools"`
+			Mode     string    `json:"mode"`
+			Group    string    `json:"group"`
+			Provider string    `json:"provider"`
+			Action   string    `json:"action"`
 		}
 		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		tools, toolHash, err := snapshotTools(in.Tools, &in.Mode)
+		if err != nil {
 			return err
 		}
 		if in.Mode == "" {
@@ -100,11 +108,19 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 				return err
 			}
 		}
+		if program, ok := a.program(plan.Provider); ok && program.Type == "custom" {
+			if err := a.checkProgramRequest(p, plan, JobRequest{Mode: in.Mode, ConversationID: "checking"}); err != nil {
+				return err
+			}
+		}
 		if plan.Kind == "command" && a.actions[plan.Action].Session == nil {
 			return fail(400, "sessions_unsupported", "This command does not support continuing sessions. Enable its JSONL session interface in configuration.")
 		}
-		c := &Conversation{Mode: in.Mode, ID: secret(), PairingID: p.ID, LeaseID: lease, Group: in.Group, Plan: plan, Status: "open", CreatedAt: a.now(), UpdatedAt: a.now()}
+		c := &Conversation{Tools: tools, ToolSetHash: toolHash, Mode: in.Mode, ID: secret(), PairingID: p.ID, LeaseID: lease, Group: in.Group, Plan: plan, Status: "open", CreatedAt: a.now(), UpdatedAt: a.now()}
 		if err := a.update(func(s *State) error {
+			if err := admitDefinitions(s, tools); err != nil {
+				return err
+			}
 			if len(s.Conversations) >= 128 {
 				closed := []*Conversation{}
 				for _, item := range s.Conversations {
@@ -254,4 +270,12 @@ func (a *App) reconcileConversations(s *State, now time.Time) {
 			c.UpdatedAt = now
 		}
 	}
+}
+
+func (a *App) publicConversations() map[string]Conversation {
+	out := map[string]Conversation{}
+	for id, c := range a.state.Conversations {
+		out[id] = remoteConversation(c)
+	}
+	return out
 }

@@ -17,14 +17,23 @@ func (a *App) nativeAvailable(p *Pairing, provider, kind string) error {
 	if a.config.Bridge.DisableNative {
 		return fail(503, "native_disabled", "Native execution is disabled in config.yaml.")
 	}
+	program, ok := a.program(provider)
+	if !ok {
+		return fail(503, "program_unavailable", "The selected AI program was removed. Choose a program explicitly in this connection's settings.")
+	}
+	if program.Type == "custom" && p.ProgramGrants[program.ID] != program.hash() {
+		return fail(403, "program_not_granted", "Grant this custom AI program OS account permissions in the connection's Program access settings.")
+	}
+	if err := a.knownProgramAccount(p, provider); err != nil {
+		return err
+	}
 	if e := nativeEligibility(p, provider); e != nil {
 		return e
 	}
-
 	for _, s := range a.native {
 		if s.ID == provider && s.Execution {
 			if kind != "text" && !s.Images {
-				return fail(503, "native_image_unavailable", "This Codex installation cannot provide isolated image generation.")
+				return fail(503, "native_image_unavailable", "This AI program does not support image generation.")
 			}
 			return nil
 		}
@@ -34,7 +43,7 @@ func (a *App) nativeAvailable(p *Pairing, provider, kind string) error {
 			return fail(503, s.Code, s.Detail)
 		}
 	}
-	return fail(503, "native_client_unavailable", "Check the installed AI client in Settings. A compatible client and its existing subscription sign-in are required.")
+	return fail(503, "native_client_unavailable", "The selected AI program is unavailable. Check its installation, profile and sign-in in Settings.")
 }
 func (a *App) bindNativeAccount(jobID, account string) error {
 	a.mu.Lock()
@@ -95,7 +104,10 @@ func (a *App) startNative(job *Job) {
 
 		target := job.Plan.ExecutionTarget
 		dir := filepath.Join(a.dir, "runs", "native-"+job.ID)
-		if target.Provider == "claude" {
+		program, _ := a.program(target.Provider)
+		if program.Type == "custom" {
+			go conversation.loop(withProgram(lifetime, program), customAction(program, id != ""), dir, turn, a)
+		} else if program.Type == "claude" {
 			go a.claudeLoop(lifetime, conversation, dir, turn, target, id != "")
 		} else {
 			go a.codexLoop(lifetime, conversation, dir, turn, target, id != "", jobKind(job))
@@ -180,7 +192,13 @@ func (a *App) codexLoop(ctx context.Context, c *commandConversation, dir string,
 		failRun(e)
 		return
 	}
-	path, e := nativePath("codex")
+	program, e := a.programForJob(first.JobID)
+	if e != nil {
+		failRun(e)
+		return
+	}
+	ctx = withProgram(ctx, program)
+	path, e := program.path()
 	if e != nil {
 		failRun(e)
 		return
@@ -269,7 +287,7 @@ func (a *App) codexLoop(ctx context.Context, c *commandConversation, dir string,
 		}
 		active.Run.mu.Lock()
 		active.Run.started = true
-		active.Run.execution = &ExecutionMetadata{Kind: "native", Name: "Codex", Provider: "codex", Version: thread.NativeVersion, VersionSource: "native", Model: thread.Model, Reasoning: thread.Reasoning}
+		active.Run.execution = &ExecutionMetadata{Kind: "native", Name: program.Name, ProgramID: program.ID, Integration: program.Type, Provider: "codex", Version: thread.NativeVersion, VersionSource: "native", Model: thread.Model, Reasoning: thread.Reasoning}
 		active.Run.mu.Unlock()
 		input := []any{map[string]any{"type": "text", "text": active.Prompt, "text_elements": []any{}}}
 		for _, file := range active.Inputs {

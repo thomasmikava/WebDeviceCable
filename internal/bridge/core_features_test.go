@@ -186,13 +186,17 @@ func pendingOperation(t *testing.T, f *fixture) *PermissionRequest {
 	t.Fatal("no pending permission")
 	return nil
 }
-func TestAppToolDispatchClaimResultsAndChangedDefinitions(t *testing.T) {
+func TestAppToolDispatchClaimResultsAndImmutableDefinitions(t *testing.T) {
 	f, token, lease, job := makeToolJob(t, "app-tools")
 	origin := "https://tools.example"
 	tool := AppTool{ID: "tasks.create", Title: "Create task", Description: "Create a task", InputSchema: json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}},"required":["title"],"additionalProperties":false}`)}
-	object(t, f.req("POST", "/v2/tools", origin, token, lease, map[string]any{"tools": []AppTool{tool}}, false), 200)
-	// Registration cancels old tool-enabled work; supply a new admitted operation.
-	f.a.state.Jobs[0].Status = "running"
+	tools, hash, err := snapshotTools([]AppTool{tool}, &f.a.state.Jobs[0].Request.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.a.state.Jobs[0].Request.Tools = tools
+	f.a.state.Jobs[0].Request.ToolSetHash = hash
+	f.a.state.Jobs[0].Request.IdempotencyKey = "scope-original"
 	done := make(chan error, 1)
 	go func() {
 		_, err := f.a.invokeNativeTool(context.Background(), job, "app_"+digest(tool.ID)[:24], json.RawMessage(`{"title":"A"}`))
@@ -236,10 +240,14 @@ func TestAppToolDispatchClaimResultsAndChangedDefinitions(t *testing.T) {
 	otherLease := f.lease(t, origin, other)
 	object(t, f.req("POST", "/v2/tool-calls/"+op.ID+"/claim", origin, other, otherLease, nil, false), 404)
 	tool.Description = "Changed behavior"
-	object(t, f.req("POST", "/v2/tools", origin, token, lease, map[string]any{"tools": []AppTool{tool}}, false), 200)
-	if f.a.state.Jobs[0].Status != "cancelled" {
-		t.Fatal("changed definition retained access")
+	object(t, f.req("POST", "/v2/tools", origin, token, lease, map[string]any{"tools": []AppTool{tool}}, false), 404)
+	if f.a.state.Jobs[0].Status != "running" || f.a.state.Jobs[0].Request.Tools[0].Description == tool.Description {
+		t.Fatal("snapshot changed")
 	}
+	if op.JobID != job || op.RequestIdempotencyKey != "scope-original" || op.ToolSetHash != hash {
+		t.Fatal("callback lost execution identity")
+	}
+
 }
 func TestWorkspacePreviewStaleWritesAndContainment(t *testing.T) {
 	f, token, lease, job := makeToolJob(t, "workspace")
@@ -373,7 +381,7 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 	object(t, f.rawReq("POST", "/api/launch-intents", "", f.a.adminKey, "", map[string]string{"uri": uri}, false), 409)
 	ephemeral, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nonce := secret()
-	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
+	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "logoURL": "https://website.example:8443/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
 	signed, _ := signBytes(key, payload)
 	response := f.rawReq("POST", "/v2/connect", origin, "", "", signed, false)
 	object(t, response, 200)
@@ -381,11 +389,17 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 		t.Fatal("launch granted access without consent")
 	}
 	object(t, f.rawReq("POST", "/v2/connect", origin, "", "", signed, false), 409)
+	if f.a.pairingRequests[requestID].LogoURL != "https://website.example:8443/logo.svg" || !f.a.pairingRequests[requestID].RequestedPermissions.AutomaticApprovals {
+		t.Fatal("signed onboarding suggestions lost")
+	}
 	if f.a.pairingRequests[requestID].Origin != origin || f.a.pairingRequests[requestID].PublicKey != publicKey(key) {
 		t.Fatal("launch identity lost")
 	}
 	object(t, f.req("POST", "/api/pairing-requests/"+requestID+"/decision", f.origin, "", "", map[string]bool{"approve": true}, true), 200)
 	for _, inv := range f.a.state.Invitations {
+		if !inv.Pairing.Automatic {
+			t.Fatal("reviewed automatic approval was not granted")
+		}
 		if inv.Pairing.ClientPublicKey != publicKey(key) {
 			t.Fatal("invitation not bound to requesting key")
 		}
@@ -423,9 +437,9 @@ func TestFileEnabledCommandRoundTrip(t *testing.T) {
 	}
 }
 func TestClaudeToolProfilePreservesExplicitIsolation(t *testing.T) {
-	args := claudeToolArgs(claudeArgs(ExecutionTarget{}, nativeUUID()), "private-mcp.json", []map[string]any{{"name": "wdc_read"}})
+	args := claudeToolArgs(claudeArgs(ExecutionTarget{}, nativeUUID()), "private-mcp.json")
 	text := strings.Join(args, " ")
-	for _, control := range []string{"--restricted", "--strict-mcp-config", "--tools  ", "--setting-sources  ", "--no-session-persistence", "--disable-slash-commands", "--no-chrome", "claudeMdExcludes", "syncClaudeAiSkills", "syncClaudeAiPlugins", "disableAllHooks", "mcp__wdc__wdc_read"} {
+	for _, control := range []string{"--restricted", "--strict-mcp-config", "--tools  ", "--setting-sources  ", "--no-session-persistence", "--disable-slash-commands", "--no-chrome", "claudeMdExcludes", "syncClaudeAiSkills", "syncClaudeAiPlugins", "disableAllHooks", "--allowedTools mcp__wdc__*"} {
 		if !strings.Contains(text, control) {
 			t.Fatal("missing tool isolation", control)
 		}
@@ -438,12 +452,6 @@ func TestClaudeToolProfilePreservesExplicitIsolation(t *testing.T) {
 func TestOnlyFoldersNeedPermissionReviewAndRespectTab(t *testing.T) {
 	f, token, lease, _ := makeToolJob(t, "restricted")
 	origin := "https://tools.example"
-	tool := AppTool{ID: "search", Title: "Search", InputSchema: json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)}
-	object(t, f.req("POST", "/v2/tools", origin, token, lease, map[string]any{"tools": []AppTool{tool}}, false), 200)
-	direct := object(t, f.req("POST", "/v2/permissions", origin, token, lease, map[string]any{"tools": []string{tool.ID}}, false), 200)
-	if direct["status"] != "completed" || len(f.a.permissionList()) != 0 {
-		t.Fatal("app tools requested WDC approval")
-	}
 	object(t, f.req("POST", "/v2/permissions", origin, token, lease, map[string]any{"tools": []string{"unknown"}}, false), 400)
 	request := object(t, f.req("POST", "/v2/permissions", origin, token, lease, map[string]any{"workspace": true}, false), 202)
 	id := request["id"].(string)

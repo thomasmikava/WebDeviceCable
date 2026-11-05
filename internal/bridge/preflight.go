@@ -13,6 +13,14 @@ type AdmissionStatus struct {
 }
 
 func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error) {
+	tools, _, err := snapshotTools(in.Request.Tools, &in.Request.Mode)
+	if err != nil {
+		return AdmissionStatus{}, err
+	}
+	in.Request.Tools = tools
+	if err := admitDefinitions(&a.state, tools); err != nil {
+		return AdmissionStatus{}, err
+	}
 	if err := validateRequest(&in.Request); err != nil {
 		return AdmissionStatus{}, fail(400, "invalid_job", err.Error())
 	}
@@ -38,6 +46,10 @@ func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error
 					continue
 				}
 				switch feature {
+				case "sessions":
+					supported = cap.Sessions
+				case "streaming":
+					supported = cap.Streaming
 				case "text":
 					supported = cap.Text
 				case "json":

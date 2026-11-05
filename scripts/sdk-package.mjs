@@ -2,6 +2,9 @@
 import {mkdir, readFile, writeFile, copyFile, rm, cp} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import assert from 'node:assert/strict';
 
 const root = resolve(import.meta.dirname, '..');
 const out = resolve(root, 'dist');
@@ -95,8 +98,17 @@ try {
     const file = resolve(directory, 'secure.d.ts');
     await writeFile(file, "import type { webcrypto } from 'node:crypto';\ntype CryptoKey = webcrypto.CryptoKey;\n" + await readFile(file, 'utf8'));
   }
-  // Node ESM and CommonJS share one runtime, including error class identity.
-  await writeFile(resolve(backend, 'relay.js'), "import relay from './cjs/relay.js';\nexport const { RelayClient, RelayAdminClient, BridgeError, BridgeJobError, relayRequest } = relay;\n");
+  // The TypeScript compiler's ESM output defines the public value exports.
+  // Generate the facade from it so adding an API never requires a second list.
+  const source = await import(pathToFileURL(resolve(root, 'internal/bridge/web/relay.js')).href);
+  const names = Object.keys(source).sort();
+  const commonjs = createRequire(import.meta.url)(resolve(backend, 'cjs/relay.js'));
+  assert.deepEqual(Object.keys(commonjs).sort(), names, 'Relay CommonJS exports differ from TypeScript');
+  await writeFile(resolve(backend, 'relay.js'), `import relay from './cjs/relay.js';\nexport const { ${names.join(', ')} } = relay;\n`);
+  run(process.execPath, ['--check', resolve(backend, 'relay.js')]);
+  const facade = await import(pathToFileURL(resolve(backend, 'relay.js')).href);
+  assert.deepEqual(Object.keys(facade).sort(), names, 'Relay ESM exports differ from TypeScript');
+  for (const name of names) assert.equal(facade[name], commonjs[name], `Relay runtime identity differs: ${name}`);
   await writePackage(backend, {
     name: '@webdevicecable/relay',
     description: 'WebDeviceCable relay client for Node backends and dynamic project provisioning',

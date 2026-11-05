@@ -9,16 +9,24 @@ import (
 )
 
 type ActionGroup struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind,omitempty"`
-	Name     string `json:"name"`
-	ParentID string `json:"parentId,omitempty"`
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind,omitempty"`
+	Name      string   `json:"name"`
+	ParentID  string   `json:"parentId,omitempty"`
+	Operation string   `json:"operation,omitempty"`
+	Hidden    bool     `json:"hidden,omitempty"`
+	Replaces  []string `json:"replaces,omitempty"`
 }
 type ExecutionTarget struct {
 	Provider  string `json:"provider,omitempty"`
 	Action    string `json:"action,omitempty"`
 	Model     string `json:"model,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
+	// Old targets replace the whole selection. New editors explicitly opt in to
+	// inheriting unspecified options, preserving every existing saved route.
+	InheritOptions   bool `json:"inheritOptions,omitempty"`
+	ModelDefault     bool `json:"modelDefault,omitempty"`
+	ReasoningDefault bool `json:"reasoningDefault,omitempty"`
 }
 type Routing struct {
 	Revision uint64                     `json:"revision"`
@@ -27,10 +35,14 @@ type Routing struct {
 }
 type ExecutionPlan struct {
 	ExecutionTarget
-	Kind       string `json:"kind"`
-	ActionHash string `json:"actionHash,omitempty"`
+	ProgramHash string `json:"programHash,omitempty"`
+	Kind        string `json:"kind"`
+	ActionHash  string `json:"actionHash,omitempty"`
 }
 type ExecutionMetadata struct {
+	ToolSetHash   string `json:"toolSetHash,omitempty"`
+	ProgramID     string `json:"programId,omitempty"`
+	Integration   string `json:"integration,omitempty"`
 	Kind          string `json:"kind"`
 	Name          string `json:"name,omitempty"`
 	Version       string `json:"version,omitempty"`
@@ -80,8 +92,8 @@ func (a *App) validateTarget(p *Pairing, target ExecutionTarget) error {
 		}
 		return a.authorizeAction(p, target.Action, "")
 	}
-	if target.Provider != "codex" && target.Provider != "claude" {
-		return fail(400, "invalid_route", "Choose a native client or an allowed command.")
+	if _, ok := a.program(target.Provider); !ok {
+		return fail(409, "program_unavailable", "The selected AI program is unavailable. Choose a program explicitly in this connection’s settings.")
 	}
 	for _, value := range []string{target.Model, target.Reasoning} {
 		if len(value) > 128 || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {
@@ -90,29 +102,94 @@ func (a *App) validateTarget(p *Pairing, target ExecutionTarget) error {
 	}
 	return nil
 }
+
+func applyRoute(base, override ExecutionTarget) ExecutionTarget {
+	if !override.InheritOptions || override.Action != "" || override.Provider != "" && override.Provider != base.Provider {
+		base = ExecutionTarget{Provider: override.Provider, Action: override.Action}
+	}
+	if override.Provider != "" {
+		base.Provider, base.Action = override.Provider, ""
+	}
+	if !override.InheritOptions || override.Model != "" || override.ModelDefault {
+		base.Model = override.Model
+	}
+	if !override.InheritOptions || override.Reasoning != "" || override.ReasoningDefault {
+		base.Reasoning = override.Reasoning
+	}
+	return base
+}
+
+func routingTarget(p *Pairing, group string) ExecutionTarget {
+	target := ExecutionTarget{}
+	if p.Routing.Default != nil {
+		target = applyRoute(target, *p.Routing.Default)
+	}
+	var chain []string
+	for id := group; id != ""; {
+		chain = append(chain, id)
+		parent := ""
+		for _, item := range p.Groups {
+			if item.ID == id {
+				parent = item.ParentID
+				break
+			}
+		}
+		id = parent
+		if len(chain) > 8 {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		if override, ok := p.Routing.Groups[chain[i]]; ok {
+			target = applyRoute(target, override)
+		}
+	}
+	return target
+}
+
+func routingConfigured(p *Pairing) bool {
+	if p.Routing.Default == nil {
+		return false
+	}
+	target := routingTarget(p, "")
+	return target.Provider != "" || target.Action != ""
+}
+
+// Reject known-incompatible local selections during admission, before a native
+// turn is created. An unavailable model is never substituted silently.
+func (a *App) validateNativeOptions(target ExecutionTarget) error {
+	for _, native := range a.native {
+		if native.ID != target.Provider || len(native.Models) == 0 || target.Model == "" {
+			continue
+		}
+		for _, model := range native.Models {
+			if model.ID != target.Model {
+				continue
+			}
+			if target.Reasoning != "" && len(model.Reasoning) > 0 {
+				for _, effort := range model.Reasoning {
+					if effort.Effort == target.Reasoning {
+						return nil
+					}
+				}
+				return fail(409, "reasoning_unavailable", "Choose a reasoning level supported by this model in WDC program settings.")
+			}
+			return nil
+		}
+		if program, _ := a.program(target.Provider); program.Type == "codex" || program.Type == "custom" {
+			return fail(409, "model_unavailable", "The selected local model is no longer available. Review this stage in WDC program settings.")
+		}
+	}
+	return nil
+}
+
 func (a *App) resolvePlan(p *Pairing, request JobRequest) (*ExecutionPlan, error) {
 	target := ExecutionTarget{Provider: request.Provider, Action: request.Action}
 	if request.Group != "" && !groupExists(p, request.Group) {
 		return nil, fail(400, "unknown_group", "Register this action group before using it.")
 	}
 	if request.Group != "" || request.Kind == "action" && target.Provider == "" && target.Action == "" {
-		if p.Routing.Default != nil {
-			target = *p.Routing.Default
-		}
-		for id := request.Group; id != ""; {
-			if override, ok := p.Routing.Groups[id]; ok {
-				target = override
-				break
-			}
-			parent := ""
-			for _, group := range p.Groups {
-				if group.ID == id {
-					parent = group.ParentID
-					break
-				}
-			}
-			id = parent
-		}
+		target = routingTarget(p, request.Group)
 		if target.Provider == "" && target.Action == "" {
 			return nil, fail(409, "routing_required", "Choose this app’s default in Connections, then Routing.")
 		}
@@ -131,6 +208,11 @@ func (a *App) resolvePlan(p *Pairing, request JobRequest) (*ExecutionPlan, error
 	if err := a.validateTarget(p, target); err != nil {
 		return nil, err
 	}
+	if target.Provider != "" {
+		if err := a.validateNativeOptions(target); err != nil {
+			return nil, err
+		}
+	}
 	plan := &ExecutionPlan{ExecutionTarget: target, Kind: request.Kind}
 	if target.Action != "" {
 		plan.Kind = "command"
@@ -138,7 +220,12 @@ func (a *App) resolvePlan(p *Pairing, request JobRequest) (*ExecutionPlan, error
 	} else if request.Kind == "action" || request.Kind == "command" {
 		plan.Kind = "text"
 	}
-	if plan.Kind != "text" && plan.Kind != "command" && target.Provider != "codex" {
+	if target.Provider != "" {
+		program, _ := a.program(target.Provider)
+		plan.ProgramHash = program.hash()
+	}
+	program, _ := a.program(target.Provider)
+	if plan.Kind != "text" && plan.Kind != "command" && program.Type != "codex" {
 		return nil, fail(400, "invalid_job", "Image operations require Codex.")
 	}
 	return plan, nil
@@ -180,6 +267,11 @@ func (a *App) prepareJob(p *Pairing, in *JobRequest, plan *ExecutionPlan) (*Exec
 		}
 		in.Mode = effective.Mode
 	}
+	if plan.Provider != "" {
+		if err := a.checkProgramRequest(p, plan, effective); err != nil {
+			return nil, "", err
+		}
+	}
 	if err := validateRequest(&effective); err != nil {
 		return nil, "", fail(400, "invalid_job", err.Error())
 	}
@@ -193,10 +285,13 @@ func (a *App) remoteJob(j *Job) Job {
 	}
 	if c.Execution != nil {
 		metadata := *c.Execution
+		metadata.ToolSetHash = j.Request.ToolSetHash
 		c.Execution = &metadata
 		if !sharing.Names {
 			metadata.Name = ""
 			metadata.Provider = ""
+			metadata.ProgramID = ""
+			metadata.Integration = ""
 		}
 		if !sharing.Versions {
 			metadata.Version = ""
@@ -251,6 +346,7 @@ func (a *App) remoteJob(j *Job) Job {
 }
 func (a *App) remotePairing(p *Pairing) Pairing {
 	c := publicPairing(p)
+	c.DisplayName = ""
 	c.Folders = append([]FolderGrant(nil), p.Folders...)
 	for i := range c.Folders {
 		c.Folders[i].Path = ""
@@ -258,6 +354,7 @@ func (a *App) remotePairing(p *Pairing) Pairing {
 	}
 	c.Routing = Routing{}
 	c.Actions = nil
+	c.ProgramGrants = nil
 	return c
 }
 func (a *App) closeConversations(s *State, pairingID, code string, now time.Time) {
@@ -275,6 +372,14 @@ func validateGroups(groups []ActionGroup) error {
 	}
 	seen := map[string]bool{}
 	for _, group := range groups {
+		if group.Operation != "" && group.Operation != "text" && group.Operation != "image" || len(group.Replaces) > 8 {
+			return errors.New("invalid group operation or migration aliases")
+		}
+		for _, id := range group.Replaces {
+			if !actionID.MatchString(id) {
+				return errors.New("invalid legacy group id")
+			}
+		}
 		if (group.Kind != "" && group.Kind != "command" && group.Kind != "ai") || !actionID.MatchString(group.ID) || seen[group.ID] || strings.TrimSpace(group.Name) == "" || len(group.Name) > 100 || !utf8.ValidString(group.Name) || group.ParentID != "" && !actionID.MatchString(group.ParentID) {
 			return errors.New("groups need unique short ids and names")
 		}

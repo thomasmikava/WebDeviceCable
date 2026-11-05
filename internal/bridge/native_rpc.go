@@ -19,15 +19,16 @@ import (
 )
 
 type nativeRPC struct {
-	toolHandler   func(context.Context, nativeMessage) error
-	input         io.WriteCloser
-	packets       chan conversationPacket
-	cancel        context.CancelFunc
-	stopped       chan struct{}
-	next          int
-	notifications []nativeMessage
-	readerStopped chan struct{}
-	spawn         func(map[string]any) (*nativeRPC, error)
+	accountIdentity string
+	toolHandler     func(context.Context, nativeMessage) error
+	input           io.WriteCloser
+	packets         chan conversationPacket
+	cancel          context.CancelFunc
+	stopped         chan struct{}
+	next            int
+	notifications   []nativeMessage
+	readerStopped   chan struct{}
+	spawn           func(map[string]any) (*nativeRPC, error)
 }
 type nativeMessage struct {
 	ID     json.RawMessage `json:"id"`
@@ -116,9 +117,11 @@ func startNativeRPC(parent context.Context, path, dir string, config map[string]
 
 func startNativeProcess(parent context.Context, path, dir string, args []string, stderr io.Writer) (*nativeRPC, error) {
 	ctx, cancel := context.WithCancel(parent)
+	program := contextProgram(parent)
+	args = append(append([]string{}, program.Arguments...), args...)
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
-	cmd.Env = clientEnv()
+	cmd.Env = programEnv(program)
 	cmd.Stderr = stderr
 	cmd.WaitDelay = time.Second
 	input, e := cmd.StdinPipe()
@@ -268,6 +271,7 @@ func codexAccount(ctx context.Context, rpc *nativeRPC) (string, error) {
 	if result.Account.Email == "" {
 		return "", fail(503, "account_identity_unavailable", "Codex did not supply an account identity to pin. This account is not supported yet.")
 	}
+	rpc.accountIdentity = result.Account.Email
 	return digest(strings.ToLower(result.Account.Email)), nil
 }
 

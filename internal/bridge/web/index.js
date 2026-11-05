@@ -17,6 +17,22 @@ async function json(response) {
         throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
     return body;
 }
+export function connectionReviewOptions(options, origin) {
+    if (options.logoURL !== undefined) {
+        let url;
+        try {
+            url = new URL(options.logoURL);
+        }
+        catch {
+            throw new BridgeError('invalid_logo', 'Supply a direct logo HTTPS URL.', 400);
+        }
+        if (typeof options.logoURL !== 'string' || options.logoURL.length > 2048 || url.username || url.password || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && (!origin || url.origin === origin))))
+            throw new BridgeError('invalid_logo', 'Supply a logo HTTPS URL, or the app’s loopback HTTP URL.', 400);
+    }
+    if (options.requestedPermissions !== undefined && (typeof options.requestedPermissions !== 'object' || options.requestedPermissions === null || Array.isArray(options.requestedPermissions) || Object.keys(options.requestedPermissions).some(key => key !== 'automaticApprovals') || options.requestedPermissions.automaticApprovals !== undefined && typeof options.requestedPermissions.automaticApprovals !== 'boolean'))
+        throw new BridgeError('invalid_permissions', 'automaticApprovals must be a boolean.', 400);
+    return { ...(options.logoURL ? { logoURL: options.logoURL } : {}), ...(options.requestedPermissions ? { requestedPermissions: { ...options.requestedPermissions } } : {}) };
+}
 export class BridgeJobError extends BridgeError {
     job;
     constructor(job) {
@@ -39,7 +55,7 @@ function groupsArray(groups) {
             if (result.length >= 64)
                 throw new BridgeError('invalid_groups', 'An app can declare up to 64 groups.', 400);
             const id = parent ? `${parent}.${definition.id}` : definition.id;
-            result.push({ id, name: definition.name, ...(definition.kind ? { kind: definition.kind } : {}), ...(parent || definition.parentId ? { parentId: parent ?? definition.parentId } : {}) });
+            result.push({ id, name: definition.name, ...(definition.operation ? { operation: definition.operation } : {}), ...(definition.hidden ? { hidden: true } : {}), ...(definition.replaces?.length ? { replaces: definition.replaces } : {}), ...(definition.kind ? { kind: definition.kind } : {}), ...(parent || definition.parentId ? { parentId: parent ?? definition.parentId } : {}) });
             if (definition.children?.length)
                 visit(definition.children, id, depth + 1);
         }
@@ -58,10 +74,123 @@ function unknownSubmission(error, key) {
         error.idempotencyKey = key;
     throw error;
 }
+const byteLength = (value) => new TextEncoder().encode(value).length;
+const validation = (code, message) => new BridgeError(code, message, 400, { category: 'validation' });
+function definitions(tools) { return tools.map(({ execute, ...tool }) => tool); }
+function captureTools(tools, mode) {
+    if (!tools)
+        return [];
+    if (!Array.isArray(tools))
+        throw validation('invalid_tools', 'Tools must be an array.');
+    if (tools.length && mode && mode !== 'app-tools' && mode !== 'workspace')
+        throw validation('invalid_mode', 'Tools require app-tools or workspace mode.');
+    const seen = new Set();
+    let definitionBytes = 2;
+    try {
+        return tools.map(tool => {
+            if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(tool.id) || tool.id.startsWith('wdc_') || seen.has(tool.id) || typeof tool.execute !== 'function' || !tool.title || byteLength(tool.title) > 100 || byteLength(tool.description) > 2000)
+                throw validation('invalid_tools', 'Invalid or duplicate tool definition.');
+            seen.add(tool.id);
+            const copy = JSON.parse(JSON.stringify({ id: tool.id, title: tool.title, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.readOnly ?? false, ...(tool.operationDetails !== undefined ? { operationDetails: tool.operationDetails } : {}) }));
+            const schemaJSON = JSON.stringify(copy.inputSchema).replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
+            if (byteLength(schemaJSON) > 8192)
+                throw validation('invalid_tools', 'Input schema exceeds 8 KiB.');
+            if (copy.operationDetails !== undefined && typeof copy.operationDetails !== 'boolean')
+                throw validation('invalid_tools', 'operationDetails must be a boolean.');
+            validateToolSchema(copy.inputSchema, 0);
+            definitionBytes += byteLength(JSON.stringify(copy)) + (seen.size > 1 ? 1 : 0);
+            if (definitionBytes > 1048576)
+                throw validation('tool_set_too_large', 'Tool definitions exceed 1 MiB.');
+            return { ...copy, execute: tool.execute };
+        });
+    }
+    catch (error) {
+        if (error instanceof BridgeError)
+            throw error;
+        throw validation('invalid_tools', 'Tools must contain serializable definitions.');
+    }
+}
+function validateToolSchema(schema, depth) {
+    const invalid = () => { throw validation('invalid_tools', 'Input schema must use the supported 8 KiB / 12-level JSON Schema subset.'); };
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema) || depth > 12 || Object.keys(schema).some(key => !['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'anyOf', 'description', 'title', 'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems'].includes(key)))
+        invalid();
+    if (depth === 0 && schema.type !== 'object')
+        invalid();
+    if ('type' in schema) {
+        const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+        if (!types.length || types.length > 7 || new Set(types).size !== types.length || types.some(type => !['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'].includes(type)))
+            invalid();
+    }
+    for (const key of ['title', 'description'])
+        if (key in schema && typeof schema[key] !== 'string')
+            invalid();
+    if ('enum' in schema && (!Array.isArray(schema.enum) || !schema.enum.length || schema.enum.length > 64))
+        invalid();
+    if ('properties' in schema) {
+        const properties = schema.properties;
+        if (!properties || typeof properties !== 'object' || Array.isArray(properties) || Object.keys(properties).length > 64)
+            invalid();
+        for (const child of Object.values(properties))
+            validateToolSchema(child, depth + 1);
+    }
+    if ('required' in schema && (!Array.isArray(schema.required) || schema.required.length > 64 || new Set(schema.required).size !== schema.required.length || schema.required.some(key => typeof key !== 'string')))
+        invalid();
+    if ('additionalProperties' in schema && typeof schema.additionalProperties !== 'boolean')
+        validateToolSchema(schema.additionalProperties, depth + 1);
+    if ('items' in schema)
+        validateToolSchema(schema.items, depth + 1);
+    if ('anyOf' in schema) {
+        if (!Array.isArray(schema.anyOf) || !schema.anyOf.length || schema.anyOf.length > 16)
+            invalid();
+        for (const child of schema.anyOf)
+            validateToolSchema(child, depth + 1);
+    }
+    for (const [low, high] of [['minimum', 'maximum'], ['minLength', 'maxLength'], ['minItems', 'maxItems']]) {
+        for (const key of [low, high])
+            if (key in schema && (typeof schema[key] !== 'number' || !Number.isFinite(schema[key]) || key !== 'minimum' && key !== 'maximum' && (!Number.isSafeInteger(schema[key]) || schema[key] < 0)))
+                invalid();
+        if (low in schema && high in schema && schema[low] > schema[high])
+            invalid();
+    }
+}
+function legacyToolSchema(schema) {
+    if (Object.keys(schema).some(key => !['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'description', 'title'].includes(key)))
+        return false;
+    if (schema.type === 'object') {
+        const properties = schema.properties;
+        return !!properties && schema.additionalProperties === false && Array.isArray(schema.required) && schema.required.length === Object.keys(properties).length && schema.required.every(key => typeof key === 'string' && Object.hasOwn(properties, key)) && Object.values(properties).every(legacyToolSchema);
+    }
+    return schema.type === 'array' ? !!schema.items && legacyToolSchema(schema.items) : typeof schema.type === 'string' && ['string', 'number', 'integer', 'boolean', 'null'].includes(schema.type);
+}
+function serialize(value) { try {
+    return JSON.stringify(value);
+}
+catch {
+    throw validation('invalid_request', 'Request fields must be serializable JSON.');
+} }
+function creationBody(value, admission = false) {
+    const owner = (admission ? value.request : value);
+    const toolJSON = JSON.stringify(owner.tools ?? []);
+    if (byteLength(toolJSON) > 1048576)
+        throw validation('tool_set_too_large', 'Tool definitions exceed 1 MiB.');
+    const { tools: _tools, ...ordinary } = owner;
+    if (byteLength(serialize(admission ? { ...value, request: ordinary } : ordinary)) > 40960)
+        throw validation('request_too_large', 'Non-tool request fields exceed 40 KiB.');
+    const body = serialize(value);
+    if (byteLength(body) > 1088 * 1024)
+        throw validation('request_too_large', 'Execution creation exceeds 1,088 KiB.');
+    return body;
+}
 export class BridgeClient {
     options;
     transport;
-    toolHandlers = new Map();
+    legacyToolCountLimit;
+    toolInputSchemaVersion;
+    toolOperationDetailsVersion;
+    executions = new Map();
+    sessions = new Map();
+    activeCalls = new Set();
+    callbackCount = 0;
     toolsBusy = false;
     toolsTimer;
     lifetime = new AbortController();
@@ -104,6 +233,7 @@ export class BridgeClient {
     }
     /** Call directly from a click handler. Approval happens in the authenticated local panel. */
     static async requestPairing(options) {
+        options = { ...options, ...connectionReviewOptions(options, typeof window !== 'undefined' ? window.location.origin : undefined) };
         if (options.launchInstalled !== false && typeof document !== 'undefined')
             return BridgeClient.launchPairing(options);
         if (typeof window === 'undefined')
@@ -125,8 +255,13 @@ export class BridgeClient {
             const receive = (event) => {
                 if (event.source !== popup || event.origin !== endpoint || event.data?.requestId !== requestId)
                     return;
-                if (event.data.type === 'wdc:pairing-ready')
-                    popup.postMessage({ type: 'wdc:pairing-request', requestId, appId: options.appId, name: options.name, appUser: options.appUser }, endpoint);
+                if (event.data.type === 'wdc:pairing-ready') {
+                    if ((options.logoURL || options.requestedPermissions) && event.data.connectionReviewVersion !== 1) {
+                        fail(new BridgeError('desktop_update_required', 'Update WDC desktop to 0.2.1 or later to review this app’s logo and requested permissions.', 409));
+                        return;
+                    }
+                    popup.postMessage({ type: 'wdc:pairing-request', requestId, appId: options.appId, name: options.name, appUser: options.appUser, ...connectionReviewOptions(options, window.location.origin) }, endpoint);
+                }
                 if (event.data.type === 'wdc:pairing-rejected')
                     fail(new BridgeError('pairing_declined', 'Connection declined in WebDeviceCable.', 403, { category: 'permission' }));
                 if (event.data.type === 'wdc:pairing-approved' && typeof event.data.invitation === 'string' && !settling) {
@@ -180,7 +315,7 @@ export class BridgeClient {
         try {
             while (Date.now() < deadline && !popup.closed) {
                 try {
-                    const result = await launchRequest(endpoint, origin, keys, { requestId, appId: options.appId, name: options.name, appUser: options.appUser }, pinned);
+                    const result = await launchRequest(endpoint, origin, keys, { requestId, appId: options.appId, name: options.name, appUser: options.appUser, ...connectionReviewOptions(options, origin) }, pinned);
                     pinned = result.identity;
                     status.textContent = 'Waiting for your approval in WebDeviceCable…';
                     if (result.status === 'rejected')
@@ -212,11 +347,6 @@ export class BridgeClient {
         }
     }
     get connected() { return !this.closed && Date.now() < this.leaseExpiresAt; }
-    async registerTools(tools) {
-        const definitions = tools.map(({ execute, ...definition }) => definition);
-        await this.request('/v2/tools', { method: 'POST', body: JSON.stringify({ tools: definitions }) }).then(json);
-        this.toolHandlers = new Map(tools.map(tool => [tool.id, tool]));
-    }
     permissions() { return this.request('/v2/permissions').then((json)); }
     permissionRequest(id) { return this.request(`/v2/permissions/${encodeURIComponent(id)}`).then((json)); }
     async requestPermissions(request, options = {}) {
@@ -234,47 +364,132 @@ export class BridgeClient {
             throw new BridgeError('permission_denied', 'The requested access was not approved in WebDeviceCable.', 403, { category: 'permission' });
         return result;
     }
+    pollTools() {
+        if (this.toolsTimer || this.closed || !this.executions.size)
+            return;
+        this.toolsTimer = setInterval(() => { void this.drainTools(); }, 250);
+        void this.drainTools();
+    }
+    release(key, owner) {
+        const entry = this.executions.get(key);
+        if (owner && entry !== owner)
+            return;
+        entry?.controller.abort();
+        this.executions.delete(key);
+        if (!this.executions.size) {
+            clearInterval(this.toolsTimer);
+            this.toolsTimer = undefined;
+        }
+    }
+    observe(job) {
+        if (!job.request)
+            return job;
+        const entry = this.executions.get(job.request.idempotencyKey);
+        if (entry) {
+            if (entry.jobId && entry.jobId !== job.id || entry.hash && job.request.toolSetHash && entry.hash !== job.request.toolSetHash)
+                throw new BridgeError('execution_mismatch', 'WDC execution identity changed.', 0, { category: 'security' });
+            entry.jobId = job.id;
+            entry.hash = job.request.toolSetHash ?? entry.hash;
+            if (done(job))
+                this.release(job.request.idempotencyKey);
+            if (done(job) && job.status !== "completed" && job.request.conversationId)
+                this.sessions.delete(job.request.conversationId);
+        }
+        return job;
+    }
+    install(key, tools, fingerprint, conversationId, hash) {
+        const previous = this.executions.get(key);
+        if (previous) {
+            if (previous.fingerprint !== fingerprint || previous.conversationId !== conversationId || hash && previous.hash && previous.hash !== hash)
+                throw new BridgeError('idempotency_conflict', 'This key has different execution tools or input.', 409);
+            previous.submissions++;
+            return previous;
+        }
+        if (!tools.length)
+            return;
+        if (this.executions.size >= 256)
+            throw new BridgeError('execution_limit', 'Resolve pending tool executions before submitting more.', 429);
+        const entry = { tools: new Map(tools.map(tool => [tool.id, tool])), fingerprint, conversationId, hash, seen: new Set(), submissions: 1, uncertain: false, controller: new AbortController() };
+        this.executions.set(key, entry);
+        this.pollTools();
+        return entry;
+    }
+    settleSubmission(key, entry, uncertain) {
+        if (!entry)
+            return;
+        entry.submissions--;
+        entry.uncertain ||= uncertain;
+        // Matching retries share a snapshot. A rejected attempt cannot discard it
+        // while another attempt is pending, accepted, or has an unknown outcome.
+        if (!entry.submissions && !entry.jobId && !entry.uncertain)
+            this.release(key, entry);
+    }
     async drainTools() {
-        if (this.closed || this.toolsBusy || !this.toolHandlers.size)
+        if (this.closed || this.toolsBusy || !this.executions.size)
             return;
         this.toolsBusy = true;
         try {
-            const { calls } = await this.request('/v2/tool-calls').then((json));
-            for (const call of calls) {
-                const tool = this.toolHandlers.get(call.name);
-                if (!tool || this.closed)
+            const result = await this.request('/v2/tool-calls/poll', { method: 'POST', body: JSON.stringify({ requests: [...this.executions.keys()] }) }).then((json));
+            for (const item of result.completed ?? []) {
+                const entry = this.executions.get(item.requestIdempotencyKey);
+                if (entry && (!entry.jobId || entry.jobId === item.jobId) && (!entry.hash || entry.hash === item.toolSetHash))
+                    this.release(item.requestIdempotencyKey);
+            }
+            for (const call of result.calls) {
+                if (this.callbackCount >= 4)
+                    break;
+                const entry = this.executions.get(call.requestIdempotencyKey), tool = entry?.tools.get(call.name);
+                if (!entry || !tool || this.closed || this.activeCalls.has(call.id) || entry.seen.has(call.id) || !call.jobId || !call.toolSetHash || entry.conversationId !== call.conversationId || entry.jobId && entry.jobId !== call.jobId || entry.hash && entry.hash !== call.toolSetHash)
                     continue;
-                // Claim once before invoking. An ambiguous claim is never retried or executed.
-                try {
-                    await this.request(`/v2/tool-calls/${call.id}/claim`, { method: 'POST' }).then(json);
-                }
-                catch {
-                    continue;
-                }
-                let result;
-                try {
-                    result = await tool.execute(call.arguments, { idempotencyKey: call.id, signal: this.lifetime.signal });
-                    if (result === undefined)
-                        result = null;
-                }
-                catch {
-                    result = { error: 'The application could not complete this tool call.' };
-                }
-                try {
-                    if (new TextEncoder().encode(JSON.stringify(result)).length > 32768)
-                        result = { error: 'Tool result exceeds the 32 KiB limit. Return a summary or file reference.' };
-                }
-                catch {
-                    result = { error: 'Tool result must be serializable JSON.' };
-                }
-                if (!this.closed)
-                    await this.request(`/v2/tool-calls/${call.id}/result`, { method: 'POST', body: JSON.stringify({ result }) }).then(json).catch(() => { });
+                entry.jobId = call.jobId;
+                entry.hash = call.toolSetHash;
+                entry.seen.add(call.id);
+                this.activeCalls.add(call.id);
+                this.callbackCount++;
+                void this.dispatchTool(call, entry, tool).finally(() => { this.activeCalls.delete(call.id); this.callbackCount--; });
             }
         }
-        catch { /* The lease and native turn determine cancellation; tool callbacks are never replayed. */ }
+        catch { /* Ambiguous claims and callbacks are never replayed. */ }
         finally {
             this.toolsBusy = false;
         }
+    }
+    async dispatchTool(call, entry, tool) {
+        try {
+            // A claim is attempted once. Only its acknowledged owner executes the handler.
+            await this.request(`/v2/tool-calls/${call.id}/claim`, { method: 'POST' }).then(json);
+            if (this.closed || entry.controller.signal.aborted)
+                return;
+            let result;
+            try {
+                result = await tool.execute(call.arguments, { idempotencyKey: call.id, jobId: call.jobId, conversationId: call.conversationId, requestIdempotencyKey: call.requestIdempotencyKey, toolSetHash: call.toolSetHash, signal: entry.controller.signal, reportOperation: operation => this.reportOperation(call, entry, operation) });
+                if (result === undefined)
+                    result = null;
+            }
+            catch {
+                result = { error: 'The application could not complete this tool call.' };
+            }
+            try {
+                if (byteLength(JSON.stringify(result)) > 32768)
+                    result = { error: 'Tool result exceeds the 32 KiB limit. Return a summary or file reference.' };
+            }
+            catch {
+                result = { error: 'Tool result must be serializable JSON.' };
+            }
+            if (!this.closed && !entry.controller.signal.aborted)
+                await this.request(`/v2/tool-calls/${call.id}/result`, { method: 'POST', body: JSON.stringify({ result }) }).then(json);
+        }
+        catch { /* No automatic replay of uncertain tool operations. */ }
+    }
+    async reportOperation(call, entry, operation) {
+        if (this.closed || entry.controller.signal.aborted)
+            throw new BridgeError('execution_ended', 'This execution has ended.', 410);
+        if (this.toolOperationDetailsVersion !== 1)
+            throw new BridgeError('desktop_update_required', 'Update WebDeviceCable to report operation details.', 409);
+        const text = (value, limit, required = false) => typeof value === 'string' && byteLength(value) <= limit && (!required || !!value.trim()) && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+        if (!operation || !text(operation.id, 128, true) || !text(operation.title, 200, true) || operation.version !== undefined && !text(operation.version, 128))
+            throw validation('invalid_operation', 'Supply an operation ID, title and optional version within their limits.');
+        await this.request(`/v2/tool-calls/${call.id}/operation`, { method: 'POST', body: JSON.stringify({ id: operation.id, title: operation.title, ...(operation.version !== undefined ? { version: operation.version } : {}) }), signal: entry.controller.signal }).then(json);
     }
     registerGroups(groups) { return this.request('/v2/groups', { method: 'POST', body: JSON.stringify({ groups: groupsArray(groups) }) }).then((json)); }
     groups() { return this.request('/v2/groups').then((json)); }
@@ -282,8 +497,9 @@ export class BridgeClient {
     async run(input, signal) {
         if (signal?.aborted)
             throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+        const proposed = typeof input === 'string' ? { prompt: input } : input;
+        const request = { ...proposed, tools: captureTools(proposed.tools, proposed.mode) };
         await this.connect();
-        const request = typeof input === 'string' ? { prompt: input } : input;
         const job = await this.submit({ ...request, kind: request.kind ?? (request.action ? 'command' : request.provider ? 'text' : 'action'), idempotencyKey: request.idempotencyKey ?? crypto.randomUUID() });
         let result = job;
         for await (const update of this.stream(job.id, signal))
@@ -292,23 +508,72 @@ export class BridgeClient {
             throw new BridgeJobError(result);
         return result;
     }
-    async openSession(options) { await this.connect(); const { id: _id, ...selection } = options; return this.request('/v2/conversations', { method: 'POST', body: JSON.stringify(selection) }).then((json)); }
+    async openSession(options) {
+        const tools = captureTools(options.tools, options.mode);
+        const { id: _id, tools: _tools, ...selection } = options;
+        const body = creationBody({ ...selection, tools: definitions(tools) });
+        await this.connect();
+        this.checkTools(tools);
+        const generation = this.generation;
+        const conversation = await this.request('/v2/conversations', { method: 'POST', body }).then((json));
+        if (generation !== this.generation || !this.connected)
+            throw new BridgeError('lease_closed', 'The tab connection ended while this session was opening.', 410);
+        this.sessions.set(conversation.id, { tools, hash: conversation.toolSetHash });
+        return conversation;
+    }
     async sendSession(id, input) {
+        if ("tools" in input)
+            throw validation("invalid_tools", "Session messages cannot replace tools.");
         const request = { ...input, idempotencyKey: input.idempotencyKey ?? crypto.randomUUID() };
-        const body = JSON.stringify(request);
+        const body = serialize(request);
+        if (byteLength(body) > 40960)
+            throw validation('request_too_large', 'Message exceeds 40 KiB.');
+        const scope = this.sessions.get(id);
+        const installed = this.install(request.idempotencyKey, scope?.tools ?? [], body, id, scope?.hash);
+        let uncertain = false;
         try {
-            return await this.request(`/v2/conversations/${encodeURIComponent(id)}/turns`, { method: 'POST', body }).then((json));
+            return this.observe(await this.request(`/v2/conversations/${encodeURIComponent(id)}/turns`, { method: 'POST', body }).then((json)));
         }
         catch (error) {
+            uncertain = !(error instanceof BridgeError && error.status > 0 && !networkError(error));
             return unknownSubmission(error, request.idempotencyKey);
         }
+        finally {
+            this.settleSubmission(request.idempotencyKey, installed, uncertain);
+        }
     }
-    getSession(id) { return this.request(`/v2/conversations/${encodeURIComponent(id)}`).then((json)); }
-    closeSession(id) { return this.request(`/v2/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((json)); }
+    async attachSession(id, options) {
+        if (this.sessions.has(id))
+            return;
+        if (options.tools?.length)
+            throw validation('invalid_session', 'Tool-enabled sessions cannot attach new handlers. Keep the original session or create a history-backed replacement.');
+        const conversation = await this.getSession(id);
+        if (conversation.status !== 'open')
+            throw new BridgeError('session_closed', 'This session has ended.', 410);
+    }
+    releaseSession(id) {
+        for (const [key, entry] of this.executions)
+            if (entry.conversationId === id)
+                this.release(key);
+        this.sessions.delete(id);
+    }
+    async getSession(id) {
+        const conversation = await this.request(`/v2/conversations/${encodeURIComponent(id)}`).then((json));
+        if (conversation.status !== "open")
+            this.releaseSession(id);
+        return conversation;
+    }
+    async closeSession(id) {
+        this.releaseSession(id);
+        return this.request(`/v2/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((json));
+    }
     capabilities() { return this.request('/v2/capabilities').then((json)); }
     async preflight(request, features = []) {
+        const tools = captureTools(request.tools, request.mode);
+        const body = creationBody({ request: { ...request, tools: definitions(tools), idempotencyKey: 'preflight-check' }, features }, true);
         await this.connect();
-        return this.request('/v2/admission', { method: 'POST', body: JSON.stringify({ request: { ...request, idempotencyKey: 'preflight-check' }, features }) }).then((json));
+        this.checkTools(tools);
+        return this.request('/v2/admission', { method: 'POST', body }).then((json));
     }
     /** File bytes stay unchanged and scoped to this requesting tab. */
     async upload(file, name = 'input') {
@@ -365,16 +630,22 @@ export class BridgeClient {
         const generation = ++this.generation;
         this.connecting = (async () => {
             try {
-                if (this.options.account) {
-                    const { pairing } = await this.capabilities();
-                    if (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId)
+                {
+                    const capabilities = await this.capabilities();
+                    if (capabilities.scopedToolsVersion !== 1)
+                        throw new BridgeError('desktop_update_required', 'Update WebDeviceCable to 0.2.0 or later before using this SDK.', 409);
+                    this.legacyToolCountLimit = capabilities.limits?.toolsPerExecution;
+                    this.toolInputSchemaVersion = capabilities.toolInputSchemaVersion;
+                    this.toolOperationDetailsVersion = capabilities.toolOperationDetailsVersion;
+                    const { pairing } = capabilities;
+                    if (this.options.minimumRoutingVersion && (capabilities.routingVersion ?? 1) < this.options.minimumRoutingVersion)
+                        throw new BridgeError('desktop_update_required', 'Update WebDeviceCable before configuring workflow models and reasoning.', 409);
+                    if (this.options.account && (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId))
                         throw new BridgeError('identity_mismatch', 'This connection belongs to another app or account. Disconnect and pair this account.', 403);
                 }
                 await this.openLease(generation);
                 if (this.options.groups)
                     await this.registerGroups(this.options.groups);
-                if (this.options.tools)
-                    await this.registerTools(this.options.tools);
             }
             catch (error) {
                 await this.close().catch(() => { });
@@ -399,7 +670,6 @@ export class BridgeClient {
         this.lifetime = new AbortController();
         this.leaseExpiresAt = result.expiresAt ? Date.parse(result.expiresAt) : Date.now() + 12000;
         this.timer = setInterval(() => { void this.heartbeat(); }, 3000);
-        this.toolsTimer = setInterval(() => { void this.drainTools(); }, 1000);
         if (typeof window !== 'undefined')
             window.addEventListener('pagehide', this.onPageHide);
     }
@@ -422,6 +692,8 @@ export class BridgeClient {
             else {
                 const result = await json(response);
                 this.leaseExpiresAt = Date.parse(result.expiresAt);
+                for (const id of result.closedSessions ?? [])
+                    this.releaseSession(id);
             }
         }
         catch {
@@ -435,8 +707,12 @@ export class BridgeClient {
     stop() {
         clearInterval(this.timer);
         clearInterval(this.toolsTimer);
+        this.toolsTimer = undefined;
         this.closed = true;
         this.lifetime.abort();
+        for (const key of this.executions.keys())
+            this.release(key);
+        this.sessions.clear();
         if (typeof window !== 'undefined')
             window.removeEventListener('pagehide', this.onPageHide);
         for (const controller of this.watchers)
@@ -459,17 +735,34 @@ export class BridgeClient {
     async submit(request) {
         if (this.closed)
             throw new BridgeError('lease_required', 'Call connect() for this requesting tab first.', 410);
-        const body = JSON.stringify(request);
+        const tools = captureTools(request.tools, request.mode);
+        const body = creationBody({ ...request, tools: definitions(tools) });
+        this.checkTools(tools);
+        const installed = this.install(request.idempotencyKey, tools, body);
+        let uncertain = false;
         try {
-            return await json(await this.request('/v2/jobs', { method: 'POST', body }));
+            return this.observe(await json(await this.request('/v2/jobs', { method: 'POST', body })));
         }
         catch (error) {
+            uncertain = !(error instanceof BridgeError && error.status > 0 && !networkError(error));
             return unknownSubmission(error, request.idempotencyKey);
         }
+        finally {
+            this.settleSubmission(request.idempotencyKey, installed, uncertain);
+        }
     }
-    async lookup(idempotencyKey) { return (await this.request('/v2/jobs/lookup', { method: 'POST', body: JSON.stringify({ idempotencyKey }) }).then((json))).job; }
-    get(id) { return this.request(`/v2/jobs/${encodeURIComponent(id)}`).then((json)); }
-    cancel(id) { return this.request(`/v2/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }).then((json)); }
+    checkTools(tools) {
+        const count = tools.length, schema = tools.some(tool => !legacyToolSchema(tool.inputSchema)), operation = tools.some(tool => tool.operationDetails);
+        this.transport.checkToolFeatures?.(schema, operation);
+        if (schema && this.toolInputSchemaVersion !== 1 || operation && this.toolOperationDetailsVersion !== 1)
+            throw new BridgeError('desktop_update_required', 'Update WebDeviceCable to support these tool input schemas and operation details.', 409);
+        this.transport.checkToolCount?.(count);
+        if (this.legacyToolCountLimit !== undefined && this.legacyToolCountLimit > 0 && count > this.legacyToolCountLimit)
+            throw new BridgeError('desktop_update_required', 'Update WebDeviceCable desktop to use this tool catalog. This desktop still limits the number of tools per execution.', 409);
+    }
+    async lookup(idempotencyKey) { const job = (await this.request('/v2/jobs/lookup', { method: 'POST', body: JSON.stringify({ idempotencyKey }) }).then((json))).job; return job ? this.observe(job) : null; }
+    get(id) { return this.request(`/v2/jobs/${encodeURIComponent(id)}`).then((json)).then(job => this.observe(job)); }
+    cancel(id) { return this.request(`/v2/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }).then((json)).then(job => this.observe(job)); }
     /** Full job snapshots, reconnectable without replaying inference or app actions. */
     async *stream(id, signal) {
         const controller = new AbortController();
@@ -515,7 +808,7 @@ export class BridgeClient {
                             const data = event.split('\n').find(line => line.startsWith('data: '));
                             if (!data)
                                 continue;
-                            const job = JSON.parse(data.slice(6));
+                            const job = this.observe(JSON.parse(data.slice(6)));
                             if (job.revision > revision) {
                                 revision = job.revision;
                                 yield job;
@@ -556,11 +849,13 @@ export class BridgeSession {
     closed = false;
     submitting = false;
     uncertainKey;
+    releaseHandlers = () => { this.closed = true; this.options.tools = undefined; };
     constructor(client, options) {
         this.client = client;
         this.options = options;
-        if (options.id && (options.group || options.provider || options.action))
-            throw new BridgeError('invalid_session', 'A resumed session takes an id without a new target selection.', 400);
+        if (options.id && (options.group || options.provider || options.action || options.mode || options.tools !== undefined))
+            throw new BridgeError('invalid_session', 'A resumed session takes an id without a new target selection or tools.', 400);
+        this.options = { ...options, tools: captureTools(options.tools, options.mode) };
         this.conversationId = options.id;
     }
     get id() { return this.conversationId; }
@@ -570,6 +865,8 @@ export class BridgeSession {
         if (this.submitting)
             throw new BridgeError('session_busy', 'Wait for the current message to finish.', 409);
         const message = typeof input === 'string' ? { prompt: input } : input;
+        if ('tools' in message)
+            throw validation('invalid_tools', 'Session tools cannot change. Create a new session and supply saved history.');
         if (this.uncertainKey && message.idempotencyKey !== this.uncertainKey) {
             const error = new BridgeError('submission_unknown', 'Resolve the previous submission with recover(), or retry its exact input and idempotency key.', 0, { category: 'transport' });
             error.idempotencyKey = this.uncertainKey;
@@ -579,6 +876,8 @@ export class BridgeSession {
         try {
             if (this.conversationId && !this.client.connected)
                 throw new BridgeError('session_closed', 'This tab connection ended. Create a new session explicitly.', 410);
+            if (this.conversationId && !this.opening)
+                await this.client.attachSession(this.conversationId, this.options);
             if (!this.conversationId) {
                 if (!this.opening)
                     this.opening = this.client.openSession(this.options).then(conversation => { this.conversationId = conversation.id; });
@@ -640,7 +939,7 @@ export class BridgeSession {
     async close() {
         if (this.closed)
             return;
-        this.closed = true;
+        this.releaseHandlers();
         if (this.opening)
             await this.opening.catch(() => { });
         if (this.conversationId && this.client.connected)

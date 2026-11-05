@@ -3,6 +3,8 @@ const $ = id => document.getElementById(id);
 let securityNoticeShown = false;
 let csrf = '', controlSession = '', state, demo, demoPairID, invitation, lastState = '';
 const controlStorageKey='wdc-control-session';
+let connectionWatch, connectionSnapshot, refreshWork, connectionRequestCount=0;
+const connectionLoads=new Map(), connectionViews=new Map();
 try { controlSession=localStorage.getItem(controlStorageKey)??''; } catch { /* Reopen the private link when browser storage is unavailable. */ }
 function storeControlSession() { try { localStorage.setItem(controlStorageKey,controlSession); } catch { /* This panel still works for the current visit. */ } }
 function forgetControlSession() { try { if(localStorage.getItem(controlStorageKey)===controlSession)localStorage.removeItem(controlStorageKey); } catch {} controlSession=''; }
@@ -46,7 +48,7 @@ function action(fn) { return async event => {
   const key = focusControl?.closest('[data-key]')?.dataset.key, actionName = focusControl?.dataset.action;
   target?.setAttribute('aria-busy', 'true');
   if (control) { control.disabled = true; control.prepend(spinner); }
-  try { clearErrors(); await fn(event); await refresh(); } catch (error) { notify(error); }
+  try { clearErrors(); await fn(event); await refresh(true); } catch (error) { notify(error); }
   finally {
     target?.removeAttribute('aria-busy'); spinner.remove(); if (control) control.disabled = false;
     const dialog=document.querySelector('dialog[open]');
@@ -69,7 +71,7 @@ async function saveArtifact(job, artifact) {
   const link=el('a',{href:url,download:artifact.name}); document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
-function lock() { forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
+function lock() {connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
 let currentView;
 function route() {
   const view = ['apps','activity','commands','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'apps';
@@ -128,13 +130,15 @@ function preserveList(root, nodes) {
   }
 }
 function providerMark(provider, small = false) {
+  provider=state.programs?.find(item=>item.id===provider)?.type ?? provider;
+  if(provider!=='codex' && provider!=='claude')return el('span',{class:`provider-mark${small?' small':''}`,'aria-hidden':'true'},icon('terminal'));
   return el('span',{class:`provider-mark${small ? ' small' : ''}`,'aria-hidden':'true'},el('img',{src:provider === 'claude' ? '/claude-icon.png' : '/chatgpt-icon.png',alt:'',width:'24',height:'24'}));
 }
 function nativeLabel(native) { return native?.execution ? 'Ready' : state.nativeChecking ? 'Checking…' : native?.installed ? 'Unavailable' : native ? 'Not installed' : 'Not checked'; }
 function clientRow(provider, native) {
   let hint = native ? native.installed ? native.version ? `Installed · ${native.version}` : 'Installed' : 'Not installed' : state.nativeChecking ? 'Checking installed client…' : 'Not checked';
   if (native?.authentication === 'native_subscription') hint = 'Signed in with your subscription';
-  if (native?.authentication === 'not_signed_in_or_unavailable' && provider.id === 'codex') hint = 'Sign in using the installed client';
+  if (native?.authentication === 'not_signed_in_or_unavailable' && (provider.integration === 'codex' || provider.id === 'codex')) hint = 'Sign in using the installed client';
   if (native?.authentication === 'api_key_not_allowed') hint = 'API sign-in is not supported';
   return el('div',{class:'client-row'},providerMark(provider.id),el('div',{class:'client-info'},el('strong',{},provider.name),el('small',{},hint)),el('span',{class:`client-status ${native?.execution ? 'ready' : ''}`},nativeLabel(native)));
 }
@@ -158,14 +162,16 @@ function appRow(pair) {
     el('button',{type:'button',class:'connection-program','data-action':'Configure','aria-label':`Program settings for ${pair.name}`,onclick:() => openRouting(pair)},
       el('span',{class:'choice-value'},target?.provider ? providerMark(target.provider,true) : icon(target?.action ? 'terminal' : 'bridge'),target ? targetLabel(target) : overrides.length ? 'Set by group' : 'Choose a program'),icon('chevron','chevron')));
   if(overrides.length) choice.append(el('span',{class:'choice-note'},`${overrides.length} custom group${overrides.length===1?'':'s'}`));
-  if(target?.provider && (state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && !provider.execution)) choice.append(el('span',{class:'choice-note attention'},'Unavailable for this app'));
+  if(target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution)) choice.append(el('span',{class:'choice-note attention'},'Unavailable for this app'));
   if(target?.action && !state.commands.some(command=>command.id===target.action && command.hash===pair.actions?.[command.id])) choice.append(el('span',{class:'choice-note attention'},'Review command access'));
   const menu = el('details',{class:'app-menu'},el('summary',{class:'icon-button','aria-label':`More options for ${pair.name}`,'data-action':'More options',title:'More options'},icon('more')));
   const menuAction = (label, fn, extra='') => button(label,async () => {menu.open=false;await fn();},extra);
   const items = el('div',{class:'action-menu'},
     menuAction('Program settings',() => openRouting(pair)),
     menuAction('Connection details',() => openConnectionDetails(pair)),
+    menuAction('Edit app',() => openAppAppearance(pair)),
     menuAction(pair.paused ? 'Resume requests' : 'Pause requests',() => api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({paused:!pair.paused})})),
+    state.programs?.some(item=>item.type==='custom') ? menuAction('Custom AI program access',()=>openProgramAccess(pair)) : null,
     state.commands.length || grants ? menuAction('Command access',() => openCommandAccess(pair)) : null,
     menuAction('Folder access',() => openPermissions(pair)),
     menuAction('Disconnect',async () => {if(await confirmAction(`Disconnect ${pair.name}?`,'Its active requests will be cancelled. Connecting again requires a new invitation.','Disconnect',true))await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({revoke:true})});},'danger'));
@@ -186,7 +192,7 @@ function appRow(pair) {
   if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openCommandAccess(pair),'text-button'));
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},el('span',{class:'app-mark','aria-hidden':'true'},icon('app')),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
       el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
     el('div',{class:'connection-settings'},choice,el('label',{class:'connection-approval'},el('span',{class:'choice-label'},'Request approval'),selectWrap(approval))),
     access.children.length ? access : null);
@@ -219,6 +225,7 @@ function jobCard(job, history = false) {
   else if (job.status === 'blocked') content.append(el('p', {class:'job-detail'}, job.detail || 'This client is unavailable.', el('a', {href:'#settings'}, 'Details')));
   else if (job.code === 'tab_disconnected') content.append(el('p', {class:'job-detail'}, 'The requesting tab disconnected.'));
   else if (job.status === 'timed_out') content.append(el('p', {class:'job-detail'}, 'The request timed out.'));
+  if (job.toolOperations?.length) content.append(el('ul',{class:'tool-operations'},...job.toolOperations.map(operation=>el('li',{},el('span',{class:'tool-operation-title'},operation.title),el('small',{},operation.status==='running'?'In progress':operation.status==='returned'?'Result returned':'Outcome unconfirmed')))));
   if (job.inputNames?.length) content.append(el('p',{class:'job-detail'},icon('document'),job.inputNames.join(' · ')));
   for (const artifact of job.artifacts ?? []) { const save=button(artifact.mediaType.startsWith('image/')?'Save image':'Save file',()=>saveArtifact(job,artifact));save.prepend(icon('download'));content.append(save); }
   if(job.status==='failed')content.append(el('p',{class:'job-detail'},job.error?.message || job.detail));
@@ -227,6 +234,7 @@ function jobCard(job, history = false) {
   if(definition) details.push(['Program',definition.exec[0]]);
   if (job.execution?.name) details.push(['Executed',job.execution.name]);
   if (job.execution?.model) details.push(['Model',job.execution.model]);
+  for(const operation of job.toolOperations ?? []) details.push(['App operation',`${operation.id}${operation.version ? ' · '+operation.version : ''}`]);
   if (job.execution?.version) details.push(['Version', `${job.execution.version}${job.execution.versionSource === 'configured' ? ' (configured)' : ''}`]);
   if (job.plan?.model) details.push(['Requested model',job.plan.model]);
   if (job.plan?.reasoning) details.push(['Requested reasoning',job.plan.reasoning]);
@@ -244,8 +252,8 @@ function render() {
   const approvals = state.jobs.filter(j => j.status === 'awaiting_approval');
   const pendingCount=approvals.length+(state.permissions?.length??0);$('approval-count').textContent=pendingCount;$('approval-count').hidden=!pendingCount;
   $('runner-state').textContent = state.enabled ? 'Device ready' : 'Requests paused'; $('runner-state').dataset.status = state.enabled ? 'ready' : 'paused'; $('toggle-runner').setAttribute('aria-checked',String(state.enabled));
-  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length || !state.pairingRequests?.length;
-  $('apps-empty').hidden = !!apps.length || !!state.pairingRequests?.length; $('connect-app').hidden = !apps.length;
+  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length || !connectionRequestCount;
+  $('apps-empty').hidden = !!apps.length || !!connectionRequestCount; $('connect-app').hidden = !apps.length;
   $('native-list').replaceChildren(...state.providers.map(nativeChip));
   preserveList($('app-list'),apps.map(appRow));
   const byTime=(a,b)=>b.createdAt.localeCompare(a.createdAt);
@@ -260,22 +268,74 @@ function render() {
   $('clear-history').hidden=!history.length;
   renderCommands(); renderSessions(); renderUpdates();
   for (const control of document.querySelectorAll('[data-sharing]')) control.setAttribute('aria-checked',String(state.sharing?.[control.dataset.sharing] ?? control.dataset.sharing !== 'rawErrors'));
-  const descriptions = {
-    codex: state.providers.find(p => p.id === 'codex')?.reason,
-    claude: state.providers.find(p => p.id === 'claude')?.reason
-  };
   const openProviders = new Set([...$('provider-list').querySelectorAll('details[open]')].map(node => node.dataset.provider));
-  preserveList($('provider-list'), state.providers.map(p => el('article', {class:'provider-item','data-key':p.id,tabindex:'-1'}, clientRow(p, state.native?.find(n => n.id === p.id)), el('details', {class:'provider-details','data-provider':p.id,...(openProviders.has(p.id) ? {open:''} : {})}, disclosure(p.execution ? 'Connection details' : 'Why unavailable?'), el('div', {class:'detail-body'}, el('p', {}, descriptions[p.id]), el('a', {href:p.source,target:'_blank',rel:'noreferrer','data-action':'documentation'}, 'Official documentation', icon('external')))))));
-  $('check-clients').textContent = state.nativeChecking ? 'Checking…' : 'Check again'; $('check-clients').disabled = state.nativeChecking;
+  preserveList($('provider-list'),state.providers.map(p=>{
+    const program=state.programs?.find(item=>item.id===p.id) ?? {id:p.id,name:p.name,type:p.id};
+    const native=state.native?.find(item=>item.id===p.id);
+    return el('article',{class:'provider-item','data-key':p.id,tabindex:'-1'},clientRow(p,native),
+      el('p',{class:'program-summary'},`${({codex:'Codex',claude:'Claude Code',custom:'Custom WDC interface'})[program.type] ?? program.type} · ${program.executable || 'Automatically detected'}${program.profileDir ? ' · '+program.profileDir : ' · Default profile'}`),
+      el('div',{class:'actions'},button('Check connection',()=>api(`/programs/${p.id}/check`,{method:'POST'})),button('Edit',()=>openAIProgram(program)),
+        button('Remove',()=>removeAIProgram(program),'danger')),
+      el('details',{class:'provider-details','data-provider':p.id,...(openProviders.has(p.id)?{open:''}:{})},disclosure(p.execution?'Connection details':'Availability details'),
+        el('div',{class:'detail-body'},el('p',{},native?.detail || p.reason),el('p',{},`Version: ${native?.version || 'Not reported'} · Account: ${native?.account || 'Not reported'}`),
+          program.type==='custom'?el('p',{},`Text and streaming${native?.sessions?', continuing conversations':''}. Structured output, files, images and app tools are unavailable. Runs with OS account permissions.`):null,
+          p.source?el('a',{href:p.source,target:'_blank',rel:'noreferrer','data-action':'documentation'},'Official documentation',icon('external')):el('a',{href:'https://github.com/thomasmikava/WebDeviceCable/blob/main/docs/ai-programs.md',target:'_blank',rel:'noreferrer'},'WDC custom interface documentation'))));
+  }));
+  $('restore-ai-defaults').replaceChildren(...['codex','claude'].filter(id=>!state.programs?.some(p=>p.id===id)).map(id=>button(`Restore default ${id==='codex'?'Codex':'Claude Code'}`,async()=>{
+    if(!await confirmAction('Restore automatic detection?','Connections that selected this default ID will use the restored entry. Their existing account bindings still require reconnection if the sign-in changed.','Restore default'))return;
+    await api(`/program-defaults/${id}`,{method:'POST'});await api(`/programs/${id}/check`,{method:'POST'});
+  })));
+  $('check-clients').textContent=state.nativeChecking?'Checking…':'Check all';$('check-clients').disabled=state.nativeChecking;
+  if($('routing-dialog').open){
+    const pair=state.pairings.find(item=>item.id===routingPairID);
+    const catalog=pair ? JSON.stringify([state.native,providersForPair(pair)]) : '';
+    if(pair && catalog!==routingCatalog && (pair.routing?.revision ?? 0)===routingRevision){routingCatalog=catalog;refreshRoutingLabels(pair);}
+  }
 }
-async function refresh() {
-  if (!csrf) return;
-  const next = await api('/state'); next.pairings.sort((a,b) => a.id.localeCompare(b.id));
-  if (next.securityReset && !securityNoticeShown) { securityNoticeShown = true; notify('Security updated. Reconnect your apps.'); }
-  const serialized = JSON.stringify(next); state = next;
-  if ($('runner-state').dataset.status === 'offline') { $('runner-state').textContent = next.enabled ? 'Device ready' : 'Requests paused'; $('runner-state').dataset.status = next.enabled ? 'ready' : 'paused'; }
-  if (serialized !== lastState) { lastState = serialized; render(); }
+function applyConnectionSnapshot(next) {
+  if(connectionSnapshot && connectionSnapshot.revision>(next.connectionRevision??-1))Object.assign(next,{connectionRevision:connectionSnapshot.revision,pairingRequests:connectionSnapshot.pairingRequests,launches:connectionSnapshot.launches});
+  return next;
 }
+function refresh(force=false) {
+  if(!csrf)return Promise.resolve();
+  if(refreshWork)return force?refreshWork.then(()=>refresh()):refreshWork;
+  refreshWork=(async()=>{
+    const session=controlSession;const result=await api('/state');if(session!==controlSession || !csrf)return;const next=applyConnectionSnapshot(result);
+    next.pairings=next.pairings.map(pair=>({...pair,reportedName:pair.name,name:pair.displayName||pair.name})).sort((a,b)=>a.id.localeCompare(b.id));
+    if(next.securityReset && !securityNoticeShown){securityNoticeShown=true;notify('Security updated. Reconnect your apps.');}
+    const serialized=JSON.stringify(next);state=next;syncIncomingRegistration();
+    for(const [id,item]of connectionLoads)if(item.submitted && next.relayConnections?.some(binding=>binding.connectionId===item.info.connectionId))connectionLoads.delete(id);
+    if($('runner-state').dataset.status==='offline'){$('runner-state').textContent=next.enabled?'Device ready':'Requests paused';$('runner-state').dataset.status=next.enabled?'ready':'paused';}
+    const expired=[...connectionLoads.values()].some(item=>!item.expired&&!item.submitted&&item.expiresAt<Date.now());
+    if(serialized!==lastState || expired){lastState=serialized;render();}
+    void handleLaunches();
+  })().finally(()=>{refreshWork=undefined;});
+  return refreshWork;
+}
+function watchConnections() {
+  connectionWatch?.abort();const controller=new AbortController();connectionWatch=controller;
+  void(async()=>{
+    let after;
+    while(!controller.signal.aborted && csrf){
+      try {
+        const response=await api('/connection-events'+(after===undefined?'':`?after=${after}`),{signal:controller.signal});
+        if(controller.signal.aborted)return;
+        after=response.revision;
+        if(state && response.revision>=(state.connectionRevision??-1)){
+          const advanced=response.revision>(state.connectionRevision??-1);
+          const changed=JSON.stringify([state.pairingRequests,state.launches])!==JSON.stringify([response.pairingRequests,response.launches]);
+          connectionSnapshot=response;Object.assign(state,{connectionRevision:response.revision,pairingRequests:response.pairingRequests,launches:response.launches});
+          syncIncomingRegistration();if(changed){lastState='';render();void handleLaunches();}
+          if(advanced)void refresh(true).catch(()=>{});
+        }
+      } catch {
+        if(controller.signal.aborted || !csrf)return;
+        await new Promise(resolve=>{const timer=setTimeout(done,1000);function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
+      }
+    }
+  })();
+}
+
 function openConnect() {
   clearErrors(); $('invite-manual-copy')?.remove(); $('invite-copy-hint').textContent='Paste it into your app. Expires in 5 minutes.';
   $('invite-form').reset(); for(const detail of $('invite-form').querySelectorAll('details'))detail.open=false;
@@ -283,15 +343,61 @@ function openConnect() {
   $('invite-commands-section').hidden=!state.commands.length; commandPicker($('invite-commands'),{},$('invite-command-consent')); $('connect-dialog').showModal();
 }
 $('connect-app').onclick=openConnect; $('connect-first').onclick=openConnect;
-let reviewedRelay;
-$('connect-server').onclick=()=>{reviewedRelay=undefined;$('relay-form').reset();$('relay-review').textContent='';$('relay-submit').textContent='Review connection';$('relay-dialog').showModal();};
+let reviewedRelay, configuringRelay, processingLaunch=false, relayReviewGeneration=0;
+function relayInput() { const data=new FormData($('relay-form'));return {url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()}; }
+function showRelayReview(info) {
+  reviewedRelay=info;
+  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),el('small',{},info.origin))),el('span',{},`Account: ${info.appUser}`),connectionReview(info,`relay:${info.connectionId}`),
+    el('small',{},'This server can request work while the website is closed. Your local approvals and permissions still apply.'));
+  $('relay-review').hidden=false; $('relay-submit').textContent='Approve and choose models'; $('relay-decline').hidden=false;
+}
+function openRelay() {
+  clearErrors(); relayReviewGeneration++;reviewedRelay=undefined; $('relay-form').reset(); $('relay-review').replaceChildren(); $('relay-review').hidden=true;
+  $('relay-submit').textContent='Review connection'; $('relay-decline').hidden=true; $('relay-manual').open=true; $('relay-dialog').showModal();
+}
+$('connect-server').onclick=openRelay;
 $('close-relay').onclick=()=>$('relay-dialog').close();
-$('relay-form').oninput=()=>{reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').textContent='';};
-$('relay-form').onsubmit=action(async event=>{
-  event.preventDefault();const data=new FormData(event.currentTarget);const input={url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()};
-  if(!reviewedRelay){reviewedRelay=await api('/relay/inspect',{method:'POST',body:JSON.stringify(input)});$('relay-review').textContent=reviewedRelay.name+' · '+reviewedRelay.origin+' · Account '+reviewedRelay.appUser+'. Approve this server to request work from this device?';$('relay-submit').textContent='Approve server connection';return;}
-  await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay})});$('relay-dialog').close();await refresh();
+$('relay-form').oninput=event=>{if(!['url','code'].includes(event.target.name))return;relayReviewGeneration++;reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').hidden=true;$('relay-decline').hidden=true;};
+$('relay-decline').onclick=action(async()=>{
+  await api('/relay/decline',{method:'POST',body:JSON.stringify(relayInput())});$('relay-dialog').close();notify('Connection declined.','success');
 });
+$('relay-form').onsubmit=action(async()=>{
+  const input=relayInput();
+  if(!reviewedRelay){
+    const generation=++relayReviewGeneration;
+    $('relay-review').hidden=false;$('relay-review').replaceChildren(el('div',{class:'connection-loading',role:'status'},icon('loader','spinner'),el('span',{},'Loading connection details…')));
+    try{const info=await api('/relay/inspect',{method:'POST',body:JSON.stringify(input)});if(generation===relayReviewGeneration && $('relay-dialog').open)showRelayReview(info);}
+    catch(error){if(generation===relayReviewGeneration)$('relay-review').replaceChildren(el('p',{class:'connection-server-note',role:'alert'},'Couldn’t load the connection. Check the URL and pairing code, then try again.'));throw error;}
+    return;
+  }
+  await pendingLogo(reviewDrafts.get(`relay:${reviewedRelay.connectionId}`));
+  const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay,...reviewDecision(`relay:${reviewedRelay.connectionId}`)})});
+  configuringRelay={relayUrl:input.url,connectionId:result.connectionId}; $('relay-dialog').close();
+  notify('Approved. Waiting for the website to finish connecting; program settings will open automatically.','success');
+});
+async function handleLaunches() {
+  if(processingLaunch)return;processingLaunch=true;
+  try {
+    if(configuringRelay){
+      const binding=state.relayConnections?.find(item=>item.relayUrl===configuringRelay.relayUrl && item.connectionId===configuringRelay.connectionId);
+      const pair=state.pairings.find(item=>item.id===binding?.pairingId && !item.revoked);
+      if(pair?.groupsDeclared && !document.querySelector('dialog[open]')){configuringRelay=undefined;location.hash='apps';openRouting(pair);}
+    }
+    const intent=state.launches?.find(item=>item.kind); if(!intent || document.querySelector('dialog[open]'))return;
+    if(intent.kind==='settings'){await api(`/launch-intents/${intent.requestId}/dismiss`,{method:'POST',body:'{}'});}
+    if(intent.kind==='settings'){
+      const binding=state.relayConnections?.find(item=>item.relayUrl===intent.relayUrl && item.connectionId===intent.connectionId);
+      const pair=state.pairings.find(item=>item.id===binding?.pairingId && !item.revoked);
+      if(!pair)throw new Error('This server connection is not paired with this WDC device. Connect it from the website first.');
+      location.hash='apps';openRouting(pair);return;
+    }
+    if(!connectionLoads.has(intent.requestId)){
+      const item={id:intent.requestId,origin:intent.relayUrl,loading:true,expiresAt:Date.now()+300000,input:{url:intent.relayUrl,code:intent.code}};
+      connectionLoads.set(item.id,item);render();
+      void inspectConnection(item);
+    }
+  } catch(error){notify(error);} finally {processingLaunch=false;}
+}
 $('show-invitation-form').onclick=()=>{$('connect-start').hidden=true;$('invite-form').hidden=false;$('connect-title').textContent='Create an invitation';$('invite-form').elements.name.focus();};
 $('back-connect').onclick=()=>{$('invite-form').hidden=true;$('connect-start').hidden=false;$('connect-title').textContent='Connect an app';$('show-invitation-form').focus();};
 $('close-connect').onclick=$('done-connect').onclick=$('done-connect-start').onclick=()=>$('connect-dialog').close();
@@ -340,7 +446,7 @@ $('run-test').onclick = action(async () => {
   if (!demo) { const origin = location.origin; const result = await api('/invitations', {method:'POST',body:JSON.stringify({name:'Connection test',appId:'webdevicecable.local-test',origin,appUser:'This computer',mode:'restricted',automatic:false})}); const paired = await BridgeClient.pair({baseURL:origin,invitation:result.invitation,appId:'webdevicecable.local-test',appUser:'This computer',origin}); demoPairID = paired.pairing.id; demo = new BridgeClient({baseURL:origin,connection:paired.connection,origin}); }
   await demo.connect(); await demo.submit({idempotencyKey:crypto.randomUUID(),kind:'connection-test'}); location.hash = 'activity';
 });
-let editingCommand, accessPairID, routingPairID, routingRevision, routingReturn;
+let editingCommand, accessPairID, routingPairID, routingRevision, routingReturn, routingCatalog='';
 function renderCommands() {
   $('add-command').hidden = !state.allowWebCommandEditing || !state.commands.length;
   $('add-first-command').hidden = !state.allowWebCommandEditing;
@@ -432,106 +538,223 @@ $('toggle-runner').onclick = action(() => api('/runner', {method:'PATCH',body:JS
 $('clear-history').onclick = action(async () => { if (await confirmAction('Clear request history?', 'Finished requests and their output will be removed. Active requests will stay.', 'Clear history', true)) await api('/history', {method:'DELETE'}); });
 $('sign-out').onclick = action(async () => { await api('/session', {method:'DELETE'}); csrf = ''; lock(); });
 window.addEventListener('hashchange', () => {if(new URLSearchParams(location.hash.slice(1)).has('key'))void boot();else route();});
+window.addEventListener('focus',()=>{void refresh().catch(()=>{});});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refresh().catch(()=>{});});
 let refreshTimer,booting=false;
 document.addEventListener('invalid', event => { let parent = event.target.parentElement; while (parent) { if (parent.tagName === 'DETAILS') parent.open = true; parent = parent.parentElement; } }, true);
 async function boot() {
-  if(booting)return;booting=true;clearInterval(refreshTimer);
+  if(booting)return;booting=true;clearInterval(refreshTimer);connectionWatch?.abort();
   try {
     const key = new URLSearchParams(location.hash.slice(1)).get('key');
     let session;
     if (key) { history.replaceState(null, '', '/'); session=await api('/session', {method:'POST',headers:{Authorization:`Bearer ${key}`}}); }
     else session=await api('/session');
-    csrf=session.csrf; controlSession=session.session; storeControlSession();
-    $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(); initPairingRequest();
+    connectionSnapshot=undefined;csrf=session.csrf; controlSession=session.session; storeControlSession();
+    $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(true); watchConnections(); initPairingRequest();
     refreshTimer=setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'Runner offline'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
   } catch { lock(); } finally {booting=false;}
 }
 void boot();
 
-function targetLabel(target) { return target?.action ? state.commands.find(command => command.id === target.action)?.title ?? 'Unavailable command' : target?.provider === 'codex' ? 'Codex' : target?.provider === 'claude' ? 'Claude Code' : 'Use default'; }
+let editingAIProgram,programAccessPairID;
+function openAIProgram(program){
+  editingAIProgram=program?{...program,expectedHash:state.programHashes?.[program.id]}:null;
+  const form=$('ai-program-form');form.reset();
+  $('ai-program-title').textContent=program?'Edit AI program':'Add AI program';
+  for(const key of ['name','type','executable','profileDir'])form.elements.namedItem(key).value=program?.[key] ?? (key==='type'?'codex':'');
+  form.elements.namedItem('arguments').value=(program?.arguments ?? []).join('\n');
+  form.elements.namedItem('type').disabled=!!program && ['codex','claude'].includes(program.id);
+  $('reset-ai-program').hidden=!program || !['codex','claude'].includes(program.id);
+  updateProgramEditor();$('ai-program-dialog').showModal();
+}
+function updateProgramEditor(){
+  const form=$('ai-program-form'),custom=form.elements.namedItem('type').value==='custom';
+  $('ai-program-args').hidden=!custom;$('ai-program-warning').hidden=!custom;
+  $('ai-program-executable-help').textContent=custom?'Choose a harness that implements the WDC JSONL interface. Arguments are passed directly, without a shell.':'Leave empty for automatic detection of Codex or Claude Code. Paths are used directly, without a shell.';
+  $('ai-program-profile-help').textContent=custom?'The profile path is passed as WDC_PROFILE_DIR. Your harness owns its configuration and sign-in.':'Codex uses CODEX_HOME; Claude Code uses CLAUDE_CONFIG_DIR. Sign in through that client’s own login flow. WDC never copies credentials.';
+  form.elements.namedItem('executable').required=custom;
+  form.elements.namedItem('executable').placeholder=custom?'Path to a WDC-compatible harness':'Automatic detection';
+}
+$('add-ai-program').onclick=()=>openAIProgram();
+$('close-ai-program').onclick=()=>$('ai-program-dialog').close();
+$('ai-program-form').elements.namedItem('type').onchange=updateProgramEditor;
+$('reset-ai-program').onclick=()=>{
+  const form=$('ai-program-form');for(const key of ['executable','profileDir','arguments'])form.elements.namedItem(key).value='';
+  notify('Automatic detection selected. Save to apply it.','info');
+};
+$('ai-program-form').onsubmit=action(async()=>{
+  const form=$('ai-program-form'),value=key=>form.elements.namedItem(key).value.trim();
+  const program={...(editingAIProgram?{id:editingAIProgram.id}:{}),name:value('name'),type:value('type'),executable:value('executable'),profileDir:value('profileDir'),arguments:value('type')==='custom'?form.elements.namedItem('arguments').value.split('\n').filter(line=>line!==''):[]};
+  const changed=editingAIProgram && ['type','executable','profileDir','arguments'].some(key=>JSON.stringify(program[key] || (key==='arguments'?[]:''))!==JSON.stringify(editingAIProgram[key] || (key==='arguments'?[]:'')));
+  if(changed&&!await confirmAction('Change AI program configuration?','Affected requests and conversations will end. If the account changes, affected applications must reconnect explicitly.','Save configuration'))return;
+  const saved=await api(editingAIProgram?`/programs/${editingAIProgram.id}`:'/programs',{method:editingAIProgram?'PUT':'POST',headers:editingAIProgram?.expectedHash?{'If-Match':editingAIProgram.expectedHash}:{},body:JSON.stringify(program)});
+  $('ai-program-dialog').close();await api(`/programs/${saved.id}/check`,{method:'POST'});
+  notify('Saved. Checking this program without starting inference.','success');
+});
+async function removeAIProgram(program){
+  const uses=await api(`/programs/${program.id}/uses`);
+  const detail=uses.length?uses.map(use=>`${use.name}: ${use.selections.join(', ')}`).join('; ')+'. These selections will stay explicitly unavailable until you reassign them in Program settings.':'No saved connection selections use this program.';
+  if(!await confirmAction(`Remove ${program.name}?`,detail+' Affected requests and conversations will end.',uses.length?'Remove and leave unavailable':'Remove program',true))return;
+  await api(`/programs/${program.id}?leaveUnavailable=true`,{method:'DELETE'});
+}
+function openProgramAccess(pair){
+  programAccessPairID=pair.id;$('program-access-form').reset();
+  $('program-access-context').textContent=`${pair.name} · Choose custom AI programs this connection may execute. Codex and Claude native integrations do not need command grants.`;
+  $('program-access-list').replaceChildren(...(state.programs ?? []).filter(program=>program.type==='custom').map(program=>el('label',{class:'program-grant'},
+    el('input',{type:'checkbox',value:program.id,...(pair.programGrants?.[program.id]===state.programHashes?.[program.id]?{checked:''}:{})}),
+    el('span',{},el('strong',{},program.name),el('small',{},[program.executable,...program.arguments ?? []].join(' ')),el('small',{},program.profileDir || 'Default profile')))));
+  $('program-access-dialog').showModal();
+}
+$('close-program-access').onclick=()=>$('program-access-dialog').close();
+$('routing-program-access').onclick=()=>{
+  routingReturn={pairID:routingPairID,revision:routingRevision,draft:readRoutingForm()};
+  $('routing-dialog').close();openProgramAccess(state.pairings.find(pair=>pair.id===routingPairID));
+};
+$('program-access-form').onsubmit=action(async()=>{
+  const programs=Object.fromEntries([...$('program-access-list').querySelectorAll('input:checked')].map(input=>[input.value,state.programHashes[input.value]]));
+  const accepted=$('program-access-form').elements.namedItem('consent').checked;
+  if(Object.keys(programs).length&&!accepted)throw new Error('Accept OS account permissions before granting custom programs.');
+  await api(`/pairings/${programAccessPairID}/program-grants`,{method:'PUT',body:JSON.stringify({programs,commandPermissionsAccepted:accepted})});
+  await refresh();$('program-access-dialog').close();
+});
+function targetLabel(target) { return target?.action ? state.commands.find(command => command.id === target.action)?.title ?? 'Unavailable command' : target?.provider ? state.providers.find(program=>program.id===target.provider)?.name ?? 'Unavailable AI program' : 'Use default'; }
 function routeEditor(pair, group, current) {
-  const providers=state.providersByPairing?.[pair.id] ?? state.providers;
-  const selector = el('select',{'data-field':'target'},el('option',{value:''},group ? (group.parentId ? `Use ${pair.groups.find(parent => parent.id === group.parentId)?.name ?? 'parent'} setting` : 'Use default program') : 'Choose a program'));
-  if (!group || group.kind === 'ai') for(const provider of providers) selector.append(el('option',{value:`provider:${provider.id}`},provider.name + (provider.execution ? '' : ' (unavailable)')));
-  for (const command of state.commands) if (pair.actions?.[command.id] === command.hash) selector.append(el('option',{value:`command:${command.id}`},command.title));
-  const value = current?.action ? `command:${current.action}` : current?.provider && (!group || group.kind === 'ai') ? `provider:${current.provider}` : '';
-  if (value && ![...selector.options].some(option => option.value === value)) selector.append(el('option',{value},`${targetLabel(current)} (review access)`)); selector.value = value;
-  const model = el('select',{'data-field':'model'},el('option',{value:''},'Client default'));
-  const reasoning = el('select',{'data-field':'reasoning'},el('option',{value:''},'Client default'));
-  let selectedProvider;
-  const modelOptions = () => {
-    const provider=selector.value.replace('provider:',''),changed=selectedProvider!==undefined&&selectedProvider!==provider;
-    const models=state.native?.find(native=>native.id===provider)?.models ?? [];
-    const value=selectedProvider === undefined ? current?.model ?? '' : changed ? '' : model.value;
-    model.replaceChildren(el('option',{value:''},'Client default'),...models.map(item=>el('option',{value:item.model},item.displayName || item.model)));
-    if(value&&![...model.options].some(option=>option.value===value))model.append(el('option',{value},value));model.value=value;
-    const efforts=models.find(item=>item.model===value)?.supportedReasoningEfforts?.map(item=>item.reasoningEffort) ?? ['low','medium','high','xhigh'];
-    const effort=selectedProvider === undefined ? current?.reasoning ?? '' : changed ? '' : reasoning.value;
-    reasoning.replaceChildren(el('option',{value:''},'Client default'),...efforts.map(value=>el('option',{value},({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[value] ?? value)));
-    if(effort&&![...reasoning.options].some(option=>option.value===effort))reasoning.append(el('option',{value:effort},effort));reasoning.value=effort;selectedProvider=provider;
+  const selector = el('select', {'data-field':'target','aria-label':`Program for ${group?.name ?? 'default'}`},
+    el('option',{value:''},group ? 'Inherit program' : 'Choose a program'));
+  const providers = state.providersByPairing?.[pair.id] ?? state.providers;
+  if (!group || group.kind === 'ai') for (const provider of providers) {
+    const supported = group?.operation !== 'image' || provider.imageGeneration;
+    const option = el('option',{value:`provider:${provider.id}`},provider.name + (!supported ? ' (images unavailable)' : provider.execution ? '' : ' (unavailable)'));
+    option.disabled = !supported; selector.append(option);
+  }
+  if (group?.operation !== 'image') for (const command of state.commands) if (pair.actions?.[command.id] === command.hash) selector.append(el('option',{value:`command:${command.id}`},command.title));
+  const savedValue = current?.action ? `command:${current.action}` : current?.provider ? `provider:${current.provider}` : '';
+  if(savedValue && ![...selector.options].some(option=>option.value===savedValue))selector.append(el('option',{value:savedValue},targetLabel(current)+' (review access)'));
+  selector.value = current?.action ? `command:${current.action}` : current?.provider ? `provider:${current.provider}` : '';
+  const optionValue = (name, reset) => current?.[name] || (current && (!current.inheritOptions || current[reset]) ? '@default' : '');
+  const model = el('select',{'data-field':'model','aria-label':`Model for ${group?.name ?? 'default'}`});
+  const reasoning = el('select',{'data-field':'reasoning','aria-label':`Reasoning for ${group?.name ?? 'default'}`});
+  model.dataset.value = optionValue('model','modelDefault'); reasoning.dataset.value = optionValue('reasoning','reasoningDefault');
+  const note = el('small',{class:'route-selection'}), availability = el('p',{class:'route-note'});
+  const fields = el('div',{class:'route-fields'},el('label',{},'Program',selectWrap(selector)),
+    el('label',{},'Model',selectWrap(model)),el('label',{},'Reasoning',selectWrap(reasoning)));
+  const row = el('details',{class:`route-editor${group ? '' : ' default-route'}`,'data-group':group?.id ?? ''},
+    el('summary',{},el('span',{class:'route-label'},el('strong',{},group?.name ?? `Default for ${pair.name}`),note),icon('chevron','chevron')),
+    fields,availability);
+  if (!group) row.open = true;
+  const reset = el('button',{type:'button',class:'text-button',onclick:() => {
+    selector.value=''; model.dataset.value=''; reasoning.dataset.value=''; refreshRoutingLabels(pair);
+  }},'Reset to inherited settings');
+  if (group) row.append(reset);
+  selector.onchange = () => {
+    const next=selector.value.startsWith('provider:') ? selector.value.slice(9) : row.dataset.inheritedProvider;
+    if(next!==row.dataset.provider){model.dataset.value='';reasoning.dataset.value='';notify('Program changed. Choose compatible model and reasoning settings, or keep the inherited defaults.','info');}
+    refreshRoutingLabels(pair);
   };
-  model.onchange=modelOptions;
-  const availability=el('p',{class:'route-note',hidden:''});
-  const native = el('div',{'data-native-fields':''},availability,el('details',{class:'advanced'},disclosure('Model & reasoning'),el('label',{},'Model',selectWrap(model)),el('label',{},'Reasoning',selectWrap(reasoning))));
-  const sourceLabel=el('small',{class:'route-selection'});
-  const id=`route-${pair.id}-${group?.id ?? 'default'}`;selector.id=id;
-  const update=()=>{modelOptions();const provider=providers.find(item=>`provider:${item.id}`===selector.value);availability.hidden=!provider || provider.execution;availability.textContent=provider?.reason ?? '';native.hidden=!selector.value.startsWith('provider:');};
-  selector.onchange=()=>{update();refreshRoutingLabels(pair);};update();
-  // Native model options remain an explicit, optional per-selection setting.
-  const label=el('label',{class:'route-label',for:id},el('span',{},group?.name ?? 'Default program'),
-    group && !(group.kind==='ai' && group.name.toLowerCase()==='ai') ? el('span',{class:'group-kind'},group.kind==='ai'?'AI':'Commands') : null,sourceLabel);
-  return el('div',{class:`route-editor${group?'':' default-route'}`,'data-group':group?.id ?? ''},el('div',{class:'route-main'},label,selectWrap(selector)),native);
+  model.onchange = () => { model.dataset.value=model.value; refreshRoutingLabels(pair); };
+  reasoning.onchange = () => { reasoning.dataset.value=reasoning.value; refreshRoutingLabels(pair); };
+  return row;
+}
+function readRoute(row) {
+  const value = row.querySelector('[data-field=target]').value;
+  if (value.startsWith('command:')) return {action:value.slice(8)};
+  const result = {inheritOptions:true};
+  if (value.startsWith('provider:')) result.provider=value.slice(9);
+  for (const name of ['model','reasoning']) {
+    const choice=row.querySelector(`[data-field=${name}]`).dataset.value;
+    if (choice === '@default') result[name+'Default']=true;
+    else if (choice) result[name]=choice;
+  }
+  return Object.keys(result).length === 1 ? null : result;
+}
+function applyRoute(base, override) {
+  if (!override) return {...base};
+  if (!override.inheritOptions || override.action || override.provider && override.provider !== base.provider) base={provider:override.provider,action:override.action};
+  else base={...base};
+  if (override.provider) {base.provider=override.provider;delete base.action;}
+  for (const field of ['model','reasoning']) if (!override.inheritOptions || override[field] || override[field+'Default']) base[field]=override[field] ?? '';
+  return base;
 }
 function refreshRoutingLabels(pair) {
-  const rows=[...$('routing-groups').querySelectorAll('[data-group]')], defaultRow=$('routing-default').firstElementChild;
-  for(const row of rows){
-    const group=pair.groups.find(item=>item.id===row.dataset.group), selector=row.querySelector('[data-field=target]');
-    const parentId=group?.parentId;
-    let source=rows.find(item=>item.dataset.group===parentId);
-    while(source && !source.querySelector('[data-field=target]').value){const ancestor=pair.groups.find(item=>item.id===source.dataset.group)?.parentId;source=rows.find(item=>item.dataset.group===ancestor);}
-    const selected=(source??defaultRow)?.querySelector('[data-field=target]');
-    const incompatible=group?.kind!=='ai' && selected?.value.startsWith('provider:');
-    const inherited=!selector.value;
-    const effective=selected?.value ? selected.selectedOptions[0].textContent.replace(' (unavailable)','') : '';
-    selector.options[0].textContent=incompatible ? 'Choose a command' : effective ? `Default · ${effective}` : 'Use default';
-    const hint=row.querySelector('.route-selection');
-    hint.textContent=inherited ? incompatible ? 'Choose a command for this group' : !selected?.value ? 'Choose a default above' : `Uses ${effective}` : 'Custom choice';
-    hint.classList.toggle('needs-choice',incompatible && inherited);
-  }
-  if(defaultRow)defaultRow.querySelector('.route-selection').textContent='Used unless a group has its own choice';
-}
-function openRouting(pair) {
-  $('routing-command-access').hidden=!state.commands.length && !Object.keys(pair.actions??{}).length;
-  clearErrors(); routingPairID = pair.id; routingRevision = pair.routing?.revision ?? 0;
-  $('routing-title').textContent = `Program settings · ${pair.name}`;
-  $('routing-context').textContent = pair.origin;
-  $('routing-default').replaceChildren(routeEditor(pair,null,pair.routing?.default));
-  const rows = [];
-  const append = (parent = '', depth = 0) => {
-    for (const group of pair.groups ?? []) if ((group.parentId ?? '') === parent) {
-      const row = routeEditor(pair,group,pair.routing?.groups?.[group.id]);
-      row.style.setProperty('--group-depth',String(Math.min(depth,3)));
-      if (depth) row.classList.add('subgroup');
-      rows.push(row); append(group.id,depth + 1);
-    }
+  const rows=[...$('routing-form').querySelectorAll('[data-group]')];
+  const rowByID=new Map(rows.map(row=>[row.dataset.group,row]));
+  const targetFor=(id,depth=0)=>{
+    if(depth>8)return {};
+    const group=pair.groups.find(item=>item.id===id),row=rowByID.get(id);
+    const base=id ? targetFor(group?.parentId ?? '',depth+1) : {};
+    return row ? applyRoute(base,readRoute(row)) : base;
   };
-  append();
-  $('routing-groups').replaceChildren(...(rows.length ? [el('div',{class:'route-heading'},el('h3',{},'Choose by task')),...rows] : []));
-  refreshRoutingLabels(pair);
-  $('routing-dialog').showModal();
+  const fill=(select, options, inherited, group)=>{
+    const value=select.dataset.value ?? '';
+    select.replaceChildren(el('option',{value:''},group ? `Inherit · ${inherited || 'client default'}` : 'Client default'),
+      ...(group ? [el('option',{value:'@default'},'Native client default')] : []),
+      ...options.map(([value,label])=>el('option',{value},label)));
+    // An old saved setting is kept visible; we never discard it on opening.
+    if(value && ![...select.options].some(option=>option.value===value))select.append(el('option',{value},value==='@default'?'Native client default':`${value} (not reported by client)`));
+    select.value=value;
+  };
+  for(const row of rows){
+    const id=row.dataset.group,group=pair.groups.find(item=>item.id===id),target=targetFor(id);
+    const inherited=id?targetFor(group?.parentId ?? ''):{};
+    row.dataset.provider=target.provider ?? '';row.dataset.inheritedProvider=inherited.provider ?? '';
+    const native=state.native?.find(item=>item.id===target.provider),models=native?.models ?? [];
+    const model=row.querySelector('[data-field=model]'),reasoning=row.querySelector('[data-field=reasoning]');
+    fill(model,models.map(item=>[item.model,item.displayName || item.model]),inherited.model,group);
+    const selected=models.find(item=>item.model===target.model);
+    const efforts=selected?.supportedReasoningEfforts ?? (!target.model ? models.reduce((common,item)=>common===null ? item.supportedReasoningEfforts ?? [] : common.filter(effort=>item.supportedReasoningEfforts?.some(other=>other.reasoningEffort===effort.reasoningEffort)),null) : []) ?? [];
+    fill(reasoning,efforts.map(item=>[item.reasoningEffort,({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[item.reasoningEffort] ?? item.reasoningEffort]),inherited.reasoning,group);
+    model.disabled=!!target.action || !target.provider || !!group && group.kind!=='ai';
+    reasoning.disabled=model.disabled || !efforts.length && !reasoning.dataset.value;
+    const source=readRoute(row);
+    const custom=source ? [source.provider || source.action ? 'Program' : '',source.model || source.modelDefault ? 'Model' : '',source.reasoning || source.reasoningDefault ? 'Reasoning' : ''].filter(Boolean) : [];
+    const commandRequired=!!group && group.kind!=='ai' && !!target.provider;
+    const provider=providersForPair(pair).find(item=>item.id===target.provider);
+    const imageCompatible=provider?.integration==='codex' || target.provider==='codex';
+    const incompatible=commandRequired || group?.operation==='image' && !imageCompatible;
+    const invalidEffort=!!target.reasoning && efforts.length>0 && !efforts.some(item=>item.reasoningEffort===target.reasoning);
+    reasoning.setCustomValidity(invalidEffort ? 'Choose a reasoning level supported by this model, or the native client default.' : '');
+    const pieces=target.action ? [targetLabel(target)] : [targetLabel(target),target.model || 'Client default model',target.reasoning ? `${target.reasoning} reasoning` : 'Client default reasoning'];
+    row.querySelector('.route-selection').textContent=(target.provider || target.action ? pieces.join(' · ') : 'Choose a default program')+(incompatible ? commandRequired ? ' · Choose a command' : ' · Requires Codex' : id ? custom.length ? ` · ${custom.join(', ')} customized` : ' · Inherited' : '');
+    row.querySelector('.route-selection').classList.toggle('needs-choice',incompatible || invalidEffort);
+    for(const option of row.querySelector('[data-field=target]').options){
+      if(!option.value.startsWith('provider:'))continue;
+      const available=providersForPair(pair).find(item=>item.id===option.value.slice(9));
+      if(!available)continue;
+      const supported=group?.operation!=='image' || available.imageGeneration;
+      option.disabled=!supported;option.textContent=available.name+(!supported?' (images unavailable)':available.execution?'':' (unavailable)');
+    }
+    row.querySelector('.route-note').textContent=target.provider && !provider ? 'This AI program was removed. Choose another program explicitly.' : commandRequired ? 'This workflow requires an allowed command. Choose one here or in its parent workflow.' : group?.operation==='image' && !imageCompatible ? 'This image stage requires Codex. Choose Codex here or in its workflow.' : group?.operation==='image' ? 'Model and reasoning configure the Codex turn. Its built-in image tool controls the image renderer.' : provider && !provider.execution ? provider.reason : target.provider && !efforts.length ? 'Reasoning options are not reported for this model; the native client default applies.' : '';
+  }
+}
+function providersForPair(pair) { return state.providersByPairing?.[pair.id] ?? state.providers; }
+function openRouting(pair) {
+  $('routing-program-access').hidden=!state.programs?.some(item=>item.type==='custom');
+  $('routing-command-access').hidden=!state.commands.length && !Object.keys(pair.actions??{}).length;
+  clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair)]);
+  $('routing-title').textContent=`Programs and models · ${pair.name}`;
+  $('routing-context').textContent=`${pair.origin} · Choose a default AI program, then customize individual workflows if needed.`;
+  $('routing-default').replaceChildren(routeEditor(pair,null,pair.routing?.default));
+  const append=(parent='')=>(pair.groups ?? []).filter(group=>!group.hidden && (group.parentId ?? '')===parent).map(group=>{
+    const row=routeEditor(pair,group,pair.routing?.groups?.[group.id]);
+    const children=append(group.id); if(children.length)row.append(el('div',{class:'workflow-stages'},...children));
+    return row;
+  });
+  $('routing-groups').replaceChildren(el('h3',{class:'route-heading'},'Choose by workflow'),...append());
+  refreshRoutingLabels(pair); $('routing-dialog').showModal();
 }
 $('close-routing').onclick = () => $('routing-dialog').close();
 function readRoutingForm() {
-  const read=row=>{const value=row.querySelector('[data-field=target]').value;if(!value)return null;const [kind,id]=value.split(':');return kind==='command'?{action:id}:{provider:id,model:row.querySelector('[data-field=model]').value.trim(),reasoning:row.querySelector('[data-field=reasoning]').value.trim()};};
-  const routing={default:read($('routing-default').firstElementChild),groups:{}};
-  for(const row of $('routing-groups').querySelectorAll('[data-group]')){const target=read(row);if(target)routing.groups[row.dataset.group]=target;}
-  return routing;
+  // Retired groups remain available to already-owned work and its receipts.
+  const pair=state.pairings.find(item=>item.id===routingPairID);
+  const groups=Object.fromEntries(Object.entries(pair?.routing?.groups ?? {}).filter(([id])=>pair.groups.find(group=>group.id===id)?.hidden));
+  for(const row of $('routing-groups').querySelectorAll('[data-group]')){const target=readRoute(row);if(target)groups[row.dataset.group]=target;}
+  return {default:readRoute($('routing-default').firstElementChild),groups};
 }
 $('routing-command-access').onclick=()=>{
   routingReturn={pairID:routingPairID,revision:routingRevision,draft:readRoutingForm()};
   $('routing-dialog').close();openCommandAccess(state.pairings.find(pair=>pair.id===routingPairID));
 };
-$('command-access-dialog').addEventListener('close',()=>{
+for(const accessDialog of ['command-access-dialog','program-access-dialog'])$(accessDialog).addEventListener('close',()=>{
   if(!routingReturn)return;
   if(!csrf){routingReturn=undefined;return;}
   const {pairID,revision,draft}=routingReturn;routingReturn=undefined;
@@ -567,7 +790,7 @@ function initPairingRequest() {
   if (!/^[a-f0-9]{64}$/.test(requestId ?? '') || !window.opener) return;
   const opener = window.opener;
   let sending = false, registered = false, delivered = false;
-  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId},'*'); };
+  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId,connectionReviewVersion:1},'*'); };
   const timer = setInterval(announce,500); announce();
   const stop = () => {clearInterval(timer);clearInterval(poll);window.removeEventListener('message',receive);};
   const expires = setTimeout(stop,300000);
@@ -578,11 +801,16 @@ function initPairingRequest() {
       stop();clearTimeout(expires);history.replaceState(null,'','#apps');notify('App connected','success');return;
     }
     if (incomingPairing || event.data.type !== 'wdc:pairing-request' || !validWebsite(event.origin)) return;
-    const {appId,name,appUser} = event.data;
+    const {appId,name,appUser,logoURL,requestedPermissions} = event.data;
     if (![appId,name,appUser].every(value => typeof value === 'string' && value.trim()) || appId.length > 100 || name.length > 100 || appUser.length > 200) return;
-    incomingPairing = {requestId,opener,origin:event.origin,appId,name,appUser};clearInterval(timer);
-    try {await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser})});registered=true;await refresh();}
-    catch(error){notify(error);stop();}
+    incomingPairing = {requestId,opener,origin:event.origin,appId,name,appUser,registered:()=>{registered=true;},cancel:()=>{delivered=true;opener.postMessage({type:'wdc:pairing-rejected',requestId},event.origin);stop();clearTimeout(expires);}};clearInterval(timer);
+    const item={id:requestId,name,origin:event.origin,loading:true,expiresAt:Date.now()+300000};connectionLoads.set(requestId,item);render();
+    const register=async()=>{
+      item.loading=true;item.error=undefined;render();
+      try{await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser,logoURL,requestedPermissions})});registered=true;connectionLoads.delete(requestId);await refresh();}
+      catch(error){if(connectionLoads.get(requestId)!==item)return;item.loading=false;item.error=error.message;item.retry=register;render();}
+    };
+    void register();
   }
   const poll = setInterval(async () => {
     if(!registered || delivered || sending) return;
@@ -597,16 +825,196 @@ function initPairingRequest() {
   window.addEventListener('pagehide',() => {if(registered && !delivered) void api(`/pairing-requests/${requestId}/decision`,{method:'POST',keepalive:true,body:JSON.stringify({approve:false})}).catch(()=>{});},{once:true});
 }
 function validWebsite(origin) {try{const url=new URL(origin);return url.origin===origin&&(url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname));}catch{return false;}}
+const reviewDrafts=new Map(), logoBlobs=new Map();
+function appMark(id) {
+  const mark=el('span',{class:'app-mark','aria-hidden':'true'},icon('app'));
+  if(id) {
+    if(!logoBlobs.has(id))logoBlobs.set(id,controlFetch(`/logos/${id}`).then(response=>response.blob()).then(blob=>URL.createObjectURL(blob)).catch(()=>{logoBlobs.delete(id);return null;}));
+    void logoBlobs.get(id).then(url=>{if(url)mark.replaceChildren(el('img',{src:url,alt:''}));});
+  }
+  return mark;
+}
+function reviewDraft(info,key) {
+  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:info.requestedPermissions?.automaticApprovals===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false});
+  return reviewDrafts.get(key);
+}
+function reviewMark(info,key) {
+  const draft=reviewDraft(info,key);
+  draft.heading=appMark(draft.logoId);
+  if(!draft.loaded && draft.initialURL) {
+    draft.loaded=true;
+    draft.loadingPromise=api('/logos',{method:'POST',body:JSON.stringify({url:draft.initialURL,origin:info.origin})}).then(result=>{
+      draft.logoId=result.logoId;
+      const mark=appMark(result.logoId);draft.heading.replaceWith(mark);draft.heading=mark;
+    }).catch(()=>{});
+  }
+  return draft.heading;
+}
+function pendingLogo(draft) {return draft?.pending??(!draft?.edited?draft?.loadingPromise:undefined);}
+function reviewDecision(key) {const draft=reviewDrafts.get(key);return {automatic:draft?.automatic??false,logoId:draft?.logoId??''};}
+function connectionReview(info,key) {
+  const draft=reviewDraft(info,key),automatic=el('input',{type:'checkbox','aria-label':`Approve requests automatically for ${info.name}`,'data-action':'Automatic approvals'});automatic.checked=draft.automatic;
+  automatic.onchange=()=>{draft.automatic=automatic.checked;};
+  return el('div',{class:'connection-review'},el('label',{class:'check-line'},automatic,el('span',{},'Approve requests automatically',el('small',{},'Turn off to review each AI request before it runs.'))),el('small',{class:'muted'},'Connecting will not share your computer’s folders or give this app permission to run commands.'));
+}
+function openAppAppearance(pair) {
+  const dialog=makeDialog('app-appearance-dialog','Edit app'),original=pair.logoId??'';
+  let selected=original,previewedURL='',busy=false,saving=false,closed=false;
+  const controller=new AbortController();
+  const preview=el('div',{class:'logo-preview',role:'img','aria-label':`${selected?'Current logo':'No logo'} for ${pair.name}`},appMark(selected));
+  const caption=el('small',{},selected?'Current logo':'No logo');
+  const status=el('p',{class:'logo-status',role:'status',hidden:''});
+  const error=el('p',{class:'logo-error',role:'alert',hidden:''});
+  const name=el('input',{type:'text',id:'app-display-name',required:'',maxlength:'100',autocomplete:'off','aria-describedby':'app-name-hint'});name.value=pair.name;
+  const nameHint=el('small',{id:'app-name-hint',class:'field-hint'},'Only changes how this app appears in WDC.');
+  const file=el('input',{type:'file',accept:'image/png,image/jpeg,image/gif,image/svg+xml',hidden:'',tabindex:'-1','aria-label':'Choose logo image'});
+  const url=el('input',{type:'url',id:'logo-image-url',placeholder:'https://example.com/logo.png',maxlength:'2048','aria-describedby':'logo-url-hint'});
+  function message(text,isError=false) {
+    status.hidden=isError||!text;status.textContent=isError?'':text;
+    error.hidden=!isError;error.textContent=isError?text:'';
+  }
+  function updateControls() {
+    const unpreviewed=Boolean(url.value.trim())&&url.value.trim()!==previewedURL;
+    const nextName=name.value.trim();
+    const nameError=!nextName?'Enter a name.':new TextEncoder().encode(nextName).length>100?'Use a shorter name.':/[\u0000-\u001f\u007f-\u009f]/u.test(nextName)?'Use a single-line name.':'';
+    name.disabled=busy;name.setCustomValidity(nameError);
+    nameHint.textContent=nameError||'Only changes how this app appears in WDC.';
+    nameHint.classList.toggle('invalid',Boolean(nameError));
+    upload.disabled=busy;url.disabled=busy;load.disabled=busy||!url.value.trim();
+    remove.hidden=!selected;remove.disabled=busy;
+    save.disabled=busy||(selected===original&&nextName===pair.name)||unpreviewed||Boolean(nameError);
+    dialog.querySelector('.dialog-heading button').disabled=saving;
+    dialog.setAttribute('aria-busy',String(busy));
+  }
+  name.oninput=()=>updateControls();
+  function showPreview(id) {
+    selected=id;preview.replaceChildren(appMark(id));
+    caption.textContent=id?(id===original?'Current logo':'New logo'):'No logo';
+    preview.setAttribute('aria-label',`${caption.textContent} for ${pair.name}`);
+  }
+  async function choose(work,source) {
+    if(busy||closed)return;
+    const focusControl=document.activeElement;
+    busy=true;message('Loading image…');updateControls();
+    try {
+      const result=await work();if(closed)return;
+      showPreview(result.logoId);previewedURL=source;url.value=source;
+      message(selected===original?'This is already the current logo.':'Preview updated. Save changes to apply.');
+    } catch(failure) {
+      if(!closed)message(failure.message,true);
+    } finally {
+      busy=false;
+      if(!closed){updateControls();if(document.activeElement===document.body&&focusControl instanceof HTMLElement&&dialog.contains(focusControl))focusControl.focus({preventScroll:true});}
+    }
+  }
+  const upload=el('button',{type:'button',class:'button secondary',onclick:()=>file.click()},'Upload image');
+  file.onchange=()=>{
+    const image=file.files?.[0];file.value='';if(!image)return;
+    if(image.size>262144){message('Choose an image smaller than 256 KiB.',true);return;}
+    void choose(()=>api('/logos/upload',{method:'POST',signal:controller.signal,headers:{'Content-Type':image.type||'application/octet-stream'},body:image}),'');
+  };
+  const load=el('button',{type:'submit',class:'button secondary'},'Preview');
+  const linkForm=el('form',{class:'logo-link-form'},el('label',{for:'logo-image-url'},'Or use an image URL'),el('div',{class:'logo-link-input'},url,load),el('small',{id:'logo-url-hint'},'Paste a link directly to the image.'));
+  linkForm.onsubmit=event=>{
+    event.preventDefault();if(!url.reportValidity())return;
+    const source=url.value.trim();if(!source)return;
+    void choose(()=>api('/logos',{method:'POST',signal:controller.signal,body:JSON.stringify({url:source,origin:pair.origin})}),source);
+  };
+  url.oninput=()=>{message(url.value.trim()&&url.value.trim()!==previewedURL?'Preview the image before saving.':'');updateControls();};
+  const remove=el('button',{type:'button',class:'text-button danger',onclick:()=>{
+    showPreview('');url.value='';previewedURL='';message('Logo removed from preview. Save changes to apply.');updateControls();(save.disabled?upload:save).focus();
+  }},'Remove logo');
+  const cancel=el('button',{type:'button',class:'button secondary',onclick:()=>{if(!saving)dialog.close();}},'Cancel');
+  const save=el('button',{type:'button',class:'button primary',onclick:async()=>{
+    if(save.disabled||closed)return;
+    busy=true;saving=true;message('Saving…');updateControls();cancel.disabled=true;
+    try {
+      const displayName=name.value.trim()===(pair.reportedName??pair.name)?'':name.value.trim();
+      await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({displayName,logoId:selected})});
+      dialog.close();await refresh(true);
+    } catch(failure) {if(!closed)message(failure.message,true);}
+    finally {busy=false;saving=false;cancel.disabled=false;if(!closed)updateControls();}
+  }},'Save changes');
+  dialog.addEventListener('close',()=>{closed=true;controller.abort();});
+  dialog.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
+  dialog.addEventListener('click',event=>{if(saving&&event.target===dialog)event.stopPropagation();});
+  dialog.append(el('div',{class:'dialog-body logo-body'},
+    el('div',{class:'app-name-field'},el('label',{for:'app-display-name'},'Display name'),name,nameHint),
+    el('div',{class:'logo-current'},preview,el('div',{class:'logo-identity'},el('strong',{},'Logo'),caption,upload),file),
+    el('p',{class:'logo-format-hint'},'PNG, JPG, GIF or SVG · up to 256 KiB'),linkForm,status,error),
+    el('div',{class:'dialog-actions logo-actions'},remove,el('div',{class:'logo-save-actions'},cancel,save)));
+  updateControls();dialog.showModal();name.focus();
+}
+function syncIncomingRegistration() {
+  if(!incomingPairing || !state?.pairingRequests?.some(item=>item.id===incomingPairing.requestId))return;
+  incomingPairing.registered();connectionLoads.delete(incomingPairing.requestId);
+}
+function visibleConnectionRequests() {
+  const paired=new Set(state.pairings.map(pair=>pair.id));
+  const requests=(state.pairingRequests??[]).filter(item=>!item.pairingId||!paired.has(item.pairingId)).map(item=>item.status==='approved'?{...item,submitted:true}:item);
+  const ids=new Set(requests.map(item=>item.id));
+  const relayApprovals=new Set((state.pairingRequests??[]).filter(item=>item.status==='approved'&&item.connectionId).map(item=>`${item.relayUrl}:${item.connectionId}`));
+  for(const item of connectionLoads.values())if(!ids.has(item.id)&&!relayApprovals.has(`${item.input?.url}:${item.info?.connectionId}`)){if(!item.submitted && item.expiresAt<Date.now()){item.expired=true;item.loading=false;item.error='This request expired. Start a new connection from the app.';}requests.push(item.info?{...item,...item.info,id:item.id}:item);ids.add(item.id);}
+  for(const intent of state.launches??[])if(intent.kind!=='settings'&&!ids.has(intent.requestId))requests.push({id:intent.requestId,origin:intent.origin||intent.relayUrl,loading:true});
+  return requests;
+}
 function renderConnectionRequests() {
-  const requests = state.pairingRequests ?? [];
-  $('connection-requests').hidden = !requests.length;
-  $('connection-request-count').textContent = requests.length; $('connection-request-count').hidden = !requests.length;
-  document.title = requests.length ? `(${requests.length}) WebDeviceCable` : 'WebDeviceCable';
-  preserveList($('connection-request-list'),requests.map(request => el('article',{class:'connection-request','data-key':request.id},
-    el('div',{class:'connection-request-heading'},icon('external'),el('strong',{},request.name)),
-    el('p',{class:'connection-request-origin'},request.origin),
-    el('details',{class:'job-details'},disclosure('Account details'),el('dl',{},el('dt',{},'Account ID'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId))),
-    el('div',{class:'connection-request-actions'},el('small',{},'Asks before running requests'),el('div',{class:'actions'},button('Decline',()=>api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:false})})),button('Connect',()=>api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true})}),'primary'))))));
+  const requests=visibleConnectionRequests();connectionRequestCount=requests.length;
+  $('connection-requests').hidden=!requests.length;
+  $('connection-request-count').textContent=requests.length;$('connection-request-count').hidden=!requests.length;
+  document.title=requests.length?`(${requests.length}) WebDeviceCable`:'WebDeviceCable';
+  const previous=new Map(connectionViews);
+  const rows=requests.map(request=>{
+    const signature=JSON.stringify(request),cached=connectionViews.get(request.id);
+    if(cached?.signature===signature)return cached.node;
+    const ready=!request.loading&&!request.error&&!request.submitted && !!request.name;
+    const title=request.name??'New connection';
+    const heading=el('div',{class:'connection-request-heading'},ready?reviewMark(request,request.id):appMark(request.logoId??reviewDrafts.get(request.id)?.logoId),el('div',{class:'connection-request-identity'},el('h3',{},title),el('small',{},request.origin)));
+    const card=el('article',{class:`connection-request${ready?'':' connection-pending'}`,'data-key':request.id,tabindex:'-1','aria-label':`${title} connection request`},heading);
+    connectionViews.set(request.id,{signature,node:card,name:request.name});
+    if(!ready){
+      card.append(el('div',{class:'connection-loading',role:request.error?'alert':'status'},icon(request.error?'inbox':'loader',request.error?'':'spinner'),el('span',{},request.error??(request.submitted?'Connecting…':'Loading connection details…'))));
+      if(request.submitted&&!request.error)card.append(el('div',{class:'connection-placeholder','aria-hidden':'true'},...Array.from({length:2},()=>el('div',{},el('span'),el('span')))));
+      if(request.error){card.append(el('div',{class:'connection-request-actions'},button('Dismiss',()=>dismissConnection(request)),request.expired?null:button('Try again',()=>request.input?inspectConnection(connectionLoads.get(request.id)):request.retry())));}
+      return card;
+    }
+    const details=el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},el('dt',{},'Account'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId)));
+    card.append(connectionReview(request,request.id));
+    if(request.input)card.append(el('p',{class:'connection-server-note'},'This app can send requests even when its website is closed.'));
+    card.append(el('div',{class:'connection-request-footer'},details,el('div',{class:'actions'},button('Decline',()=>declineConnection(request)),button('Connect',()=>approveConnection(request),'primary'))));
+    if(cached?.node.querySelector('details')?.open)details.open=true;
+    return card;
+  });
+  const root=$('connection-request-list'),active=document.activeElement,key=active?.closest('[data-key]')?.dataset.key,actionName=active?.dataset.action;
+  const retained=new Set(rows);for(const node of [...root.children])if(!retained.has(node))node.remove();
+  let cursor=root.firstElementChild;for(const row of rows){if(row===cursor)cursor=cursor.nextElementSibling;else root.insertBefore(row,cursor);}
+  const ids=new Set(requests.map(item=>item.id));for(const id of connectionViews.keys())if(!ids.has(id))connectionViews.delete(id);
+  if(key && !active.isConnected){const row=connectionViews.get(key)?.node;if(row)([...row.querySelectorAll('[data-action]')].find(node=>node.dataset.action===actionName)??row).focus({preventScroll:true});}
+  const arrived=requests.find(request=>!previous.has(request.id)||request.name && previous.get(request.id)?.name!==request.name);
+  if(arrived)$('connection-request-announcement').textContent=arrived.submitted?`${arrived.name} is connecting.`:arrived.name?`${arrived.name} wants to connect.`:'A new connection request is loading.';
+}
+async function inspectConnection(item) {
+  item.loading=true;item.error=undefined;if(state)render();
+  try{
+    // Show the card before inspecting the relay or dismissing its launch notification.
+    await api(`/launch-intents/${item.id}/dismiss`,{method:'POST',body:'{}'});
+    const info=await api('/relay/inspect',{method:'POST',body:JSON.stringify(item.input)});
+    if(connectionLoads.get(item.id)!==item)return;
+    item.info=info;item.loading=false;
+  }catch(error){if(connectionLoads.get(item.id)===item){item.loading=false;item.error=error.message;}}
+  if(state)render();
+}
+function dismissConnection(request) {if(incomingPairing?.requestId===request.id)incomingPairing.cancel();connectionLoads.delete(request.id);if(state)render();}
+async function declineConnection(request) {
+  if(request.input){await api('/relay/decline',{method:'POST',body:JSON.stringify(request.input)});connectionLoads.delete(request.id);}
+  else {await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:false})});if(incomingPairing?.requestId===request.id)incomingPairing.cancel();}
+}
+async function approveConnection(request) {
+  await pendingLogo(reviewDrafts.get(request.id));
+  if(!request.input){await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true,...reviewDecision(request.id)})});return;}
+  const item=connectionLoads.get(request.id);
+  const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...item.input,expected:item.info,...reviewDecision(item.id)})});
+  item.submitted=true;configuringRelay={relayUrl:item.input.url,connectionId:result.connectionId};render();
 }
 
 // Permissions stay out of the main connection layout until the user needs them.

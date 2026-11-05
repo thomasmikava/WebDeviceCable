@@ -20,6 +20,10 @@ const maxJobs = 500
 // Provider-backed execution stays disabled until eligibility AND isolation are verified.
 // A UI checkbox or application request cannot override these release gates.
 type Capability struct {
+	Integration     string `json:"integration,omitempty"`
+	Sessions        bool   `json:"sessions"`
+	Streaming       bool   `json:"streaming"`
+	Isolation       string `json:"isolation,omitempty"`
 	AppTools        bool   `json:"appTools"`
 	Workspace       bool   `json:"workspace"`
 	ID              string `json:"id"`
@@ -45,6 +49,9 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
+	DisplayName     string             `json:"displayName,omitempty"`
+	LogoID          string             `json:"logoId,omitempty"`
+	GroupsDeclared  bool               `json:"groupsDeclared,omitempty"`
 	Relay           *RelayBinding      `json:"relay,omitempty"`
 	Transport       string             `json:"transport,omitempty"`
 	Tools           map[string]AppTool `json:"tools,omitempty"`
@@ -62,6 +69,7 @@ type Pairing struct {
 	Revoked         bool               `json:"revoked"`
 	CreatedAt       time.Time          `json:"createdAt"`
 	Mode            string             `json:"mode"`
+	ProgramGrants   map[string]string  `json:"programGrants,omitempty"`
 	NativeAccounts  map[string]string  `json:"nativeAccounts,omitempty"`
 	Actions         map[string]string  `json:"actions,omitempty"`
 	Groups          []ActionGroup      `json:"groups,omitempty"`
@@ -73,6 +81,8 @@ type Invitation struct {
 	ExpiresAt  time.Time `json:"expiresAt"`
 }
 type JobRequest struct {
+	Tools          []AppTool         `json:"tools,omitempty"`
+	ToolSetHash    string            `json:"toolSetHash,omitempty"`
 	IdempotencyKey string            `json:"idempotencyKey"`
 	Kind           string            `json:"kind"`
 	Provider       string            `json:"provider,omitempty"`
@@ -87,41 +97,45 @@ type JobRequest struct {
 	Inputs         []string          `json:"inputs,omitempty"`
 }
 type Job struct {
-	InputNames      []string           `json:"inputNames,omitempty"`
-	Turn            int                `json:"turn,omitempty"`
-	ID              string             `json:"id"`
-	PairingID       string             `json:"pairingId"`
-	Request         JobRequest         `json:"request"`
-	RequestHash     string             `json:"requestHash,omitempty"`
-	LeaseID         string             `json:"leaseId,omitempty"`
-	Status          string             `json:"status"`
-	Code            string             `json:"code,omitempty"`
-	Detail          string             `json:"detail,omitempty"`
-	Output          string             `json:"output,omitempty"`
-	JSON            json.RawMessage    `json:"json,omitempty"`
-	Artifacts       []Artifact         `json:"artifacts,omitempty"`
-	Usage           *TokenUsage        `json:"usage,omitempty"`
-	ActualProvider  string             `json:"actualProvider,omitempty"`
-	ActualModel     string             `json:"actualModel,omitempty"`
-	Billing         string             `json:"billing"`
-	Revision        uint64             `json:"revision"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	StartedAt       *time.Time         `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time         `json:"finishedAt,omitempty"`
-	ActionHash      string             `json:"actionHash,omitempty"`
-	ActionTitle     string             `json:"actionTitle,omitempty"`
-	ExitCode        *int               `json:"exitCode,omitempty"`
-	OutputTruncated bool               `json:"outputTruncated,omitempty"`
-	Plan            *ExecutionPlan     `json:"plan,omitempty"`
-	Execution       *ExecutionMetadata `json:"execution,omitempty"`
-	Error           *Failure           `json:"error,omitempty"`
-	Diagnostic      string             `json:"diagnostic,omitempty"`
+	ToolOperations  []ToolOperationRecord `json:"toolOperations,omitempty"`
+	InputNames      []string              `json:"inputNames,omitempty"`
+	Turn            int                   `json:"turn,omitempty"`
+	ID              string                `json:"id"`
+	PairingID       string                `json:"pairingId"`
+	Request         JobRequest            `json:"request"`
+	RequestHash     string                `json:"requestHash,omitempty"`
+	LeaseID         string                `json:"leaseId,omitempty"`
+	Status          string                `json:"status"`
+	Code            string                `json:"code,omitempty"`
+	Detail          string                `json:"detail,omitempty"`
+	Output          string                `json:"output,omitempty"`
+	JSON            json.RawMessage       `json:"json,omitempty"`
+	Artifacts       []Artifact            `json:"artifacts,omitempty"`
+	Usage           *TokenUsage           `json:"usage,omitempty"`
+	ActualProvider  string                `json:"actualProvider,omitempty"`
+	ActualModel     string                `json:"actualModel,omitempty"`
+	Billing         string                `json:"billing"`
+	Revision        uint64                `json:"revision"`
+	CreatedAt       time.Time             `json:"createdAt"`
+	StartedAt       *time.Time            `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time            `json:"finishedAt,omitempty"`
+	ActionHash      string                `json:"actionHash,omitempty"`
+	ActionTitle     string                `json:"actionTitle,omitempty"`
+	ExitCode        *int                  `json:"exitCode,omitempty"`
+	OutputTruncated bool                  `json:"outputTruncated,omitempty"`
+	Plan            *ExecutionPlan        `json:"plan,omitempty"`
+	Execution       *ExecutionMetadata    `json:"execution,omitempty"`
+	Error           *Failure              `json:"error,omitempty"`
+	Diagnostic      string                `json:"diagnostic,omitempty"`
 }
 type Receipt struct {
-	JobID string `json:"jobId"`
-	Hash  string `json:"hash"`
+	LeaseHash   string `json:"leaseHash,omitempty"`
+	ToolSetHash string `json:"toolSetHash,omitempty"`
+	JobID       string `json:"jobId"`
+	Hash        string `json:"hash"`
 }
 type State struct {
+	Programs      map[string]AIProgram     `json:"programs"`
 	IdentityKey   string                   `json:"identityKey,omitempty"`
 	SecurityReset bool                     `json:"securityReset,omitempty"`
 	Version       int                      `json:"version"`
@@ -161,10 +175,16 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 	j.Code = code
 	j.Detail = detail
 	j.FinishedAt = &now
+	for i := range j.ToolOperations {
+		if j.ToolOperations[i].Status == "running" {
+			j.ToolOperations[i].Status = "unconfirmed"
+		}
+	}
 	j.Request.Prompt = ""
 	j.Request.Arguments = nil
 	j.Request.OutputSchema = nil
 	j.Request.Inputs = nil
+	j.Request.Tools = nil
 	j.InputNames = nil
 	if status != "completed" {
 		j.Error = failureFor(0, code, detail)
@@ -177,6 +197,7 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 func publicJob(j *Job) Job {
 	c := *j
 	c.RequestHash = ""
+	c.Request.Tools = nil
 	c.ActionHash = ""
 	c.LeaseID = ""
 	c.Plan = nil
@@ -186,6 +207,7 @@ func publicJob(j *Job) Job {
 func publicPairing(p *Pairing) Pairing {
 	c := *p
 	c.Relay = nil
+	c.Tools = nil
 	c.CredentialHash = ""
 	c.ClientPublicKey = ""
 	c.NativeAccounts = nil
@@ -294,11 +316,8 @@ func validateRequest(r *JobRequest) error {
 			return errors.New("connection-test accepts no provider or prompt")
 		}
 	case "text", "image-generate", "image-edit":
-		if r.Provider != "codex" && r.Provider != "claude" {
-			return errors.New("provider must be codex or claude")
-		}
-		if r.Kind != "text" && r.Provider != "codex" {
-			return errors.New("image generation/editing requires Codex")
+		if !actionID.MatchString(r.Provider) {
+			return errors.New("provider must be a program ID")
 		}
 		if len(strings.TrimSpace(r.Prompt)) == 0 || len(r.Prompt) > 32768 {
 			return errors.New("prompt must be 1–32768 bytes")

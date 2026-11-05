@@ -26,7 +26,7 @@ try {
  await writeFile(dir+'/relay.key',secret,{mode:0o444});
  const portProbe=createServer();await new Promise(resolve=>portProbe.listen(0,'127.0.0.1',resolve));const port=portProbe.address().port;await new Promise(resolve=>portProbe.close(resolve));
  docker('run','-d','--rm','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','1g','--cpus','1','--name',name,'-p','127.0.0.1:'+port+':8080','--mount','type=bind,source='+dir+'/relay.key,target=/run/secrets/relay_key,readonly','--mount','type=volume,source='+volume+',target=/data',
-   '-e','WDC_ADMIN_KEY_FILE=/run/secrets/relay_key','wdc-relay:local');
+   '-e','WDC_ADMIN_KEY_FILE=/run/secrets/relay_key',process.env.WDC_RELAY_IMAGE??'wdc-relay:local');
  const url='http://'+docker('port',name,'8080/tcp');
  for(let i=0;i<100;i++){try{if((await fetch(url+'/readyz')).ok)break;}catch{}await wait(50)}
  assert.equal(docker('exec',name,'id','-u'),'10001');
@@ -42,12 +42,21 @@ try {
  for(let i=0;i<150;i++){try{base=JSON.parse(await readFile(dir+'/desktop/runner.json','utf8')).url;break}catch{}await wait(50)}assert.ok(base,stderr);
  control=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+await readFile(dir+'/desktop/admin.key','utf8')}}).then(r=>r.json());
  if(native){for(let i=0;i<250;i++){const state=await api('/state',undefined,'GET');if(!state.nativeChecking&&state.native.length)break;await wait(100)}await api('/sharing',{names:true,models:true,versions:true},'PATCH')}
- const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7'});
+ const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7',logoURL:origin+'/logo.svg',requestedPermissions:{automaticApprovals:true}});
+ const pendingClient=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin});
+ assert.equal((await pendingClient.status()).enrollmentStatus,'pending');await pendingClient.close();
+ const declined=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'decline-fixture'});
+ await api('/relay/decline',{url,code:declined.code});
+ const declinedClient=new RelayClient({baseURL:url,apiKey:key,connectionId:declined.connectionId,account:{appId:'kings-international',appUser:'decline-fixture'},origin});
+ assert.equal((await declinedClient.status()).enrollmentStatus,'declined');await declinedClient.close();
+ await RelayClient.revoke({baseURL:url,apiKey:key,connectionId:declined.connectionId,appUser:'decline-fixture'});
  const expected=await api('/relay/inspect',{url,code:enrollment.code});assert.equal(expected.appUser,'admin-7');
- await api('/relay/connect',{url,code:enrollment.code,expected});
+ assert.equal(expected.logoURL,origin+'/logo.svg');assert.equal(expected.requestedPermissions.automaticApprovals,true);
+ const upload=await fetch(base+'/api/logos/upload',{method:'POST',headers:{Origin:base,'X-Bridge-Session':control.session,'X-Bridge-CSRF':control.csrf,'Content-Type':'image/svg+xml'},body:'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24z"/></svg>'});assert.equal(upload.status,201);const logo=await upload.json();
+ await api('/relay/connect',{url,code:enrollment.code,expected,automatic:false,logoId:logo.logoId});
  backend=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin,groups:[{id:'ai',name:'Kings AI',kind:'ai',children:[{id:'generation',name:'Generation',kind:'ai'},{id:'images',name:'Images',kind:'ai'}]}]});
  for(let i=0;i<100;i++){if((await backend.status()).connected)break;await wait(50)}
- await backend.connect();const caps=await backend.capabilities();assert.equal(caps.leaseSeconds,45);assert.equal(caps.pairing.appUser,'admin-7');
+ await backend.connect();const caps=await backend.capabilities();assert.equal(caps.leaseSeconds,45);assert.equal(caps.pairing.appUser,'admin-7');assert.equal(caps.pairing.automatic,false);assert.equal(caps.pairing.logoId,logo.logoId);
  secondEnrollment=await RelayClient.enroll({baseURL:url,apiKey:secondProject.apiKey,appUser:'admin-7'});
  const secondExpected=await api('/relay/inspect',{url,code:secondEnrollment.code});assert.equal(secondExpected.appId,'other-website');
  await api('/relay/connect',{url,code:secondEnrollment.code,expected:secondExpected});
@@ -67,6 +76,21 @@ try {
  await assert.rejects(direct.get(kings.id),e=>e.status===404);
  assert.equal(otherJob.status,'completed');assert.notEqual(otherJob.id,kings.id);await assert.rejects(second.get(kings.id),e=>e.status===404);
  const file=await backend.upload(new Blob(['fixture task'],{type:'text/plain'}),'task.txt');assert.equal(file.size,12);await backend.removeInput(file.id);
+ if(!native){
+   await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:0,routing:{default:{provider:'codex',reasoning:'low'},groups:{'ai.generation':{provider:'codex',reasoning:'high'}}}},'PUT');
+   const workflowGroups=process.env.WDC_GROUPS_FILE ? JSON.parse(await readFile(process.env.WDC_GROUPS_FILE,'utf8')) : [{id:'images',name:'Image generation',kind:'ai',children:[{id:'plan',name:'Plan prompts',kind:'ai',replaces:['ai.generation']},{id:'render',name:'Generate image',kind:'ai',operation:'image',replaces:['ai.images']},{id:'review',name:'Review image',kind:'ai',replaces:['ai.generation']}]}];
+   await backend.registerGroups(workflowGroups);
+   const updated=(await api('/state',undefined,'GET')).pairings.find(pair=>pair.id===caps.pairing.id);
+   assert.equal(updated.groupsDeclared,true);assert.equal(updated.routing.groups['images.plan'].reasoning,'high');assert.equal(updated.routing.groups['images.review'].reasoning,'high');
+   assert.equal(updated.groups.find(group=>group.id==='images.render').operation,'image');
+   const revision=updated.routing.revision;
+   const routing={...updated.routing,groups:{...updated.routing.groups,'images.review':{inheritOptions:true,modelDefault:true,reasoning:'medium'}}};
+   await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:revision,routing},'PUT');
+   await backend.registerGroups(workflowGroups);
+   assert.equal((await api('/state',undefined,'GET')).pairings.find(pair=>pair.id===caps.pairing.id).routing.groups['images.review'].reasoning,'medium');
+   assert.equal((await direct.run({kind:'connection-test',idempotencyKey:'direct-after-workflow-migration'})).status,'completed');
+   console.log('Workflow migration passed with the consumer SDK: same-pairing legacy overrides copied once, image-stage metadata, independent native defaults and reasoning, and unchanged direct transport.');
+ }
  if(native){
    await api('/pairings/'+caps.pairing.id+'/routing',{expectedRevision:0,routing:{default:{provider:'codex',reasoning:'low'}}},'PUT');
    assert.equal((await backend.preflight({kind:'action',group:'ai.generation',prompt:'fixture'},['text'])).available,true);
@@ -75,8 +99,8 @@ try {
    const schema={type:'object',properties:{ok:{type:'boolean'}},required:['ok'],additionalProperties:false};
    const structured=await backend.run({group:'ai.generation',prompt:'Return JSON with ok equal to true.',outputSchema:schema,timeoutSeconds:180});assert.deepEqual(structured.json,{ok:true});
    const session=backend.session({group:'ai.generation'});await session.run('Remember this fixture word: saffron. Reply OK.');assert.match((await session.run('What fixture word did I give you? Reply with the word.')).output,/saffron/i);await session.close();
-   let calls=0;await backend.registerTools([{id:'echo',title:'Echo',description:'Return a fixture verification value.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{calls++;return {value,marker:'relay-tool-confirmed'}}}]);
-   const tool=await backend.run({group:'ai.generation',mode:'app-tools',prompt:'Call the app echo tool once with value saffron. Report the returned marker.',timeoutSeconds:180});assert.equal(calls,1);assert.match(tool.output,/relay-tool-confirmed/);
+   let calls=0;const tools=[{id:'echo',title:'Echo',description:'Return a fixture verification value.',readOnly:true,inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false},execute:({value})=>{calls++;return {value,marker:'relay-tool-confirmed'}}}];
+   const tool=await backend.run({group:'ai.generation',tools,mode:'app-tools',prompt:'Call the app echo tool once with value saffron. Report the returned marker.',timeoutSeconds:180});assert.equal(calls,1);assert.match(tool.output,/relay-tool-confirmed/);
    const image=await backend.run({kind:'image-generate',provider:'codex',group:'ai.images',prompt:'Generate a small simple image using the built-in image generation tool: a yellow circle on a white background.',timeoutSeconds:240});const blob=await backend.artifact(image);assert.equal(blob.type,'image/png');
    const input=await backend.upload(blob,'reference.png');const edited=await backend.run({kind:'image-edit',provider:'codex',group:'ai.images',inputs:[input.id],prompt:'Use the image generation tool to change the circle to blue and preserve the white background.',timeoutSeconds:240});assert.notEqual(edited.artifacts[0].sha256,image.artifacts[0].sha256);assert.ok((await backend.artifact(edited)).size>1000);
    console.log('Native relay parity passed: simultaneous Codex/Claude, feature-group admission, JSON, continuing session, once-only app tool, image generation and reference-image editing.');

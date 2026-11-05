@@ -16,12 +16,13 @@ import (
 )
 
 type AppTool struct {
-	ID          string          `json:"id"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
-	ReadOnly    bool            `json:"readOnly"`
-	Hash        string          `json:"hash,omitempty"`
+	ID               string          `json:"id"`
+	Title            string          `json:"title"`
+	Description      string          `json:"description"`
+	InputSchema      json.RawMessage `json:"inputSchema"`
+	ReadOnly         bool            `json:"readOnly"`
+	OperationDetails bool            `json:"operationDetails,omitempty"`
+	Hash             string          `json:"hash,omitempty"`
 }
 
 // ToolGrant is accepted only in legacy control requests; apps own tool authorization.
@@ -38,20 +39,24 @@ type FolderGrant struct {
 	Automatic bool   `json:"automatic"`
 }
 type PermissionRequest struct {
-	ID        string          `json:"id"`
-	PairingID string          `json:"pairingId"`
-	LeaseID   string          `json:"-"`
-	JobID     string          `json:"jobId,omitempty"`
-	Kind      string          `json:"kind"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Hash      string          `json:"hash,omitempty"`
-	Status    string          `json:"status"`
-	CreatedAt time.Time       `json:"createdAt"`
-	Result    json.RawMessage `json:"-"`
-	Before    string          `json:"before,omitempty"`
-	After     string          `json:"after,omitempty"`
-	changed   chan struct{}
+	ID                    string          `json:"id"`
+	PairingID             string          `json:"pairingId"`
+	LeaseID               string          `json:"-"`
+	JobID                 string          `json:"jobId,omitempty"`
+	ConversationID        string          `json:"conversationId,omitempty"`
+	RequestIdempotencyKey string          `json:"requestIdempotencyKey,omitempty"`
+	ToolSetHash           string          `json:"toolSetHash,omitempty"`
+	Kind                  string          `json:"kind"`
+	Name                  string          `json:"name"`
+	Arguments             json.RawMessage `json:"arguments"`
+	Hash                  string          `json:"hash,omitempty"`
+	Status                string          `json:"status"`
+	CreatedAt             time.Time       `json:"createdAt"`
+	Result                json.RawMessage `json:"-"`
+	Operation             *ToolOperation  `json:"operation,omitempty"`
+	Before                string          `json:"before,omitempty"`
+	After                 string          `json:"after,omitempty"`
+	changed               chan struct{}
 }
 
 func (a *App) signalPermission(op *PermissionRequest) {
@@ -89,6 +94,11 @@ func (a *App) newPermission(p *Pairing, lease, job, kind, name, hash string, arg
 		return nil, fail(429, "permission_limit", "Finish pending permission requests first.")
 	}
 	op := &PermissionRequest{ID: secret(), PairingID: p.ID, LeaseID: lease, JobID: job, Kind: kind, Name: name, Hash: hash, Arguments: append(json.RawMessage(nil), args...), Status: "pending", CreatedAt: a.now(), changed: make(chan struct{})}
+	if j := findJob(&a.state, job); j != nil {
+		op.ConversationID = j.Request.ConversationID
+		op.RequestIdempotencyKey = j.Request.IdempotencyKey
+		op.ToolSetHash = j.Request.ToolSetHash
+	}
 	a.permissions[op.ID] = op
 	return op, nil
 }
@@ -144,50 +154,6 @@ func (a *App) waitPermission(ctx context.Context, op *PermissionRequest, complet
 	}
 }
 func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.ResponseWriter, *http.Request, *Pairing) error) http.HandlerFunc, control func(func(http.ResponseWriter, *http.Request) error) http.HandlerFunc) {
-	mux.HandleFunc("POST /v2/tools", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		if _, err := a.liveLease(r, p); err != nil {
-			return err
-		}
-		var in struct {
-			Tools []AppTool `json:"tools"`
-		}
-		if err := decode(w, r, &in); err != nil {
-			return err
-		}
-		if len(in.Tools) > 32 {
-			return fail(400, "invalid_tools", "At most 32 app tools are supported.")
-		}
-		next := map[string]AppTool{}
-		for _, tool := range in.Tools {
-			if !actionID.MatchString(tool.ID) || strings.HasPrefix(tool.ID, "wdc_") || len(tool.Title) < 1 || len(tool.Title) > 100 || len(tool.Description) > 2000 {
-				return fail(400, "invalid_tool", "Supply a stable tool ID, short title and description.")
-			}
-			if _, ok := next[tool.ID]; ok {
-				return fail(400, "invalid_tool", "Tool IDs must be unique.")
-			}
-			if err := checkOutputSchema(tool.InputSchema); err != nil || len(tool.InputSchema) == 0 {
-				return fail(400, "invalid_tool", "Use the supported strict JSON schema subset for tool inputs.")
-			}
-			tool.Hash = ""
-			raw, _ := json.Marshal(tool)
-			tool.Hash = digest(string(raw))
-			next[tool.ID] = tool
-		}
-		before, _ := json.Marshal(p.Tools)
-		after, _ := json.Marshal(next)
-		if string(before) != string(after) {
-			if err := a.update(func(s *State) error {
-				pair := s.Pairings[p.ID]
-				pair.Tools = next
-				a.cancelPermissionWork(s, p.ID, "tool_definitions_changed")
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		writeJSON(w, 200, map[string]any{"tools": a.state.Pairings[p.ID].Tools})
-		return nil
-	}))
 	mux.HandleFunc("GET /v2/permissions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		writeJSON(w, 200, permissionSummary(p))
 		return nil
@@ -219,13 +185,8 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err = decode(w, r, &in); err != nil {
 			return err
 		}
-		if len(in.Tools) > 32 {
-			return fail(400, "invalid_permission", "Too many tools.")
-		}
-		for _, id := range in.Tools {
-			if _, ok := p.Tools[id]; !ok {
-				return fail(400, "unknown_tool", "Register the requested app tool first.")
-			}
+		if len(in.Tools) > 0 {
+			return fail(400, "invalid_permission", "App tools are execution-scoped and authorized by the application.")
 		}
 		if permissionsSatisfied(p, in.Tools, in.Workspace) {
 			writeJSON(w, 200, map[string]string{"id": "", "status": "completed"})
@@ -239,7 +200,7 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		writeJSON(w, 202, op)
 		return nil
 	}))
-	mux.HandleFunc("GET /v2/tool-calls", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
+	poll := paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		lease, err := a.liveLease(r, p)
 		if err != nil {
 			return err
@@ -250,9 +211,53 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 				calls = append(calls, *op)
 			}
 		}
-		writeJSON(w, 200, map[string]any{"calls": calls})
+		var in struct {
+			Requests []string `json:"requests"`
+		}
+		if r.Method == "POST" {
+			if err := decode(w, r, &in); err != nil {
+				return err
+			}
+		}
+		if len(in.Requests) > 256 {
+			return fail(400, "invalid_poll", "At most 256 pending executions may be observed.")
+		}
+		completed := []map[string]string{}
+		jobsByKey := map[string]*Job{}
+		for _, job := range a.state.Jobs {
+			if job.PairingID == p.ID {
+				jobsByKey[job.Request.IdempotencyKey] = job
+			}
+		}
+		for _, key := range in.Requests {
+			if len(key) < 8 || len(key) > 128 {
+				return fail(400, "invalid_poll", "Invalid execution request key.")
+			}
+			if job := jobsByKey[key]; job != nil {
+				if job.LeaseID == lease && terminal(job.Status) {
+					completed = append(completed, map[string]string{"jobId": job.ID, "requestIdempotencyKey": key, "toolSetHash": job.Request.ToolSetHash})
+				}
+				continue
+			}
+			receipt, consumed, err := a.receipt(digest(p.ID + ":" + key))
+			if err != nil {
+				return err
+			}
+			if !consumed || receipt.LeaseHash != digest(lease) {
+				continue
+			}
+			job := findJob(&a.state, receipt.JobID)
+			if job == nil || terminal(job.Status) {
+				completed = append(completed, map[string]string{"jobId": receipt.JobID, "requestIdempotencyKey": key, "toolSetHash": receipt.ToolSetHash})
+			}
+		}
+		writeJSON(w, 200, map[string]any{"calls": calls, "completed": completed})
 		return nil
-	}))
+	})
+
+	mux.HandleFunc("GET /v2/tool-calls", poll)
+	mux.HandleFunc("POST /v2/tool-calls/poll", poll)
+	mux.HandleFunc("POST /v2/tool-calls/{id}/operation", paired(a.reportToolOperation))
 	mux.HandleFunc("POST /v2/tool-calls/{id}/claim", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		op := a.permissions[r.PathValue("id")]
 		lease, err := a.liveLease(r, p)
@@ -293,6 +298,16 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 				return fail(409, "result_conflict", "This call already has a different result.")
 			}
 		} else if op.Status == "dispatched" {
+			if op.Operation != nil {
+				if err := a.update(func(s *State) error {
+					if j := findJob(s, op.JobID); j != nil {
+						completeToolOperation(j, op.ID, "returned")
+					}
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
 			op.Result = append(json.RawMessage(nil), in.Result...)
 			op.Status = "completed"
 			a.signalPermission(op)
@@ -342,7 +357,7 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := decode(w, r, &in); err != nil {
 			return err
 		}
-		if len(in.Tools) > 32 || len(in.Folders) > 16 {
+		if len(in.Folders) > 16 {
 			return fail(400, "grant_limit", "Too many grants.")
 		}
 
@@ -470,16 +485,13 @@ func permissionSummary(p *Pairing) map[string]any {
 		f.Identity = ""
 		folders = append(folders, f)
 	}
-	tools := p.Tools
-	if tools == nil {
-		tools = map[string]AppTool{}
-	}
+	tools := map[string]AppTool{}
 	// Preserve the old response shape without implying WDC grants app actions.
 	return map[string]any{"tools": tools, "grants": map[string]ToolGrant{}, "folders": folders}
 }
 func (a *App) cancelPermissionWork(s *State, pairing, code string) {
 	affected := func(mode string) bool {
-		return mode == "workspace" || code == "tool_definitions_changed" && mode == "app-tools"
+		return mode == "workspace"
 	}
 	for _, c := range s.Conversations {
 		if c.PairingID == pairing && c.Status == "open" && affected(c.Mode) {
@@ -528,7 +540,7 @@ func (a *App) nativeToolDefinitions(job string) []map[string]any {
 	}
 	out := []map[string]any{}
 	if j.Request.Mode == "app-tools" || j.Request.Mode == "workspace" {
-		for _, tool := range p.Tools {
+		for _, tool := range a.executionTools(j) {
 			out = append(out, map[string]any{"name": "app_" + digest(tool.ID)[:24], "description": tool.Description, "inputSchema": json.RawMessage(tool.InputSchema)})
 		}
 	}
@@ -567,18 +579,21 @@ func (a *App) invokeNativeTool(ctx context.Context, job, name string, args json.
 	mode := j.Request.Mode
 	if strings.HasPrefix(name, "app_") && (mode == "app-tools" || mode == "workspace") {
 		id := ""
-		for key := range p.Tools {
-			if name == "app_"+digest(key)[:24] {
-				id = key
+		var tool AppTool
+		ok := false
+		for _, candidate := range a.executionTools(j) {
+			if name == "app_"+digest(candidate.ID)[:24] {
+				id = candidate.ID
+				tool = candidate
+				ok = true
 				break
 			}
 		}
-		tool, ok := p.Tools[id]
 		if !ok {
 			a.mu.Unlock()
 			return nil, fail(403, "unknown_tool", "This app tool is not registered.")
 		}
-		if err := validateJSONOutput(tool.InputSchema, string(args)); err != nil {
+		if err := validateToolArguments(tool.InputSchema, args); err != nil {
 			a.mu.Unlock()
 			return nil, fail(400, "invalid_tool_arguments", "Arguments do not match the registered schema.")
 		}
@@ -783,10 +798,8 @@ func permissionsSatisfied(p *Pairing, tools []string, workspace bool) bool {
 	if workspace && len(p.Folders) == 0 {
 		return false
 	}
-	for _, id := range tools {
-		if _, ok := p.Tools[id]; !ok {
-			return false
-		}
+	if len(tools) > 0 {
+		return false
 	}
 	return true
 }

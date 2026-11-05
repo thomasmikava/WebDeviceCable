@@ -129,9 +129,14 @@ func (a *App) startConversationTurn(job *Job) {
 	}
 }
 func (c *commandConversation) loop(ctx context.Context, action configuredAction, dir string, first conversationTurn, owner *App) {
+	customOneShot := action.program != nil && !action.continuing
+	if customOneShot {
+		defer close(first.Run.stopped)
+	}
 	var active *conversationTurn
 	var files *commandFiles
 	reason := "session_closed"
+	abortCurrent := func() bool { return false }
 	finish := func(err error, failure *Failure) {
 		if active != nil {
 			if err == nil && files != nil {
@@ -144,9 +149,12 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 				active.Run.artifacts = artifacts
 				active.Run.mu.Unlock()
 			}
+			abortCurrent()
 			active.Run.complete(err, failure)
 			active.Run.cancel()
-			close(active.Run.stopped)
+			if !customOneShot {
+				close(active.Run.stopped)
+			}
 			active.Prompt = ""
 			active.Arguments = nil
 			active.Inputs = nil
@@ -185,6 +193,9 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 	cmd := exec.CommandContext(ctx, action.Exec[0], action.Exec[1:]...)
 	cmd.Dir = dir
 	cmd.Env = commandEnv()
+	if action.program != nil {
+		cmd.Env = programEnv(*action.program)
+	}
 	cmd.WaitDelay = time.Second
 	stdout, writer := io.Pipe()
 	defer stdout.Close()
@@ -234,6 +245,46 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 	begin := func(turn *conversationTurn) {
 		active = turn
 		c.setActive(turn.Run)
+		if action.program != nil {
+			abortCurrent = context.AfterFunc(turn.Run.ctx, c.cancel)
+			program, err := owner.programForJob(turn.JobID)
+			if err == nil && program.hash() != action.program.hash() {
+				err = fail(409, "program_changed", "This AI program changed.")
+			}
+			var info customProgramInfo
+			if err == nil {
+				info, err = inspectCustom(withProgram(turn.Run.ctx, program), action.Exec[0], dir)
+				if err != nil {
+					err = fail(503, "custom_interface_unavailable", err.Error())
+				}
+			}
+			if err == nil {
+				owner.mu.Lock()
+				target := ExecutionTarget{}
+				if j := findJob(&owner.state, turn.JobID); j != nil && j.Plan != nil {
+					target = j.Plan.ExecutionTarget
+				}
+				owner.mu.Unlock()
+				err = customOptions(info, target, action.continuing)
+			}
+			if err == nil {
+				account := info.Account
+				if account == "" {
+					account = "unreported:" + program.hash()
+				}
+				err = owner.bindNativeAccount(turn.JobID, account)
+			}
+			if err != nil {
+				reason = errorCode(err)
+				turn.Run.complete(err, failureFor(0, reason, err.Error()))
+				c.cancel()
+				turn.Run.cancel()
+				return
+			}
+			turn.Run.mu.Lock()
+			turn.Run.execution = &ExecutionMetadata{Kind: "custom", Name: program.Name, ProgramID: program.ID, Integration: program.Type, Version: info.Version, VersionSource: "program"}
+			turn.Run.mu.Unlock()
+		}
 		turn.Run.mu.Lock()
 		turn.Run.started = true
 		turn.Run.mu.Unlock()
@@ -247,14 +298,25 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 			}
 			files = &staged
 		}
+		model, reasoning := "", ""
+		if action.program != nil {
+			owner.mu.Lock()
+			if j := findJob(&owner.state, turn.JobID); j != nil && j.Plan != nil {
+				model = j.Plan.Model
+				reasoning = j.Plan.Reasoning
+			}
+			owner.mu.Unlock()
+		}
 		data, _ := json.Marshal(struct {
+			Model     string            `json:"model,omitempty"`
+			Reasoning string            `json:"reasoning,omitempty"`
 			Version   int               `json:"v"`
 			Type      string            `json:"type"`
 			ID        string            `json:"id"`
 			Prompt    string            `json:"prompt,omitempty"`
 			Arguments map[string]string `json:"arguments,omitempty"`
 			Files     *commandFiles     `json:"files,omitempty"`
-		}{1, "turn", turn.JobID, turn.Prompt, turn.Arguments, files})
+		}{model, reasoning, 1, "turn", turn.JobID, turn.Prompt, turn.Arguments, files})
 		go func() {
 			_, err := stdin.Write(append(data, '\n'))
 			select {
@@ -359,6 +421,9 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 					return
 				}
 				finish(nil, nil)
+				if action.program != nil && !action.continuing {
+					return
+				}
 				if action.Session.IdleTimeout > 0 {
 					idle.Reset(time.Duration(action.Session.IdleTimeout) * time.Second)
 				}

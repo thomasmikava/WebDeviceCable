@@ -28,7 +28,7 @@ Both packages support ESM, CommonJS and TypeScript. One relay can serve multiple
 
 ## Documentation
 
-- [Capabilities and limits](docs/native-execution.md)
+- [AI programs and profiles](docs/ai-programs.md) · [Capabilities and limits](docs/native-execution.md)
 - [Permissions and security](docs/security.md) · [Privacy](PRIVACY.md)
 - [Running, updating and troubleshooting](docs/operations.md)
 - [Development and contributing](CONTRIBUTING.md) · [Building releases](docs/releases.md)

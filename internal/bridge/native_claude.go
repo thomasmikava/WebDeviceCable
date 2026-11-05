@@ -26,8 +26,12 @@ type claudeAuth struct {
 	ConfigDirectory string `json:"configDirectory"`
 }
 
-func claudeAccount(path, dir string) (claudeAuth, error) {
-	raw, err := nativeOutput(path, dir, "--safe-mode", "--restricted", "--setting-sources", "", "auth", "status")
+func claudeAccount(path, dir string, programs ...AIProgram) (claudeAuth, error) {
+	ctx := context.Background()
+	if len(programs) > 0 {
+		ctx = withProgram(ctx, programs[0])
+	}
+	raw, err := nativeOutputContext(ctx, path, dir, "--safe-mode", "--restricted", "--setting-sources", "", "auth", "status")
 	var auth claudeAuth
 	if json.Unmarshal([]byte(raw), &auth) != nil {
 		return auth, fail(503, "native_protocol_error", "Claude Code could not report its sign-in status.")
@@ -62,8 +66,8 @@ func versionAtLeast(version, minimum string) bool {
 	return true
 }
 
-func checkClaude(dir, path string, status NativeStatus) NativeStatus {
-	auth, err := claudeAccount(path, dir)
+func checkClaude(dir, path string, status NativeStatus, programs ...AIProgram) NativeStatus {
+	auth, err := claudeAccount(path, dir, programs...)
 	status.Authentication = "not_signed_in_or_unavailable"
 	if auth.LoggedIn && auth.Method == "claude.ai" {
 		status.Authentication = "native_subscription"
@@ -88,9 +92,35 @@ func checkClaude(dir, path string, status NativeStatus) NativeStatus {
 		return status
 	}
 	status.Execution = true
+	status.Sessions = true
+	status.Account = auth.Email
+	status.accountKey = auth.OrgID + ":" + strings.ToLower(auth.Email)
 	status.Detail = "Ready. Uses your existing Claude Code subscription sign-in in a private, tool-free session."
+	// Advertise only effort names reported by the installed CLI, not guesses
+	// based on a cloud API's model catalog.
+	var efforts []NativeReasoning
+	ctx := context.Background()
+	if len(programs) > 0 {
+		ctx = withProgram(ctx, programs[0])
+	}
+	help, _ := nativeOutputContext(ctx, path, dir, "--help")
+	lines := strings.Split(help, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "--effort") {
+			continue
+		}
+		description := line
+		if i+1 < len(lines) && !strings.Contains(lines[i+1], "--") {
+			description += " " + lines[i+1]
+		}
+		for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+			if strings.Contains(description, "\""+effort+"\"") || strings.Contains(description, "("+effort+",") || strings.Contains(description, ", "+effort) {
+				efforts = append(efforts, NativeReasoning{Effort: effort})
+			}
+		}
+	}
 	for _, model := range []struct{ ID, Name string }{{"sonnet", "Sonnet"}, {"opus", "Opus"}, {"haiku", "Haiku"}} {
-		status.Models = append(status.Models, NativeModel{ID: model.ID, Name: model.Name})
+		status.Models = append(status.Models, NativeModel{ID: model.ID, Name: model.Name, Reasoning: efforts})
 	}
 	return status
 }
@@ -312,12 +342,18 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 		failRun(err)
 		return
 	}
-	path, err := nativePath("claude")
+	program, err := a.programForJob(first.JobID)
 	if err != nil {
 		failRun(err)
 		return
 	}
-	version, err := nativeOutput(path, dir, "--version")
+	ctx = withProgram(ctx, program)
+	path, err := program.path()
+	if err != nil {
+		failRun(err)
+		return
+	}
+	version, err := nativeOutputContext(ctx, path, dir, "--version")
 	if err != nil {
 		failRun(err)
 		return
@@ -327,7 +363,7 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 		failRun(fail(503, "native_version_unavailable", "Update Claude Code before using Restricted mode."))
 		return
 	}
-	account, err := claudeAccount(path, dir)
+	account, err := claudeAccount(path, dir, program)
 	if err != nil {
 		failRun(err)
 		return
@@ -352,7 +388,7 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 			failRun(e)
 			return
 		}
-		args = claudeToolArgs(args, configPath, definitions)
+		args = claudeToolArgs(args, configPath)
 	}
 	process, err := startNativeProcess(ctx, path, dir, args, conversationStderr{c})
 	if err != nil {
@@ -368,7 +404,7 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 	defer idle.Stop()
 	writes := make(chan error, 1)
 	begin := func() error {
-		auth, err := claudeAccount(path, dir)
+		auth, err := claudeAccount(path, dir, program)
 		if err != nil {
 			return err
 		}
@@ -385,7 +421,7 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 		initialized = false
 		active.Run.mu.Lock()
 		active.Run.started = true
-		active.Run.execution = &ExecutionMetadata{Kind: "native", Name: "Claude Code", Provider: "claude", Version: version, VersionSource: "native"}
+		active.Run.execution = &ExecutionMetadata{Kind: "native", Name: program.Name, ProgramID: program.ID, Integration: program.Type, Provider: "claude", Version: version, VersionSource: "native"}
 		active.Run.mu.Unlock()
 		go func() { writes <- process.send(message) }()
 		return nil

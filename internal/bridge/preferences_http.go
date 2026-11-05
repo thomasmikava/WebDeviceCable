@@ -36,6 +36,44 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := validateGroupTree(groups); err != nil {
 			return fail(400, "invalid_groups", err.Error())
 		}
+		// Materialize only pre-existing local choices, once per new group. The
+		// website supplies aliases, never a program/model or new permission.
+		routing := p.Routing
+		migrated := false
+		routing.Groups = map[string]ExecutionTarget{}
+		for id, target := range p.Routing.Groups {
+			routing.Groups[id] = target
+		}
+		for _, incoming := range in.Groups {
+			if groupExists(p, incoming.ID) {
+				continue
+			}
+			for _, legacy := range incoming.Replaces {
+				custom := false
+				for id, depth := legacy, 0; id != "" && depth < 8; depth++ {
+					if _, ok := p.Routing.Groups[id]; ok {
+						custom = true
+						break
+					}
+					parent := ""
+					for _, old := range p.Groups {
+						if old.ID == id {
+							parent = old.ParentID
+							break
+						}
+					}
+					id = parent
+				}
+				if custom {
+					routing.Groups[incoming.ID] = routingTarget(p, legacy)
+					migrated = true
+					break
+				}
+			}
+		}
+		if migrated {
+			routing.Revision++
+		}
 		hierarchyChanged := false
 		for _, incoming := range in.Groups {
 			for _, old := range p.Groups {
@@ -47,6 +85,8 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := a.update(func(s *State) error {
 			next := s.Pairings[p.ID]
 			next.Groups = groups
+			next.GroupsDeclared = true
+			next.Routing = routing
 			if hierarchyChanged {
 				next.Routing.Revision++
 				for _, conversation := range s.Conversations {
@@ -109,7 +149,12 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 					return fail(400, "invalid_route", "Ordinary groups can only use commands.")
 				}
 			}
-			if err := a.validateTarget(p, target); err != nil {
+			if target.ModelDefault && target.Model != "" || target.ReasoningDefault && target.Reasoning != "" || target.Action != "" && (target.InheritOptions || target.ModelDefault || target.ReasoningDefault) {
+				return fail(400, "invalid_route", "Choose either inheritance, client default or an explicit native option.")
+			}
+			preview := *p
+			preview.Routing = in.Routing
+			if err := a.validateTarget(p, routingTarget(&preview, id)); err != nil {
 				return err
 			}
 		}
