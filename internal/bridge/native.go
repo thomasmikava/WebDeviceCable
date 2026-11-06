@@ -22,6 +22,7 @@ type NativeStatus struct {
 	ConfigHash     string        `json:"configHash,omitempty"`
 	Account        string        `json:"account,omitempty"`
 	Sessions       bool          `json:"sessions"`
+	Files          bool          `json:"files,omitempty"`
 	ID             string        `json:"id"`
 	Installed      bool          `json:"installed"`
 	Version        string        `json:"version,omitempty"`
@@ -119,6 +120,7 @@ func checkProgram(dir string, p AIProgram) NativeStatus {
 		}
 		s.Models = info.Models
 		s.Sessions = info.Sessions
+		s.Files = info.Files
 		s.Execution = true
 		s.Authentication = "reported_by_program"
 		s.Detail = "WDC JSONL interface available. Runs with your OS account permissions; no native sandbox guarantee."
@@ -274,6 +276,10 @@ func (a *App) capabilities(p *Pairing) []Capability {
 			cap.Execution = status.Execution
 			cap.Reason = status.Detail
 			cap.Sessions = status.Sessions
+			if program.Type == "custom" && status.Files {
+				cap.ImageInput = true
+				cap.DocumentInput = true
+			}
 			if cap.Execution {
 				cap.Text = true
 				cap.Streaming = true

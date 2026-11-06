@@ -1,6 +1,6 @@
-# Connection review and tool improvements (0.2.1)
+# Connection review
 
-Release candidate: 0.2.1. Browser SDK, relay SDK/server and desktop are released together. Existing 0.2.0 packages and release tags remain unchanged. The local-preview validation below is historical; see [0.2.1 release notes](release-0.2.1.md) for the coordinated release and remaining platform checks.
+Logo and automatic-approval suggestions shipped in 0.2.1. Version 0.2.2 adds explicit file permission suggestions and a combined permission editor. Browser SDK, relay SDK/server and desktop should be upgraded together. Historical local-validation notes below record the earlier preview; see [0.2.2 release notes](release-0.2.2.md) for the current release.
 
 The preview also removes the former 32-tool count cap. Execution catalogs are bounded by their 1 MiB definition budget and existing schema/request/live-storage budgets. Authenticated desktop and relay capabilities omit `toolsPerExecution`; the SDK still reports an update requirement before submitting a larger catalog to an older peer that advertises a positive cap. SDK tests cover 300-tool jobs and sessions, callbacks at the end of the catalog, and oversized catalogs rejected by bytes rather than count.
 
@@ -36,9 +36,9 @@ Supported formats: PNG, JPEG, GIF and a static SVG subset, maximum 256 KiB. Rast
 
 Cache files use content hashes, are served only to authenticated owner sessions, and are capped at 32 MiB. Unreferenced previews older than 24 hours are pruned when adding images. Pairings retain only the selected logo hash. Optional fields load without changing existing identities, receipts or grants; no application database migration is needed.
 
-## Local validation and rollout
+## Historical local validation and rollout
 
-Build `npm run package:sdk` for the `0.2.1` browser and relay tarballs. Build the desktop with `python3 scripts/package.py --target darwin/arm64 --out-dir dist/onboarding-preview`. Install the local archives in test consumers; do not commit filesystem dependency paths. Rorido supplies its own origin's `/pwa-192x192.png`; Kings requests automatic approval and uses its public admin `/logo.svg`, overridable with backend-only `BE_WDC_LOGO_URL` (use the registered loopback origin for a local image).
+Build `npm run package:sdk` for unpublished `0.2.1-preview.1` browser and relay tarballs. Build the desktop with `python3 scripts/package.py --target darwin/arm64 --out-dir dist/onboarding-preview`. Install the local archives in test consumers; do not commit filesystem dependency paths. Rorido supplies its own origin's `/pwa-192x192.png`; Kings requests automatic approval and uses its public admin `/logo.svg`, overridable with backend-only `BE_WDC_LOGO_URL` (use the registered loopback origin for a local image).
 
 Test a fresh pairing, edit the default, connect, and verify the connection card. Then change/remove its logo and reload. Existing pairings retain their settings; a reconnect uses a new review. Local tests must use disposable WDC state for synthetic pairings and must never reset application databases. Package publication, relay deployment and any production rollout remain separate actions.
 
@@ -97,8 +97,4 @@ The installed preview remains on port 47321 and Rorido on 4310/API 3984. Upgrade
 
 Final recovery checks: stale-version/argument proposals return structured errors to the model before any action or operation report. Backend ownership/expired-turn failures remain hard failures. Focused backend recovery tests and the installed-CLI Claude integration passed after this adjustment. The first concurrent frontend rerun hit the existing global cleanup hook's 10-second timeout while importing the whole test application during other local compilation. Running the same 51 tests with one worker passed; no assertions, retries or timeout limits were changed.
 
-## Review fixes included in 0.2.1
-
-Claude launch arguments are independent of the number of tools: only the execution's private WDC MCP server is allowed, while startup and every callback still validate the exact snapshot. A 4,000-tool catalog passes launch/isolation regression checks on macOS and Linux. Numeric bounds outside the existing 256-character / exponent-magnitude 1,000,000 validator limits fail at admission; comparison failures propagate, and fractional length bounds cannot pass through floating-point rounding.
-
-Validation after these fixes passed: full Go race suite and vet; 88 SDK tests, TypeScript and generated-output checks; Linux catalog/schema regressions; and real Claude discovery/callback/operation-detail/continuing-context tests through direct and relay connections.
+The [file permission candidate](file-permissions.md) adds the optional `requestedPermissions.files` suggestion and a separate **Send and receive files** choice. It defaults off when omitted and for existing connections. Owners can change it through **Permissions** on the connected app’s card, alongside the **Run requests automatically** checkbox; automatic approval never grants files.

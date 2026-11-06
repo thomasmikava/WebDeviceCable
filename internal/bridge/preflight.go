@@ -28,6 +28,12 @@ func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error
 	if err != nil {
 		return AdmissionStatus{Code: errorCode(err)}, nil
 	}
+	requiresFiles := len(in.Request.Inputs) > 0 || plan.Kind == "image-generate" || plan.Kind == "image-edit" || plan.Kind == "command" && a.actions[plan.Action].Files
+	for _, feature := range in.Features {
+		if feature == "imageInput" || feature == "documentInput" || feature == "fileTransfer" {
+			requiresFiles = true
+		}
+	}
 	kind := "native"
 	if plan.Kind == "command" {
 		kind = "command"
@@ -46,6 +52,8 @@ func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error
 					continue
 				}
 				switch feature {
+				case "fileTransfer":
+					supported = true
 				case "sessions":
 					supported = cap.Sessions
 				case "streaming":
@@ -72,6 +80,9 @@ func (a *App) preflight(p *Pairing, in AdmissionRequest) (AdmissionStatus, error
 				return AdmissionStatus{Kind: kind, Code: "unsupported_feature"}, nil
 			}
 		}
+	}
+	if requiresFiles && !p.Files {
+		return AdmissionStatus{Kind: kind, Code: "files_not_granted"}, nil
 	}
 	return AdmissionStatus{Available: true, Kind: kind}, nil
 }

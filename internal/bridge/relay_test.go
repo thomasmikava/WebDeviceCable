@@ -79,7 +79,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 		t.Fatalf("project credential missing: %v", e)
 	}
 	key = project.APIKey
-	status, b = request("POST", "/relay/v1/enrollments", map[string]any{"appUser": "admin-1", "logoURL": "https://kings.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}}, "")
+	status, b = request("POST", "/relay/v1/enrollments", map[string]any{"appUser": "admin-1", "logoURL": "https://kings.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true, "files": true}}, "")
 	if status != 201 {
 		t.Fatalf("enroll %d %s", status, b)
 	}
@@ -126,7 +126,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 	if e = json.Unmarshal(b, &caps); e != nil {
 		t.Fatal(e)
 	}
-	if caps.Pairing.Automatic || caps.Pairing.LogoID != logoID {
+	if caps.Pairing.Automatic || !caps.Pairing.Files || caps.Pairing.LogoID != logoID {
 		t.Fatal("owner override was not honored", caps.Pairing)
 	}
 	if caps.Pairing.AppUser != "admin-1" || caps.Pairing.Relay != nil || caps.Pairing.Transport != "relay" {
@@ -152,6 +152,28 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 	_ = json.Unmarshal(b, &lease)
 	if time.Until(lease.ExpiresAt) < 40*time.Second {
 		t.Fatal("relay must have backend lease")
+	}
+	// File access is the same desktop-authoritative grant through the encrypted relay.
+	metadata, _ := json.Marshal(map[string]any{"name": "reference.bin", "mediaType": "application/octet-stream", "size": 1, "sha256": fileHash([]byte{1})})
+	if status, b = rpc("POST", "/v2/inputs", string(metadata), lease.Lease, "admin-1"); status != 201 {
+		t.Fatalf("relay file upload denied: %d %s", status, b)
+	}
+	object(t, f.req("PUT", "/api/pairings/"+caps.Pairing.ID+"/files", f.origin, "", "", map[string]bool{"allowed": false}, true), 200)
+	if status, b = rpc("POST", "/v2/inputs", string(metadata), lease.Lease, "admin-1"); status != 403 || !strings.Contains(string(b), "files_not_granted") {
+		t.Fatalf("relay bypassed revocation: %d %s", status, b)
+	}
+	textMetadata, _ := json.Marshal(map[string]any{"name": "Context", "mediaType": "text/plain", "size": 1, "sha256": fileHash([]byte("x"))})
+	if status, b = rpc("POST", "/v2/contexts", string(textMetadata), lease.Lease, "admin-1"); status != 201 {
+		t.Fatalf("relay text context required file permission: %d %s", status, b)
+	}
+	if status, b = rpc("POST", "/v2/permissions", `{"files":true}`, lease.Lease, "admin-1"); status != 202 {
+		t.Fatalf("relay file permission request failed: %d %s", status, b)
+	}
+	var pending PermissionRequest
+	_ = json.Unmarshal(b, &pending)
+	object(t, f.req("POST", "/api/permissions/"+pending.ID+"/decision", f.origin, "", "", map[string]bool{"approve": false}, true), 200)
+	if status, b = rpc("GET", "/v2/permissions/"+pending.ID, "", lease.Lease, "admin-1"); status != 200 || !strings.Contains(string(b), "denied") {
+		t.Fatalf("relay denial missing: %d %s", status, b)
 	}
 	status, b = rpc("POST", "/v2/jobs", `{"kind":"connection-test","idempotencyKey":"relay-test-operation"}`, lease.Lease, "admin-1")
 	if status != 202 {

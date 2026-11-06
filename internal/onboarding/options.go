@@ -10,6 +10,7 @@ import (
 
 type Permissions struct {
 	AutomaticApprovals bool `json:"automaticApprovals,omitempty"`
+	Files              bool `json:"files,omitempty"`
 }
 type Options struct {
 	LogoURL              string      `json:"logoURL,omitempty"`

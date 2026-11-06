@@ -181,6 +181,7 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 			Code      string    `json:"code"`
 			Expected  relayInfo `json:"expected"`
 			Automatic *bool     `json:"automatic"`
+			Files     *bool     `json:"files"`
 			LogoID    string    `json:"logoId"`
 		}
 		if e := decode(w, r, &in); e != nil {
@@ -197,6 +198,10 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		if in.Automatic != nil {
 			automatic = *in.Automatic
 		}
+		files := info.RequestedPermissions.Files
+		if in.Files != nil {
+			files = *in.Files
+		}
 		if e := a.checkLogo(in.LogoID); e != nil {
 			return e
 		}
@@ -204,7 +209,7 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		if len(a.pairingRequests) >= 32 {
 			return fail(429, "pairing_limit", "Too many connection requests. Try again shortly.")
 		}
-		result, e := a.createInvitation(invitationInput{LogoID: in.LogoID, Automatic: automatic, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser}, origin)
+		result, e := a.createInvitation(invitationInput{LogoID: in.LogoID, Automatic: automatic, Files: files, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser}, origin)
 		if e != nil {
 			return e
 		}

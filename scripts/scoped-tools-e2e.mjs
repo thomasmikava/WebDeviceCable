@@ -6,10 +6,14 @@ import {once} from 'node:events';
 import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {resolve} from 'node:path';
-import {BridgeClient} from '../internal/bridge/web/index.js';
+import {pathToFileURL} from 'node:url';
 import {RelayClient,RelayAdminClient} from '../internal/bridge/web/relay.js';
+// Can exercise the exact tarball wired into a consumer, rather than a mock or
+// separately built source import. The default remains the generated SDK.
+const {BridgeClient}=await import(process.env.WDC_SDK_MODULE?pathToFileURL(resolve(process.env.WDC_SDK_MODULE)).href:'../internal/bridge/web/index.js');
 
 const discovery=process.argv.includes('--discovery');
+const fileSmoke=process.argv.includes('--files');
 const provider=process.argv.find(arg=>arg.startsWith('--native='))?.split('=')[1];
 assert.ok(!provider||['codex','claude'].includes(provider));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -46,17 +50,77 @@ try{
   const origin='https://scoped-tools.example';
   const admin=new RelayAdminClient({baseURL:relayURL,adminKey});
   const project=await admin.createProject({appId:'scoped-tools',name:'Scoped tools QA',origin});
-  const enrollment=await RelayClient.enroll({baseURL:relayURL,apiKey:project.apiKey,appUser:'owner'});
+  const enrollment=await RelayClient.enroll({baseURL:relayURL,apiKey:project.apiKey,appUser:'owner',requestedPermissions:{files:true}});
   const expected=await api('/relay/inspect',{url:relayURL,code:enrollment.code});
   await api('/relay/connect',{url:relayURL,code:enrollment.code,expected});
   const backend=new RelayClient({baseURL:relayURL,apiKey:project.apiKey,connectionId:enrollment.connectionId,account:{appId:'scoped-tools',appUser:'owner'},origin});clients.push(backend);
   for(let i=0;i<100;i++){if((await backend.status()).connected)break;await delay(50);}
   await backend.connect();
-  const invitation=await api('/invitations',{appId:'scoped-tools-direct',name:'Scoped tools direct QA',appUser:'owner',origin,automatic:false});
+  const invitation=await api('/invitations',{appId:'scoped-tools-direct',name:'Scoped tools direct QA',appUser:'owner',origin,automatic:false,files:true});
   const paired=await BridgeClient.pair({origin,baseURL:base,invitation:invitation.invitation,appId:'scoped-tools-direct',appUser:'owner'});
   const direct=new BridgeClient({origin,connection:paired.connection});clients.push(direct);await direct.connect();
   for(const [transport,client]of [['direct',direct],['relay',backend]]){
     const pairing=(await client.capabilities()).pairing;
+    if(fileSmoke){
+      assert.ok(provider,'--files needs --native=codex or --native=claude');
+      assert.equal((await client.permissions()).files,true);
+      await api('/pairings/'+pairing.id,{automatic:true},'PATCH');
+      const document=await client.upload(new Blob(['The color marker in this document is saffron.'],{type:'text/plain'}),'marker.txt');
+      const context=await client.uploadContext('The user-visible chat is a synthetic file permission test.');
+      const visual=await client.upload(new Blob([await readFile('internal/bridge/testdata/attachments/visual.png')],{type:'image/png'}),'supplied.png');
+      const ordinary=await client.run({kind:'text',provider,prompt:'Describe the visible shape and its color in the supplied image, in a single sentence.',inputs:[visual.id],timeoutSeconds:180});
+      console.log(provider,transport,'ordinary image input:',ordinary.output);assert.match(ordinary.output,/red.*circle|circle.*red/i);
+      await client.removeInput(visual.id);
+      const calls=new Set(),owned=[];
+      const session=client.session({provider,tools:['read_picture','read_second_picture'].map(id=>({id,title:'Read verification picture '+id,description:'Fetch this verification picture as image pixels. You must inspect the returned image to answer visual questions.',readOnly:true,inputSchema:{type:'object',properties:{},additionalProperties:false},execute:async(_args,context)=>{
+        assert.ok(context.jobId);assert.ok(context.conversationId);assert.ok(context.requestIdempotencyKey);assert.match(context.toolSetHash,/^[a-f0-9]{64}$/);
+        assert.ok(!calls.has(id),'Do not repeat the callback');calls.add(id);
+        const image=await client.upload(new Blob([await readFile('internal/bridge/testdata/attachments/visual.png')],{type:'image/png'}),'picture.png');owned.push(image.id);
+        return client.toolResult({note:'Inspect these original pixels.',source:id},[image.id]);
+      }}))});
+      const first=await session.run({prompt:'Call read_picture and read_second_picture exactly once each, in parallel if possible, then inspect both returned images. Describe the visible shape and color in each. Also state the color marker from the supplied document. Do not guess the pictures from their filenames.',inputs:[document.id],contexts:[context.id],timeoutSeconds:180});
+      assert.equal(calls.size,2);assert.match(first.output,/saffron/i);assert.match(first.output,/red.*circle|circle.*red/i,first.output);
+      const recall=await session.run({prompt:'What image did the tool return in the previous message? Describe its shape or color again without calling tools.',timeoutSeconds:180});
+      assert.match(recall.output,/red.*circle|circle.*red/i,recall.output);
+      await api('/pairings/'+pairing.id+'/files',{allowed:false},'PUT');
+      assert.equal((await client.getSession(session.id)).status,'closed');
+      await assert.rejects(client.upload(new Blob(['no grant']),'denied.txt'),e=>e.code==='files_not_granted');
+      assert.equal((await client.lookup(first.request.idempotencyKey)).id,first.id);
+      const plain=client.session({provider});const next=await plain.run({prompt:'Reply exactly saffron.',contexts:[context.id],timeoutSeconds:180});assert.match(next.output,/saffron/i);
+      for(const id of [document.id,context.id,...owned])await client.removeInput(id);
+      await plain.close();await session.close();
+      console.log(provider,transport,'file permission, large text context, original image tool-result pixels, continuing visual context, scoped revocation and receipt lookup passed');continue;
+    }
+    if(!provider){
+      await client.registerGroups([{id:'ai',name:'AI',kind:'ai',children:[{id:'chat',name:'Chat',kind:'ai'},{id:'images',name:'Images',kind:'ai',operation:'image'}]}]);
+      await api('/pairings/'+pairing.id+'/routing',{expectedRevision:0,routing:{default:{provider:'claude'},groups:{'ai.images':{provider:'codex'}}}},'PUT');
+      const reference=await client.upload(new Blob([await readFile('internal/bridge/web/claude-icon.png')],{type:'image/png'}),'reference.png');
+      const requests=[
+        {kind:'text',group:'ai.chat',prompt:'Grouped text fixture',mode:'restricted',idempotencyKey:'grouped-text'},
+        {kind:'image-generate',group:'ai.images',prompt:'Grouped image fixture',mode:'restricted',idempotencyKey:'grouped-image'},
+        {kind:'image-edit',group:'ai.images',prompt:'Grouped edit fixture',mode:'restricted',inputs:[reference.id],idempotencyKey:'grouped-edit'},
+      ];
+      let imageID;
+      for(const request of requests){
+        const {idempotencyKey,...proposal}=request;
+        const admission=await client.preflight(proposal,[request.kind==='text'?'text':'imageGeneration']);
+        assert.equal(admission.available,false);assert.equal(admission.code,'native_disabled');
+        assert.equal(await client.lookup(idempotencyKey),null,'Preflight must not consume a request key');
+        const job=await client.submit(request);assert.equal(job.status,'awaiting_approval');assert.equal(job.request.provider,undefined);
+        const owned=(await api('/state',undefined,'GET')).jobs.find(item=>item.id===job.id);
+        assert.equal(owned.plan.provider,request.kind==='text'?'claude':'codex');
+        if(request.kind==='image-generate')imageID=job.id;
+        await client.cancel(job.id);
+      }
+      await client.removeInput(reference.id);
+      const owner=(await api('/state',undefined,'GET')).pairings.find(item=>item.id===pairing.id);
+      await api('/pairings/'+pairing.id+'/routing',{expectedRevision:owner.routing.revision,routing:{default:{provider:'claude'}}},'PUT');
+      const incompatible=await client.preflight({kind:'image-generate',group:'ai.images',prompt:'Wrong image route'},['imageGeneration']);
+      assert.equal(incompatible.available,false);assert.equal(incompatible.code,'invalid_job');
+      assert.equal((await client.submit(requests[1])).id,imageID,'Receipt recovery must precede a now-incompatible route');
+      await assert.rejects(client.preflight({kind:'image-generate',prompt:'Missing group and provider'}),error=>error.code==='invalid_job');
+      console.log(transport,'provider-free grouped text/images/edit admission, approval, pinned routes and receipt recovery passed');
+    }
     if(discovery){
       let version='1';const seen=[];const word='saffron-'+crypto.randomUUID().slice(0,8);
       const tools=[

@@ -5,6 +5,7 @@ let csrf = '', controlSession = '', state, demo, demoPairID, invitation, lastSta
 const controlStorageKey='wdc-control-session';
 let connectionWatch, connectionSnapshot, refreshWork, connectionRequestCount=0;
 const connectionLoads=new Map(), connectionViews=new Map();
+const imagePreviews=new Map();
 try { controlSession=localStorage.getItem(controlStorageKey)??''; } catch { /* Reopen the private link when browser storage is unavailable. */ }
 function storeControlSession() { try { localStorage.setItem(controlStorageKey,controlSession); } catch { /* This panel still works for the current visit. */ } }
 function forgetControlSession() { try { if(localStorage.getItem(controlStorageKey)===controlSession)localStorage.removeItem(controlStorageKey); } catch {} controlSession=''; }
@@ -45,7 +46,7 @@ function action(fn) { return async event => {
   if (target?.getAttribute('aria-busy') === 'true') return;
   const focusControl = submitter instanceof HTMLElement ? submitter : null;
   const control = submitter instanceof HTMLButtonElement ? submitter : null, spinner = icon('loader', 'spinner');
-  const key = focusControl?.closest('[data-key]')?.dataset.key, actionName = focusControl?.dataset.action;
+  const key = focusControl?.closest('[data-key]')?.dataset.key, actionName = focusControl?.dataset.returnAction??focusControl?.dataset.action;
   target?.setAttribute('aria-busy', 'true');
   if (control) { control.disabled = true; control.prepend(spinner); }
   try { clearErrors(); await fn(event); await refresh(true); } catch (error) { notify(error); }
@@ -62,7 +63,7 @@ function action(fn) { return async event => {
 }; }
 async function controlFetch(path, init = {}) {
   const response = await fetch('/api' + path, { ...init, credentials:'omit', headers: { 'Content-Type':'application/json', 'X-Bridge-CSRF':csrf, 'X-Bridge-Session':controlSession, ...init.headers } });
-  if (!response.ok) { const data=await response.json(); if (response.status === 401) lock(); throw new Error(data.error?.message ?? 'Can’t reach the local runner.'); }
+  if (!response.ok) { const data=await response.json(); if (response.status === 401) lock(); const error=new Error(data.error?.message ?? 'Can’t reach the local runner.');error.status=response.status;error.code=data.error?.code;throw error; }
   return response;
 }
 async function api(path, init = {}) { return (await controlFetch(path,init)).json(); }
@@ -71,7 +72,47 @@ async function saveArtifact(job, artifact) {
   const link=el('a',{href:url,download:artifact.name}); document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
-function lock() {connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
+function releaseImagePreviews(retained) {
+  for(const [key,entry] of imagePreviews) {
+    if(retained?.has(key))continue;
+    imagePreviews.delete(key);entry.controller.abort();
+    if(entry.url)URL.revokeObjectURL(entry.url);
+  }
+}
+function cachedImagePreview(job, artifact) {
+  const key=`${job.id}/${artifact.id}`;
+  if(!imagePreviews.has(key)) {
+    const entry={controller:new AbortController(),url:null};
+    imagePreviews.set(key,entry);
+    entry.ready=controlFetch(`/jobs/${job.id}/artifacts/${artifact.id}`,{signal:entry.controller.signal})
+      .then(response=>response.blob()).then(blob=>imagePreviews.get(key)===entry ? entry.url=URL.createObjectURL(blob) : null).catch(()=>null);
+  }
+  return imagePreviews.get(key);
+}
+function jobArtifact(job, artifact, card, history) {
+  const isImage=artifact.mediaType.startsWith('image/');
+  const save=button(isImage?'Save image':`Save ${artifact.name}`,()=>saveArtifact(job,artifact));save.prepend(icon('download'));
+  const container=el('div',{class:'job-artifact'},save);
+  if(!isImage)return container;
+  const image=el('img',{alt:artifact.name,decoding:'async',hidden:''});
+  const status=el('p',{class:'artifact-preview-status',role:'status'},'Loading image…');
+  const preview=el('div',{class:'artifact-preview','aria-busy':'true'},status,image);container.prepend(preview);
+  let loading=false;
+  const load=async()=>{
+    if(loading || !card.isConnected || history && !card.open)return;
+    loading=true;
+    const entry=cachedImagePreview(job,artifact),url=await entry.ready;
+    if(!preview.isConnected || imagePreviews.get(`${job.id}/${artifact.id}`)!==entry)return;
+    const unavailable=()=>{preview.removeAttribute('aria-busy');status.textContent='Couldn’t load image.';};
+    if(!url){unavailable();return;}
+    image.onload=()=>{preview.removeAttribute('aria-busy');status.hidden=true;image.hidden=false;};
+    image.onerror=unavailable;image.src=url;
+  };
+  if(history)card.addEventListener('toggle',()=>{if(card.open)void load();});
+  else queueMicrotask(load);
+  return container;
+}
+function lock() {releaseImagePreviews();connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
 let currentView;
 function route() {
   const view = ['apps','activity','commands','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'apps';
@@ -94,8 +135,8 @@ for (const [id, returnTo] of [
 ]) $(id).addEventListener('close', () => requestAnimationFrame(() => {
   if (!document.querySelector('dialog[open]') && (document.activeElement === document.body || document.activeElement === $('main-content') || !document.activeElement?.getClientRects().length)) { const target=returnTo(); (target?.getClientRects().length ? target : $('main-content')).focus({preventScroll:true}); }
 }));
-function confirmAction(title, description, label, destructive = false) {
-  const dialog = $('confirm-dialog'); $('confirm-title').textContent = title; $('confirm-description').textContent = description; $('accept-confirm').textContent = label;
+function confirmAction(title, description, label, destructive = false, cancelLabel = 'Cancel') {
+  const dialog = $('confirm-dialog'); $('cancel-confirm').textContent=cancelLabel; $('confirm-title').textContent = title; $('confirm-description').textContent = description; $('accept-confirm').textContent = label;
   $('accept-confirm').classList.toggle('destructive', destructive); dialog.returnValue = '';
   return new Promise(resolve => { dialog.addEventListener('close', () => resolve(dialog.returnValue === 'accept'), {once:true}); dialog.showModal(); $('cancel-confirm').focus(); });
 }
@@ -111,7 +152,7 @@ function outsideDialog(event, dialog) {
 document.addEventListener('pointerdown', event => { backdropDialog = event.target instanceof HTMLDialogElement && outsideDialog(event,event.target) ? event.target : null; });
 document.addEventListener('pointercancel', () => { backdropDialog = null; });
 document.addEventListener('click', event => {
-  if (event.target === backdropDialog && backdropDialog?.open && outsideDialog(event,backdropDialog)) backdropDialog.close();
+  if (event.target === backdropDialog && backdropDialog?.open && outsideDialog(event,backdropDialog)) dismissDialog(backdropDialog);
   backdropDialog = null;
 });
 function commandLine(command) { return command.exec.map(value => /\s|["']/.test(value) || !value ? JSON.stringify(value) : value).join(' '); }
@@ -177,16 +218,9 @@ function appRow(pair) {
     menuAction('Disconnect',async () => {if(await confirmAction(`Disconnect ${pair.name}?`,'Its active requests will be cancelled. Connecting again requires a new invitation.','Disconnect',true))await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({revoke:true})});},'danger'));
   menu.append(items);
   menu.addEventListener('toggle',() => {if(menu.open && menu.isConnected)for(const other of document.querySelectorAll('.app-menu[open]'))if(other!==menu)other.open=false;});
-  const approval = el('select',{'aria-label':`Request approval for ${pair.name}`,'data-action':'Request approval'},el('option',{value:'ask'},'Ask each time'),el('option',{value:'automatic'},'Run automatically'));
-  approval.value = pair.automatic ? 'automatic' : 'ask';
-  approval.onchange = action(async () => {
-    const automatic = approval.value === 'automatic';
-    approval.value = pair.automatic ? 'automatic' : 'ask'; approval.disabled = true;
-    try {
-      if (automatic && !await confirmAction('Run requests automatically?',`${pair.name} can run requests within its allowed access without asking each time.`,'Allow automatically')) return;
-      await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({automatic})});
-    } finally { approval.disabled = false; }
-  });
+  const permissions = el('div',{class:'connection-choice'},el('span',{class:'choice-label'},'App access'),
+    el('button',{type:'button',class:'connection-program','data-action':'Permissions','aria-label':`Permissions for ${pair.name}`,onclick:() => openAppPermissions(pair)},el('span',{class:'choice-value'},icon('shield'),'Permissions'),icon('chevron','chevron')),
+    el('span',{class:'choice-note'},`${pair.automatic?'Runs automatically':'Asks each time'} · ${pair.files?'Files allowed':'Files off'}`));
   const access = el('div',{class:'connection-meta'});
   if (folderCount) access.append(button(`${folderCount} shared folder${folderCount===1?'':'s'}`,() => openPermissions(pair),'text-button'));
   if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openCommandAccess(pair),'text-button'));
@@ -194,7 +228,7 @@ function appRow(pair) {
     el('div',{class:'connection-header'},
       el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
       el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
-    el('div',{class:'connection-settings'},choice,el('label',{class:'connection-approval'},el('span',{class:'choice-label'},'Request approval'),selectWrap(approval))),
+    el('div',{class:'connection-settings'},choice,permissions),
     access.children.length ? access : null);
 }
 document.addEventListener('click',event => {for(const menu of document.querySelectorAll('.app-menu[open]'))if(!menu.contains(event.target))menu.open=false;});
@@ -227,7 +261,7 @@ function jobCard(job, history = false) {
   else if (job.status === 'timed_out') content.append(el('p', {class:'job-detail'}, 'The request timed out.'));
   if (job.toolOperations?.length) content.append(el('ul',{class:'tool-operations'},...job.toolOperations.map(operation=>el('li',{},el('span',{class:'tool-operation-title'},operation.title),el('small',{},operation.status==='running'?'In progress':operation.status==='returned'?'Result returned':'Outcome unconfirmed')))));
   if (job.inputNames?.length) content.append(el('p',{class:'job-detail'},icon('document'),job.inputNames.join(' · ')));
-  for (const artifact of job.artifacts ?? []) { const save=button(artifact.mediaType.startsWith('image/')?'Save image':'Save file',()=>saveArtifact(job,artifact));save.prepend(icon('download'));content.append(save); }
+  for (const artifact of job.artifacts ?? []) content.append(jobArtifact(job,artifact,node,history));
   if(job.status==='failed')content.append(el('p',{class:'job-detail'},job.error?.message || job.detail));
   const details = [];
   const definition = command && state.commands.find(item=>item.id===job.plan?.action && item.hash===job.plan?.actionHash);
@@ -246,6 +280,7 @@ function jobCard(job, history = false) {
   return node;
 }
 function render() {
+  releaseImagePreviews(new Set(state.jobs.flatMap(job=>(job.artifacts??[]).map(artifact=>`${job.id}/${artifact.id}`))));
   renderPermissionRequests();
   renderConnectionRequests();
   const apps = state.pairings.filter(p => !p.revoked).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
@@ -278,7 +313,7 @@ function render() {
         button('Remove',()=>removeAIProgram(program),'danger')),
       el('details',{class:'provider-details','data-provider':p.id,...(openProviders.has(p.id)?{open:''}:{})},disclosure(p.execution?'Connection details':'Availability details'),
         el('div',{class:'detail-body'},el('p',{},native?.detail || p.reason),el('p',{},`Version: ${native?.version || 'Not reported'} · Account: ${native?.account || 'Not reported'}`),
-          program.type==='custom'?el('p',{},`Text and streaming${native?.sessions?', continuing conversations':''}. Structured output, files, images and app tools are unavailable. Runs with OS account permissions.`):null,
+          program.type==='custom'?el('p',{},`Text and streaming${native?.sessions?', continuing conversations':''}. ${native?.files?'Accepts supplied files when the connection allows files.':'This harness does not declare file support.'} Structured output, image generation and app tools are unavailable. Runs with OS account permissions.`):null,
           p.source?el('a',{href:p.source,target:'_blank',rel:'noreferrer','data-action':'documentation'},'Official documentation',icon('external')):el('a',{href:'https://github.com/thomasmikava/WebDeviceCable/blob/main/docs/ai-programs.md',target:'_blank',rel:'noreferrer'},'WDC custom interface documentation'))));
   }));
   $('restore-ai-defaults').replaceChildren(...['codex','claude'].filter(id=>!state.programs?.some(p=>p.id===id)).map(id=>button(`Restore default ${id==='codex'?'Codex':'Claude Code'}`,async()=>{
@@ -406,7 +441,7 @@ $('invite-form').onsubmit = action(async event => {
   event.preventDefault(); const data = new FormData(event.target), origin = new URL(String(data.get('origin')).trim()).origin;
   const appId = String(data.get('appId')).trim() || new URL(origin).hostname;
   const grants = selectedCommands($('invite-commands'));
-  const result = await api('/invitations', {method:'POST',body:JSON.stringify({name:data.get('name'),appId,origin,appUser:data.get('appUser'),automatic:data.get('automatic') === 'true',actions:grants,commandPermissionsAccepted:data.get('commandConsent') === 'on'})});
+  const result = await api('/invitations', {method:'POST',body:JSON.stringify({name:data.get('name'),appId,origin,appUser:data.get('appUser'),automatic:data.get('automatic') === 'true',files:data.get('files')==='on',actions:grants,commandPermissionsAccepted:data.get('commandConsent') === 'on'})});
   invitation = result.invitation; $('invite-token').textContent = `${invitation.slice(0,8)} ··· ${invitation.slice(-8)}`; $('invite-form').hidden = true; $('invite-result').hidden = false; $('connect-title').textContent = 'Invitation ready'; $('copy-invite').replaceChildren(icon('copy'), 'Copy'); $('copy-invite').focus();
 });
 $('copy-invite').onclick = action(async () => {
@@ -790,7 +825,7 @@ function initPairingRequest() {
   if (!/^[a-f0-9]{64}$/.test(requestId ?? '') || !window.opener) return;
   const opener = window.opener;
   let sending = false, registered = false, delivered = false;
-  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId,connectionReviewVersion:1},'*'); };
+  const announce = () => { if (!incomingPairing) opener.postMessage({type:'wdc:pairing-ready',requestId,connectionReviewVersion:1,filePermissionsVersion:1},'*'); };
   const timer = setInterval(announce,500); announce();
   const stop = () => {clearInterval(timer);clearInterval(poll);window.removeEventListener('message',receive);};
   const expires = setTimeout(stop,300000);
@@ -835,7 +870,7 @@ function appMark(id) {
   return mark;
 }
 function reviewDraft(info,key) {
-  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:info.requestedPermissions?.automaticApprovals===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false});
+  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:info.requestedPermissions?.automaticApprovals===true,files:info.requestedPermissions?.files===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false});
   return reviewDrafts.get(key);
 }
 function reviewMark(info,key) {
@@ -851,12 +886,161 @@ function reviewMark(info,key) {
   return draft.heading;
 }
 function pendingLogo(draft) {return draft?.pending??(!draft?.edited?draft?.loadingPromise:undefined);}
-function reviewDecision(key) {const draft=reviewDrafts.get(key);return {automatic:draft?.automatic??false,logoId:draft?.logoId??''};}
+function reviewDecision(key) {const draft=reviewDrafts.get(key);return {automatic:draft?.automatic??false,files:draft?.files??false,logoId:draft?.logoId??''};}
 function connectionReview(info,key) {
   const draft=reviewDraft(info,key),automatic=el('input',{type:'checkbox','aria-label':`Approve requests automatically for ${info.name}`,'data-action':'Automatic approvals'});automatic.checked=draft.automatic;
   automatic.onchange=()=>{draft.automatic=automatic.checked;};
-  return el('div',{class:'connection-review'},el('label',{class:'check-line'},automatic,el('span',{},'Approve requests automatically',el('small',{},'Turn off to review each AI request before it runs.'))),el('small',{class:'muted'},'Connecting will not share your computer’s folders or give this app permission to run commands.'));
+  const files=el('input',{type:'checkbox','aria-label':`Allow files for ${info.name}`,'data-action':'File access'});files.checked=draft.files;files.onchange=()=>{draft.files=files.checked;};
+  return el('div',{class:'connection-review'},el('label',{class:'check-line'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run without asking for approval each time.'))),el('label',{class:'check-line'},files,el('span',{},'Send and receive files',el('small',{},'This app can supply images and documents for its requests and receive files those requests produce.'))),el('small',{class:'muted'},'Computer folders: No access. Command access: Off.'));
 }
+
+function openAppPermissions(pair,initialView='overview') {
+  clearErrors();
+  const dialog=makeDialog('permissions-dialog',`Permissions · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
+  dialog.dataset.key=pair.id;
+  dialog.querySelector('[aria-label="Close"]').dataset.returnAction='Permissions';
+  const folders=(pair.folders??[]).map(folder=>({...folder}));
+  const folderNavigation={path:''};
+  const folderKey=()=>JSON.stringify(folders.map(({id,path,write,automatic})=>({id,path,write:!!write,automatic:!!automatic})));
+  const originalAutomatic=!!pair.automatic,originalFiles=!!pair.files,originalFolders=folderKey();
+  automatic.checked=originalAutomatic;files.checked=originalFiles;
+  let saving=false,confirming=false,saveState='draft',submission;
+  const expectedRevision=pair.permissionsRevision??0;
+  const dirty=()=>automatic.checked!==originalAutomatic||files.checked!==originalFiles||folderKey()!==originalFolders;
+  const heading=dialog.querySelector('.dialog-heading'),back=el('button',{type:'button',class:'icon-button permission-back',hidden:'','aria-label':'Back to Permissions'},icon('arrow-left'));
+  heading.prepend(back);
+  const setView=(title,view,goBack)=>{
+    dialog.dataset.view=view;dialog.setAttribute('aria-label',`${title} · ${pair.name}`);heading.querySelector('h2').textContent=`${title} · ${pair.name}`;
+    back.hidden=!goBack;back.setAttribute('aria-label',view==='choose'?'Back to Folder access':'Back to Permissions');back.onclick=()=>goBack?.();dialog.permissionBack=goBack;
+  };
+  dialog.permissionView=setView;
+  dialog.requestDismiss=async()=>{
+    if(saving)return;
+    if(confirming){
+      if(!$('confirm-dialog').open){await confirming;if(dialog.open)return dialog.requestDismiss();}
+      return;
+    }
+    if(!dirty()){closeDraft();return;}
+    confirming=saveState==='unknown'
+      ?confirmAction('Close without confirming?','These changes may already be saved. Closing won’t undo permissions that were applied.','Close anyway',false,'Keep draft')
+      :saveState==='conflict'
+        ?confirmAction('Close this draft?','Closing this draft won’t change the permissions currently saved in WDC.','Close draft',false,'Keep draft')
+        :confirmAction('Discard unsaved changes?','Your permission and folder changes haven’t been saved.','Discard changes',true,'Keep editing');
+    try {
+      if(await confirming&&dialog.open)closeDraft();
+    } finally {confirming=false;}
+  };
+  const navigateBackOrDismiss=()=>{
+    if(saving)return;
+    if(confirming){void dialog.requestDismiss();return;}
+    if(dialog.permissionBack)dialog.permissionBack();else void dialog.requestDismiss();
+  };
+  dialog.addEventListener('cancel',event=>{event.preventDefault();navigateBackOrDismiss();});
+  dialog.addEventListener('keydown',event=>{
+    if(event.key!=='Escape'||event.defaultPrevented||event.target instanceof HTMLSelectElement)return;
+    event.preventDefault();event.stopPropagation();navigateBackOrDismiss();
+  });
+  const beforeUnload=event=>{if(dirty()||saving){event.preventDefault();event.returnValue='';}};
+  const closeDraft=()=>{window.removeEventListener('beforeunload',beforeUnload);dialog.close();};
+  window.addEventListener('beforeunload',beforeUnload);
+  dialog.addEventListener('close',()=>window.removeEventListener('beforeunload',beforeUnload),{once:true});
+  const warning=el('p',{class:'permission-revocation-note',hidden:''},'Turning file access off stops this app’s active file requests and conversations. Files already shared stay shared.');
+  const unsaved=el('span',{class:'folder-unsaved',role:'status',hidden:''},'Unsaved changes');
+  const folderSummary=el('small');
+  const readSaved=()=>api(`/pairings/${pair.id}`,{signal:AbortSignal.timeout(5000)}).then(current=>({...current,reportedName:current.name,name:current.displayName||current.name}));
+  const matchesDraft=current=>{
+    const actual=current.folders??[],wanted=submission.desired.folders;
+    return !!current.automatic===submission.desired.automatic&&!!current.files===submission.desired.files&&
+      current.paused===pair.paused&&current.revoked===pair.revoked&&actual.length===wanted.length&&
+      wanted.every((folder,index)=>actual[index].path===folder.path&&(!folder.id||actual[index].id===folder.id)&&!!actual[index].write===!!folder.write&&!!actual[index].automatic===!!folder.automatic);
+  };
+  const saved=async()=>{
+    closeDraft();notify('Permissions saved.','success');
+    try{await refresh(true);}catch{notify('Permissions saved. Refresh WDC to update the connection card.','info');}
+    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,'Permissions')?.focus({preventScroll:true});
+  };
+  const reconcile=async()=>{
+    try {
+      const current=await readSaved();
+      if(!dialog.open)return;
+      if(current.permissionSaveId===submission.payload.permissionSaveId&&matchesDraft(current)){await saved();return;}
+      saveState=(current.permissionsRevision??0)!==expectedRevision?'conflict':'unknown';
+    }catch{saveState='unknown';}
+  };
+  // One save ID is retained until the outcome is known. An explicit retry sends
+  // that same immutable payload; reads never silently repeat a permission write.
+  const perform=async(task,control)=>{
+    if(saving)return;
+    clearErrors();
+    saving=true;dialog.setAttribute('aria-busy','true');
+    const disabled=new Map([...dialog.querySelectorAll('button,input,select')].map(control=>[control,control.disabled]));
+    for(const input of disabled.keys())input.disabled=true;
+    const spinner=icon('loader','spinner');control.prepend(spinner);
+    try{await task();}catch(error){notify(error);}
+    finally{spinner.remove();saving=false;dialog.removeAttribute('aria-busy');for(const [input,value]of disabled)input.disabled=value;changed();}
+  };
+  const save=el('button',{type:'button',class:'button primary','data-action':'Save changes','aria-label':'Save changes'},'Save changes');
+  save.onclick=()=>{
+    if(saving||saveState==='conflict'||!dirty())return;
+    if(!submission){
+      const changes={expectedPermissionsRevision:expectedRevision,permissionSaveId:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','')};
+      if(automatic.checked!==originalAutomatic)changes.automatic=automatic.checked;
+      if(files.checked!==originalFiles)changes.files=files.checked;
+      if(folderKey()!==originalFolders)changes.folders=folders.map(folder=>({...folder}));
+      submission={payload:changes,desired:{automatic:automatic.checked,files:files.checked,folders:folders.map(folder=>({...folder}))}};
+    }
+    void perform(async()=>{
+      try{
+        const result=await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify(submission.payload),signal:AbortSignal.timeout(10000)});
+        if(!dialog.open)return;
+        if(result.permissionSaveId===submission.payload.permissionSaveId&&matchesDraft(result))await saved();else saveState='conflict';
+      }catch(error){
+        if(['permissions_changed','permission_save_conflict'].includes(error.code)){saveState='conflict';return;}
+        if(error.code&&error.status>=400&&error.status<500&&error.status!==408){submission=undefined;saveState='draft';throw error;}
+        saveState='unknown';await reconcile();
+      }
+    },save);
+  };
+  const recoveryText=el('p');
+  const check=el('button',{type:'button',class:'button secondary'},'Check saved permissions');
+  check.onclick=()=>void perform(reconcile,check);
+  const reload=el('button',{type:'button',class:'button secondary'},'Reload saved permissions');
+  reload.onclick=()=>void perform(async()=>{
+    if(!await confirmAction('Reload saved permissions?','This will replace your draft with the currently saved settings.','Reload permissions',false,'Keep draft'))return;
+    const current=await readSaved();if(!dialog.open)return;
+    closeDraft();openAppPermissions(current);
+  },reload);
+  const recovery=el('div',{class:'permission-recovery',role:'alert',hidden:''},recoveryText,el('div',{class:'actions'},check,reload));
+  save.dataset.returnAction='Permissions';
+  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction='Permissions';
+  const footer=el('div',{class:'permission-footer'},recovery,el('div',{class:'dialog-actions'},unsaved,cancel,save));
+  const changed=()=>{
+    save.disabled=saving||!dirty()||saveState==='conflict';unsaved.hidden=!dirty();warning.hidden=!originalFiles||files.checked;
+    const label=saveState==='unknown'?'Retry save':'Save changes';save.textContent=label;save.setAttribute('aria-label',label);
+    unsaved.textContent=saveState==='unknown'?'Save not confirmed':saveState==='conflict'?'Saved settings changed':'Unsaved changes';
+    recovery.hidden=saveState==='draft';check.hidden=saveState!=='unknown';reload.hidden=saveState!=='conflict';
+    recoveryText.textContent=saveState==='unknown'?'Couldn’t confirm whether your changes were saved. Your edits are kept; check the saved permissions or retry this save.':'Permissions changed while this draft was open. Reload the saved settings before making changes.';
+    for(const input of dialog.querySelectorAll('[data-permission-edit]'))input.disabled=saving||saveState!=='draft'||input.dataset.permissionEdit==='add-folder'&&folders.length>=16;
+    folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'} selected`:'Choose folders this app can read or edit.';
+  };
+  automatic.dataset.permissionEdit=files.dataset.permissionEdit='';
+  automatic.onchange=files.onchange=changed;
+  const clearView=()=>{clearErrors();for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions, :scope > .permission-footer'))panel.remove();};
+  const showOverview=()=>{
+    clearView();setView('Permissions','overview');dialog.append(overview,footer);changed();folderAccess.focus({preventScroll:true});
+  };
+  const showFolders=()=>{
+    renderFolderAccess(dialog,pair,folders,footer,changed,showOverview,clearView,folderNavigation);
+    back.focus({preventScroll:true});
+  };
+  const folderAccess=el('button',{type:'button',class:'connection-program permission-folder-access','aria-label':'Folder access',onclick:showFolders},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},icon('folder'),'Folder access'),folderSummary),icon('chevron','chevron'));
+  const overview=el('div',{class:'dialog-body app-permissions-body'},
+    el('label',{class:'check-line permission-option'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run this app’s requests within its allowed access without asking each time.'))),
+    el('label',{class:'check-line permission-option'},files,el('span',{},'Send and receive files',el('small',{},'Share images and documents with the AI, and receive files it creates. This does not grant access to folders on your computer.'))),warning,folderAccess);
+  if(initialView==='folders')showFolders();else showOverview();
+  dialog.showModal();
+}
+
 function openAppAppearance(pair) {
   const dialog=makeDialog('app-appearance-dialog','Edit app'),original=pair.logoId??'';
   let selected=original,previewedURL='',busy=false,saving=false,closed=false;
@@ -1017,11 +1201,11 @@ async function approveConnection(request) {
   item.submitted=true;configuringRelay={relayUrl:item.input.url,connectionId:result.connectionId};render();
 }
 
-// Permissions stay out of the main connection layout until the user needs them.
+function dismissDialog(dialog){if(dialog.requestDismiss)void dialog.requestDismiss();else dialog.close();}
 function makeDialog(id,title){
   let dialog=$(id);if(dialog){dialog.remove();}
   const opener=document.activeElement,key=opener?.closest('[data-key]')?.dataset.key,actionName=opener?.dataset.action;
-  dialog=el('dialog',{id,'aria-label':title});const close=button('',()=>dialog.close(),'icon-button');close.setAttribute('aria-label','Close');close.append(icon('close'));
+  dialog=el('dialog',{id,'aria-label':title});const close=button('',()=>dismissDialog(dialog),'icon-button');close.setAttribute('aria-label','Close');close.append(icon('close'));
   dialog.append(el('div',{class:'dialog-heading'},el('h2',{},title),close));document.body.append(dialog);
   dialog.addEventListener('close',()=>requestAnimationFrame(()=>{
     if(document.querySelector('dialog[open]'))return;
@@ -1039,35 +1223,34 @@ function openConnectionDetails(pair) {
   dialog.showModal();
 }
 function grantSelect(value,choices){const select=el('select');for(const [key,title]of choices){const option=el('option',{value:key},title);select.append(option);}select.value=value;return {select,node:selectWrap(select)};}
-function openPermissions(pair){
-  clearErrors();const dialog=makeDialog('permissions-dialog',`Folder access · ${pair.name}`),folders=(pair.folders??[]).map(f=>({...f}));let browseFrom='';
-  const selection=()=>JSON.stringify(folders.map(({id,path,write,automatic})=>({id,path,write:Boolean(write),automatic:Boolean(automatic)}))),initial=selection();
+function openPermissions(pair){openAppPermissions(pair,'folders');}
+function renderFolderAccess(dialog,pair,folders,footer,changed,back,clearView,navigation){
   const paintFolders=(focusPath)=>{
-    clearErrors();dialog.dataset.view='access';dialog.setAttribute('aria-label',`Folder access · ${pair.name}`);dialog.querySelector('h2').textContent=`Folder access · ${pair.name}`;
-    for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions'))panel.remove();
+    clearView();dialog.permissionView('Folder access','access',back);
     const body=el('div',{class:'dialog-body permission-editor'}),folderList=el('div',{class:'folder-grants'});
-    const dirty=selection()!==initial,unsaved=el('span',{class:'folder-unsaved',role:'status',...(dirty?{}:{hidden:''})},'Unsaved changes');
-    const save=button('Save access',async()=>{await api(`/pairings/${pair.id}/permissions`,{method:'PUT',body:JSON.stringify({folders})});dialog.close();},'primary');save.disabled=!dirty;
-    const changed=()=>{const modified=selection()!==initial;save.disabled=!modified;unsaved.hidden=!modified;};
     for(const [index,folder]of folders.entries()){
       const access=grantSelect(folder.write?'write':'read',[['read','Read only'],['write','Read and edit']]);access.select.setAttribute('aria-label',`${folder.name} access`);
+      access.select.dataset.permissionEdit='';
       const automatic=el('input',{type:'checkbox'});automatic.checked=folder.automatic;automatic.onchange=()=>{folder.automatic=automatic.checked;changed();};
+      automatic.dataset.permissionEdit='';
       const policy=el('label',{class:'check-line folder-edit-policy'},automatic,el('span',{},'Allow edits without asking'));policy.hidden=!folder.write;
       access.select.onchange=()=>{folder.write=access.select.value==='write';policy.hidden=!folder.write;if(!folder.write){folder.automatic=false;automatic.checked=false;}changed();};
       const remove=el('button',{type:'button',class:'icon-button','aria-label':`Remove ${folder.name}`,title:'Remove folder',onclick:()=>{folders.splice(index,1);paintFolders();dialog.querySelector('[data-add-folder]').focus();}},icon('close'));
+      remove.dataset.permissionEdit='';
       folderList.append(el('article',{class:'folder-grant','data-path':folder.path},el('div',{class:'folder-grant-heading'},icon('folder'),el('div',{},el('strong',{},folder.name),el('small',{},folder.path)),remove),el('label',{class:'folder-access-choice'},'Access',access.node),policy));
     }
-    const add=el('button',{type:'button',class:'button secondary','data-add-folder':'',onclick:()=>chooseFolder(dialog,folders,(folder,parent)=>{folders.push({...folder,write:false,automatic:false});browseFrom=parent;paintFolders(folder.path);},path=>{browseFrom=path??browseFrom;paintFolders();dialog.querySelector('[data-add-folder]').focus();},browseFrom)},icon('plus'),'Add folder');add.disabled=folders.length>=16;
+    const add=el('button',{type:'button',class:'button secondary','data-add-folder':'',onclick:()=>chooseFolder(dialog,folders,(folder,parent)=>{folders.push({...folder,write:false,automatic:false});navigation.path=parent;paintFolders(folder.path);},path=>{navigation.path=path??navigation.path;paintFolders();dialog.querySelector('[data-add-folder]').focus();},navigation.path)},icon('plus'),'Add folder');add.disabled=folders.length>=16;
+    add.dataset.permissionEdit='add-folder';
     if(!folders.length)folderList.append(el('div',{class:'folder-access-empty'},icon('folder'),el('h3',{},'No folders shared'),el('p',{},'Added folders start with read-only access.')));
-    body.append(folderList,add);dialog.append(body,el('div',{class:'dialog-actions'},unsaved,button('Cancel',()=>dialog.close()),save));
+    body.append(el('p',{class:'permission-draft-hint'},'Changes here are saved with the rest of this app’s permissions.'),folderList,add);dialog.append(body,footer);changed();
     if(focusPath)[...folderList.querySelectorAll('.folder-grant')].find(row=>row.dataset.path===focusPath)?.querySelector('select').focus();
   };
-  paintFolders();dialog.showModal();
+  paintFolders();
   if(!folders.length)dialog.querySelector('[data-add-folder]').focus();
 }
 async function chooseFolder(dialog,folders,selected,back,startPath=''){
-  clearErrors();dialog.dataset.view='choose';dialog.setAttribute('aria-label','Choose a folder');dialog.querySelector('h2').textContent='Choose a folder';
-  for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions'))panel.remove();
+  clearErrors();dialog.permissionView('Choose a folder','choose',()=>back(location?.path));
+  for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions, :scope > .permission-footer'))panel.remove();
   const body=el('div',{class:'dialog-body folder-picker'}),crumbs=el('nav',{class:'folder-breadcrumbs','aria-label':'Folder location'}),list=el('ul',{class:'folder-browser','aria-label':'Folders'});
   const search=el('input',{type:'search','aria-label':'Find a folder',placeholder:'Find a folder…',autocomplete:'off'});
   const path=el('input',{'aria-label':'Full folder path',placeholder:'Paste a folder path',autocomplete:'off',required:''});
@@ -1120,10 +1303,11 @@ async function chooseFolder(dialog,folders,selected,back,startPath=''){
 function renderPermissionRequests(){
   const permissions=state.permissions??[];$('permission-section').hidden=!permissions.length;
   preserveList($('permission-list'),permissions.map(request=>{
-    const pair=state.pairings.find(item=>item.id===request.pairingId),title=request.kind==='file-write'?`Edit ${request.name}`:'Folder access requested';
+    const pair=state.pairings.find(item=>item.id===request.pairingId),title=request.kind==='file-write'?`Edit ${request.name}`:request.kind==='files'?'Send and receive files':'Folder access requested';
     const card=el('article',{class:'job-card approval-card','data-key':request.id},el('div',{class:'job-header'},el('div',{},el('strong',{},title),el('small',{class:'job-meta'},pair?.name??'App')),icon('shield')));
+    if(request.kind==='files')card.append(el('p',{},'Allow this app to supply images and documents for its requests and receive files those requests produce. This permission does not grant access to your computer’s folders.'),el('small',{},'Saved for this connection. You can turn it off in Permissions.'));
     if(request.kind==='file-write')card.append(el('details',{},disclosure('Review changes'),el('div',{class:'write-preview'},el('div',{},el('h4',{},'Current'),el('pre',{},request.before??'')),el('div',{},el('h4',{},'Proposed'),el('pre',{},request.after??'')))));
     const decide=approve=>api(`/permissions/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve})});
-    card.append(el('div',{class:'actions'},request.kind==='access'?button('Choose folders',()=>openPermissions(pair),'primary'):button('Approve',()=>decide(true),'primary'),button('Decline',()=>decide(false))));return card;
+    card.append(el('div',{class:'actions'},request.kind==='access'?button('Choose folders',()=>openPermissions(pair),'primary'):button(request.kind==='files'?'Allow files':'Approve',()=>decide(true),'primary'),button('Decline',()=>decide(false))));return card;
   }));
 }

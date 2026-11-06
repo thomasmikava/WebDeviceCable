@@ -99,6 +99,10 @@ func (a *App) saveArtifact(jobID, name, media string, data []byte) (Artifact, er
 	if job == nil || job.Status != "running" {
 		return Artifact{}, errors.New("request has ended")
 	}
+	p := a.state.Pairings[job.PairingID]
+	if p == nil || !p.Files {
+		return Artifact{}, filePermissionDenied()
+	}
 	used := int64(0)
 	root := filepath.Join(a.dir, "artifacts")
 	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {

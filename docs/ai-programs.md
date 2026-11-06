@@ -57,8 +57,13 @@ Executable paths, profiles, diagnostic account identities and grants stay local.
 Custom executables must implement this interface directly or through a wrapper.
 Registering an arbitrary CLI does not make it compatible. This first version
 supports text, incremental output, optional continuing turns, and optional
-reported model/reasoning catalogs. JSON output schemas, files, images and app
-tools are explicitly unsupported and rejected before dispatch.
+reported model/reasoning catalogs, and optional supplied files. A descriptor
+with `files: true` opts into the existing `files` manifest (original name, media
+type, size and private staged path; plus an output directory). No extension or
+content-type allowlist is applied to custom file inputs. Files are rejected
+before dispatch when the descriptor omits that declaration, and support is
+checked again before every turn. JSON output schemas, image generation and app
+tools remain unsupported and are rejected before dispatch.
 
 Each connection must grant the **current configuration** in **Custom AI program
 access**, accepting the same OS account file/network permissions used by

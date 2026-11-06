@@ -247,7 +247,7 @@ func decodeSecure(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func (a *App) invitationBundle(token, endpoint string, p Pairing, expires time.Time) string {
-	payload, _ := json.Marshal(map[string]any{"v": 2, "connectionReviewVersion": 1, "secret": token, "endpoint": endpoint, "deviceId": a.state.DeviceID, "publicKey": publicKey(a.identity), "appId": p.AppID, "appUser": p.AppUser, "origin": p.Origin, "expiresAt": expires.UnixMilli()})
+	payload, _ := json.Marshal(map[string]any{"v": 2, "connectionReviewVersion": 1, "filePermissionsVersion": 1, "secret": token, "endpoint": endpoint, "deviceId": a.state.DeviceID, "publicKey": publicKey(a.identity), "appId": p.AppID, "appUser": p.AppUser, "origin": p.Origin, "expiresAt": expires.UnixMilli()})
 	return "aib2." + b64.EncodeToString(payload)
 }
 func (a *App) openChannel(w http.ResponseWriter, r *http.Request, endpoint string) error {

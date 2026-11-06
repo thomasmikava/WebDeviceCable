@@ -188,13 +188,44 @@ func (r *nativeRPC) send(value any) error {
 	return e
 }
 func (r *nativeRPC) receive(ctx context.Context) (nativeMessage, error) {
-	if len(r.notifications) > 0 {
-		m := r.notifications[0]
-		r.notifications = r.notifications[1:]
-		return m, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return nativeMessage{}, err
+		}
+		var m nativeMessage
+		if len(r.notifications) > 0 {
+			m = r.notifications[0]
+			r.notifications[0] = nativeMessage{}
+			r.notifications = r.notifications[1:]
+		} else {
+			var err error
+			m, err = r.receiveRaw(ctx)
+			if err != nil {
+				return m, err
+			}
+		}
+		if r.isToolCall(m) {
+			if err := r.toolHandler(ctx, m); err != nil {
+				return m, err
+			}
+			continue
+		}
+		return m, r.rejectServerRequest(m)
 	}
-	return r.receiveRaw(ctx)
 }
+
+func (r *nativeRPC) isToolCall(m nativeMessage) bool {
+	return len(m.ID) > 0 && m.Method == "item/tool/call" && r.toolHandler != nil
+}
+
+func (r *nativeRPC) rejectServerRequest(m nativeMessage) error {
+	if len(m.ID) > 0 && m.Method != "" {
+		_ = r.send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32601, "message": "Tools and authentication requests are disabled in WebDeviceCable Restricted mode."}})
+		return errors.New("unexpected native tool or authentication request")
+	}
+	return nil
+}
+
 func (r *nativeRPC) receiveRaw(ctx context.Context) (nativeMessage, error) {
 	select {
 	case <-ctx.Done():
@@ -207,21 +238,13 @@ func (r *nativeRPC) receiveRaw(ctx context.Context) (nativeMessage, error) {
 		if json.Unmarshal(p.Data, &m) != nil {
 			return m, errors.New("invalid native protocol message")
 		}
-		// Only the explicit WDC dynamic-tool dispatcher can answer a tool request.
-		if len(m.ID) > 0 && m.Method == "item/tool/call" && r.toolHandler != nil {
-			if err := r.toolHandler(ctx, m); err != nil {
-				return m, err
-			}
-			return r.receiveRaw(ctx)
-		}
-		if len(m.ID) > 0 && m.Method != "" {
-			_ = r.send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32601, "message": "Tools and authentication requests are disabled in WebDeviceCable Restricted mode."}})
-			return m, errors.New("unexpected native tool or authentication request")
-		}
 		return m, nil
 	}
 }
 func (r *nativeRPC) call(ctx context.Context, method string, params any, out any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.next++
 	id := r.next
 	if e := r.send(map[string]any{"id": id, "method": method, "params": params}); e != nil {
@@ -232,12 +255,19 @@ func (r *nativeRPC) call(ctx context.Context, method string, params any, out any
 		if e != nil {
 			return e
 		}
-		if len(m.ID) == 0 {
+		// A callback may need its own RPC (e.g. image steering). Defer callbacks
+		// until this response is consumed so nested calls cannot steal replies.
+		// The normal receive loop dispatches them in wire order, also after the
+		// caller has bound turn/start's returned turn ID.
+		if len(m.ID) == 0 || r.isToolCall(m) {
 			if len(r.notifications) >= 128 {
 				return errors.New("too many native startup events")
 			}
 			r.notifications = append(r.notifications, m)
 			continue
+		}
+		if err := r.rejectServerRequest(m); err != nil {
+			return err
 		}
 		var got int
 		if json.Unmarshal(m.ID, &got) != nil || got != id {

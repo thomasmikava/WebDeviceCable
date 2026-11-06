@@ -20,7 +20,8 @@ func TestAIProgramHelper(t *testing.T) {
 	emit := func(v any) { _ = json.NewEncoder(os.Stdout).Encode(v) }
 	if os.Args[len(os.Args)-1] == "--wdc-info" {
 		_, err := os.Stat(filepath.Join(profile, "no-sessions"))
-		emit(customProgramInfo{Protocol: "wdc-ai-jsonl-v1", Version: "1.2.3", Account: string(account), Sessions: os.IsNotExist(err), Models: []NativeModel{{ID: "fixture", Name: "Fixture", Reasoning: []NativeReasoning{{Effort: "high"}}}}})
+		_, filesError := os.Stat(filepath.Join(profile, "files"))
+		emit(customProgramInfo{Files: filesError == nil, Protocol: "wdc-ai-jsonl-v1", Version: "1.2.3", Account: string(account), Sessions: os.IsNotExist(err), Models: []NativeModel{{ID: "fixture", Name: "Fixture", Reasoning: []NativeReasoning{{Effort: "high"}}}}})
 		os.Exit(0)
 	}
 	if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("NODE_OPTIONS") != "" {
@@ -30,10 +31,11 @@ func TestAIProgramHelper(t *testing.T) {
 	reader := bufio.NewScanner(os.Stdin)
 	for reader.Scan() {
 		var turn struct {
-			ID        string `json:"id"`
-			Prompt    string `json:"prompt"`
-			Model     string `json:"model"`
-			Reasoning string `json:"reasoning"`
+			ID        string        `json:"id"`
+			Prompt    string        `json:"prompt"`
+			Model     string        `json:"model"`
+			Reasoning string        `json:"reasoning"`
+			Files     *commandFiles `json:"files"`
 		}
 		if json.Unmarshal(reader.Bytes(), &turn) != nil {
 			os.Exit(92)
@@ -41,6 +43,14 @@ func TestAIProgramHelper(t *testing.T) {
 		if turn.Prompt == "HANG" {
 			time.Sleep(time.Minute)
 			continue
+		}
+		if turn.Files != nil && len(turn.Files.Inputs) > 0 {
+			file := turn.Files.Inputs[0]
+			data, err := os.ReadFile(file.Path)
+			if err != nil {
+				os.Exit(93)
+			}
+			turn.Prompt += ":" + file.Name + ":" + fileHash(data)
 		}
 		history = append(history, turn.Prompt)
 		data, _ := json.Marshal(map[string]any{"profile": profile, "history": history, "pid": os.Getpid(), "model": turn.Model, "reasoning": turn.Reasoning})
@@ -412,4 +422,43 @@ func TestCustomRechecksCapabilitiesBeforeEveryTurn(t *testing.T) {
 	if job.Code != "sessions_unsupported" || job.Output != "" || job.Billing != "none" {
 		t.Fatalf("used stale custom capabilities: %+v", job)
 	}
+}
+
+func TestCustomFilesPassThroughWithoutFormatRestrictions(t *testing.T) {
+	f := setup(t)
+	program := customFixture(t, f, "File harness", "file-owner")
+	if err := os.WriteFile(filepath.Join(program.ProfileDir, "files"), []byte("enabled"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	status := checkProgram(f.a.dir, program)
+	if !status.Files {
+		t.Fatal("file descriptor not read")
+	}
+	for index, item := range f.a.native {
+		if item.ID == program.ID {
+			f.a.native[index] = status
+		}
+	}
+	origin := "https://files.example"
+	pair, token := f.pair(t, "Opaque files", origin, "owner", true)
+	grantFiles(t, f, token)
+	lease := f.lease(t, origin, token)
+	grantProgram(t, f, pair, program)
+	data := []byte{0, 0xff, 3, 4, 5}
+	id := secret()
+	f.a.inputs[id] = &nativeInput{ID: id, Name: "arbitrary.extension", MediaType: "application/octet-stream", Size: len(data), Data: data, Hash: fileHash(data), PairingID: pair, LeaseID: lease}
+	response := object(t, f.req("POST", "/v2/jobs", origin, token, lease, map[string]any{"kind": "text", "provider": program.ID, "prompt": "Inspect", "inputs": []string{id}, "idempotencyKey": "opaque-custom-file"}, false), 202)
+	job := waitClaudeJob(t, f, response["id"].(string), func(job *Job) bool { return terminal(job.Status) })
+	if job.Status != "completed" || !strings.Contains(job.Output, "arbitrary.extension:"+fileHash(data)) {
+		t.Fatalf("original file not passed: %+v", job)
+	}
+	if err := os.Remove(filepath.Join(program.ProfileDir, "files")); err != nil {
+		t.Fatal(err)
+	}
+	response = object(t, f.req("POST", "/v2/jobs", origin, token, lease, map[string]any{"kind": "text", "provider": program.ID, "prompt": "Do not dispatch this", "inputs": []string{id}, "idempotencyKey": "custom-files-removed"}, false), 202)
+	job = waitClaudeJob(t, f, response["id"].(string), func(job *Job) bool { return terminal(job.Status) })
+	if job.Code != "unsupported_feature" || job.Output != "" {
+		t.Fatal("fresh file capability was not enforced", job)
+	}
+
 }

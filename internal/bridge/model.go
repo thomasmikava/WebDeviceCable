@@ -49,31 +49,35 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
-	DisplayName     string             `json:"displayName,omitempty"`
-	LogoID          string             `json:"logoId,omitempty"`
-	GroupsDeclared  bool               `json:"groupsDeclared,omitempty"`
-	Relay           *RelayBinding      `json:"relay,omitempty"`
-	Transport       string             `json:"transport,omitempty"`
-	Tools           map[string]AppTool `json:"tools,omitempty"`
-	Folders         []FolderGrant      `json:"folders,omitempty"`
-	ID              string             `json:"id"`
-	AppID           string             `json:"appId"`
-	Name            string             `json:"name"`
-	Origin          string             `json:"origin"`
-	AppUser         string             `json:"appUser"`
-	DeviceID        string             `json:"deviceId"`
-	ClientPublicKey string             `json:"clientPublicKey,omitempty"`
-	CredentialHash  string             `json:"credentialHash,omitempty"`
-	Automatic       bool               `json:"automatic"`
-	Paused          bool               `json:"paused"`
-	Revoked         bool               `json:"revoked"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	Mode            string             `json:"mode"`
-	ProgramGrants   map[string]string  `json:"programGrants,omitempty"`
-	NativeAccounts  map[string]string  `json:"nativeAccounts,omitempty"`
-	Actions         map[string]string  `json:"actions,omitempty"`
-	Groups          []ActionGroup      `json:"groups,omitempty"`
-	Routing         Routing            `json:"routing,omitempty"`
+	PermissionsRevision uint64             `json:"permissionsRevision,omitempty"`
+	PermissionSaveID    string             `json:"permissionSaveId,omitempty"`
+	PermissionSaveHash  string             `json:"permissionSaveHash,omitempty"`
+	DisplayName         string             `json:"displayName,omitempty"`
+	LogoID              string             `json:"logoId,omitempty"`
+	GroupsDeclared      bool               `json:"groupsDeclared,omitempty"`
+	Relay               *RelayBinding      `json:"relay,omitempty"`
+	Transport           string             `json:"transport,omitempty"`
+	Tools               map[string]AppTool `json:"tools,omitempty"`
+	Folders             []FolderGrant      `json:"folders,omitempty"`
+	ID                  string             `json:"id"`
+	AppID               string             `json:"appId"`
+	Name                string             `json:"name"`
+	Origin              string             `json:"origin"`
+	AppUser             string             `json:"appUser"`
+	DeviceID            string             `json:"deviceId"`
+	ClientPublicKey     string             `json:"clientPublicKey,omitempty"`
+	CredentialHash      string             `json:"credentialHash,omitempty"`
+	Automatic           bool               `json:"automatic"`
+	Files               bool               `json:"files"`
+	Paused              bool               `json:"paused"`
+	Revoked             bool               `json:"revoked"`
+	CreatedAt           time.Time          `json:"createdAt"`
+	Mode                string             `json:"mode"`
+	ProgramGrants       map[string]string  `json:"programGrants,omitempty"`
+	NativeAccounts      map[string]string  `json:"nativeAccounts,omitempty"`
+	Actions             map[string]string  `json:"actions,omitempty"`
+	Groups              []ActionGroup      `json:"groups,omitempty"`
+	Routing             Routing            `json:"routing,omitempty"`
 }
 type Invitation struct {
 	Pairing    Pairing   `json:"pairing"`
@@ -95,9 +99,11 @@ type JobRequest struct {
 	ConversationID string            `json:"conversationId,omitempty"`
 	OutputSchema   json.RawMessage   `json:"outputSchema,omitempty"`
 	Inputs         []string          `json:"inputs,omitempty"`
+	Contexts       []string          `json:"contexts,omitempty"`
 }
 type Job struct {
 	ToolOperations  []ToolOperationRecord `json:"toolOperations,omitempty"`
+	UsesFiles       bool                  `json:"usesFiles,omitempty"`
 	InputNames      []string              `json:"inputNames,omitempty"`
 	Turn            int                   `json:"turn,omitempty"`
 	ID              string                `json:"id"`
@@ -184,6 +190,7 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 	j.Request.Arguments = nil
 	j.Request.OutputSchema = nil
 	j.Request.Inputs = nil
+	j.Request.Contexts = nil
 	j.Request.Tools = nil
 	j.InputNames = nil
 	if status != "completed" {
@@ -211,7 +218,23 @@ func publicPairing(p *Pairing) Pairing {
 	c.CredentialHash = ""
 	c.ClientPublicKey = ""
 	c.NativeAccounts = nil
+	c.PermissionSaveHash = ""
 	return c
+}
+
+// Only authorization changes invalidate permission drafts. Job progress, names,
+// routing and account discovery must not conflict with an owner's open form.
+func permissionFingerprint(p *Pairing) string {
+	data, _ := jsonData(struct {
+		Automatic bool              `json:"automatic"`
+		Files     bool              `json:"files"`
+		Paused    bool              `json:"paused"`
+		Revoked   bool              `json:"revoked"`
+		Folders   []FolderGrant     `json:"folders,omitempty"`
+		Actions   map[string]string `json:"actions,omitempty"`
+		Programs  map[string]string `json:"programs,omitempty"`
+	}{p.Automatic, p.Files, p.Paused, p.Revoked, p.Folders, p.Actions, p.ProgramGrants})
+	return digest(string(data))
 }
 
 func pairingLeaseTTL(p *Pairing) time.Duration {
@@ -262,6 +285,12 @@ func validateRequest(r *JobRequest) error {
 	}
 	if len(r.OutputSchema) > 0 && (r.Kind == "command" || r.Kind == "connection-test") {
 		return errors.New("this job kind does not accept AI inputs or schemas")
+	}
+	if r.Kind == "connection-test" && (len(r.Inputs) > 0 || len(r.Contexts) > 0) {
+		return errors.New("connection tests do not accept files or text context")
+	}
+	if len(r.Contexts) > 1 {
+		return errors.New("at most one text context is allowed")
 	}
 	if len(r.Inputs) > 8 {
 		return errors.New("at most 8 supplied inputs are allowed")
@@ -316,7 +345,10 @@ func validateRequest(r *JobRequest) error {
 			return errors.New("connection-test accepts no provider or prompt")
 		}
 	case "text", "image-generate", "image-edit":
-		if !actionID.MatchString(r.Provider) {
+		// A group selects its provider through the owner's route. Validate the
+		// wire request before receipt lookup; prepareJob validates the resolved
+		// program afterward without rewriting the original request/hash.
+		if r.Provider == "" && r.Group == "" || r.Provider != "" && !actionID.MatchString(r.Provider) {
 			return errors.New("provider must be a program ID")
 		}
 		if len(strings.TrimSpace(r.Prompt)) == 0 || len(r.Prompt) > 32768 {

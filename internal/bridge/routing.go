@@ -346,6 +346,8 @@ func (a *App) remoteJob(j *Job) Job {
 }
 func (a *App) remotePairing(p *Pairing) Pairing {
 	c := publicPairing(p)
+	c.PermissionsRevision = 0
+	c.PermissionSaveID = ""
 	c.DisplayName = ""
 	c.Folders = append([]FolderGrant(nil), p.Folders...)
 	for i := range c.Folders {

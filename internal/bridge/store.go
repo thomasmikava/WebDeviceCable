@@ -240,6 +240,14 @@ func (a *App) update(fn func(*State) error) error {
 	if e := fn(&next); e != nil {
 		return e
 	}
+	for id, pairing := range next.Pairings {
+		if previous := a.state.Pairings[id]; previous != nil && pairing != nil {
+			pairing.PermissionsRevision = previous.PermissionsRevision
+			if permissionFingerprint(previous) != permissionFingerprint(pairing) {
+				pairing.PermissionsRevision++
+			}
+		}
+	}
 	for _, c := range next.Conversations {
 		if c.Status != "open" {
 			c.Tools = nil

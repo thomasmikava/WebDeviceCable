@@ -21,6 +21,7 @@ export interface JobRequest {
     conversationId?: string;
     outputSchema?: Record<string, unknown>;
     inputs?: string[];
+    contexts?: string[];
 }
 export interface Job {
     toolOperations?: ToolOperationRecord[];
@@ -79,6 +80,7 @@ export interface Pairing {
     name: string;
     origin: string;
     deviceId: string;
+    files: boolean;
     automatic: boolean;
     paused: boolean;
     revoked: boolean;
@@ -125,6 +127,9 @@ export interface CommandAction {
     sessions: boolean;
 }
 export interface Capabilities {
+    filePermissionsVersion?: number;
+    textContextVersion?: number;
+    toolResultFilesVersion?: number;
     toolInputSchemaVersion?: number;
     toolOperationDetailsVersion?: number;
     connectionReviewVersion?: number;
@@ -134,6 +139,7 @@ export interface Capabilities {
     routingConfigured?: boolean;
     appToolPermissions?: 'application';
     fileTransfer: boolean;
+    nativeFileInputsVersion?: number;
     maxTextBytes: number;
     protocolVersion: 2;
     pairing: Pairing;
@@ -194,6 +200,7 @@ export interface SessionOptions {
 export interface MessageOptions {
     outputSchema?: Record<string, unknown>;
     inputs?: string[];
+    contexts?: string[];
     prompt?: string;
     arguments?: Record<string, string>;
     timeoutSeconds?: number;
@@ -236,6 +243,8 @@ export interface AppTool extends AppToolDefinition {
 }
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
 export interface PermissionStatus {
+    files: boolean;
+    automaticApprovals: boolean;
     tools: Record<string, AppToolDefinition & {
         hash: string;
     }>;
@@ -255,6 +264,7 @@ export interface ConnectionReviewOptions {
     logoURL?: string;
     requestedPermissions?: {
         automaticApprovals?: boolean;
+        files?: boolean;
     };
 }
 export interface PairingOptions extends ConnectionReviewOptions {
@@ -296,6 +306,9 @@ export declare class BridgeClient {
     private toolInputSchemaVersion?;
     private toolOperationDetailsVersion?;
     private executions;
+    private filePermissionsVersion?;
+    private textContextVersion?;
+    private toolResultFilesVersion?;
     private sessions;
     private activeCalls;
     private callbackCount;
@@ -338,6 +351,7 @@ export declare class BridgeClient {
     }>;
     requestPermissions(request: {
         workspace?: boolean;
+        files?: boolean;
     }, options?: {
         wait?: boolean;
         signal?: AbortSignal;
@@ -371,6 +385,11 @@ export declare class BridgeClient {
     preflight(request: Omit<JobRequest, 'idempotencyKey'>, features?: string[]): Promise<AdmissionStatus>;
     /** File bytes stay unchanged and scoped to this requesting tab. */
     upload(file: Blob, name?: string): Promise<UploadedInput>;
+    /** Large prompt text, never a local file or custom-program file manifest. */
+    uploadContext(text: string): Promise<UploadedInput>;
+    /** Hold the supplied uploads until the owning execution finishes. */
+    toolResult(result: unknown, inputs: string[]): unknown;
+    private uploadInput;
     removeInput(id: string): Promise<{
         ok: boolean;
     }>;
@@ -386,6 +405,7 @@ export declare class BridgeClient {
     private stop;
     close(): Promise<void>;
     submit(request: JobRequest): Promise<Job>;
+    private checkExecutionInputs;
     private checkTools;
     lookup(idempotencyKey: string): Promise<Job | null>;
     get(id: string): Promise<Job>;

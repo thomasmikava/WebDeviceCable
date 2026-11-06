@@ -190,6 +190,8 @@ func claudeInput(turn *conversationTurn, session string) any {
 	for _, file := range turn.Inputs {
 		if strings.HasPrefix(file.MediaType, "image/") {
 			content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": file.MediaType, "data": base64.StdEncoding.EncodeToString(file.Data)}})
+		} else if file.MediaType == "application/pdf" {
+			content = append(content, map[string]any{"type": "document", "title": file.Name, "source": map[string]any{"type": "base64", "media_type": "application/pdf", "data": base64.StdEncoding.EncodeToString(file.Data)}})
 		} else {
 			content = append(content, map[string]any{"type": "text", "text": "Supplied document: " + file.Name + "\n" + string(file.Data)})
 		}
@@ -417,6 +419,10 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 		if err = a.bindNativeAccount(active.JobID, account.OrgID+":"+strings.ToLower(account.Email)); err != nil {
 			return err
 		}
+		active.Inputs, err = prepareProviderInputs(active.Run.ctx, active.Inputs, "claude")
+		if err != nil {
+			return err
+		}
 		message := claudeInput(active, id)
 		initialized = false
 		active.Run.mu.Lock()
@@ -470,7 +476,14 @@ func (a *App) claudeLoop(ctx context.Context, c *commandConversation, dir string
 				failRun(fail(503, "native_protocol_error", "Claude Code returned an invalid streaming event."))
 				return
 			}
-			if event.Session != "" && event.Session != id || len(event.Parent) > 0 && string(event.Parent) != "null" {
+			hasParent := len(event.Parent) > 0 && string(event.Parent) != "null"
+			// Foreground MCP heartbeats identify the running tool in Parent. They
+			// are non-content notifications, not output from a child session.
+			scopedProgress := event.Type == "tool_progress" && event.Session == id
+			if event.Session != "" && event.Session != id || hasParent && !scopedProgress {
+				if active != nil {
+					active.Run.writeDiagnostic([]byte(fmt.Sprintf("Rejected Claude event: type=%.64q subtype=%.64q session_matches=%t session_present=%t parent_present=%t\n", event.Type, event.Subtype, event.Session == id, event.Session != "", hasParent)))
+				}
 				failRun(fail(503, "native_protocol_error", "Claude Code returned an event from another session."))
 				return
 			}

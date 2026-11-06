@@ -70,7 +70,7 @@ async function runner() {
     }
     assert.equal(request.publicKey, appKey); assert.equal(request.pairingId, pairingId); assert.equal(request.authorization, undefined);
     if (peer.handler) { const response = await peer.handler(context); if (response) return response; }
-    if (request.path === '/v2/capabilities')return context.json({scopedToolsVersion:1,protocolVersion:2,pairing,routingVersion:2});
+    if (request.path === '/v2/capabilities')return context.json({scopedToolsVersion:1,filePermissionsVersion:1,textContextVersion:1,toolResultFilesVersion:1,protocolVersion:2,pairing,routingVersion:2});
     if (request.path === '/v2/lease') return context.json({ lease, expiresAt: new Date(Date.now() + 12000).toISOString() }, request.method === 'POST' ? 201 : 200);
     if (request.path === '/v2/jobs') {
       assert.equal(request.lease, lease);
@@ -469,4 +469,38 @@ test('a legacy connection window cannot silently ignore requested approval setti
   for(const fn of listeners)fn({source:popup,origin:'http://127.0.0.1:47321',data:{type:'wdc:pairing-ready',requestId}});
   await assert.rejects(pending,error=>error.code==='desktop_update_required');assert.equal(posted,false);assert.equal(popup.closed,true);assert.equal(listeners.size,0);
  }finally{globalThis.window=saved;}
+});
+
+test('large text context uses a separate authenticated upload class and never enables files',async()=>{
+ const peer=await runner(),restore=peer.install();let client;
+ try{
+  ({client}=await peer.connect());const inputId=hex(),parts=[];let size=0,offset=0;
+  peer.handler=c=>{
+   if(c.request.path==='/v2/contexts'){const meta=JSON.parse(c.request.body);size=meta.size;assert.equal(meta.mediaType,'text/plain');assert.ok(size<=128*1024);return c.json({...meta,id:inputId},201);}
+   if(c.request.path===`/v2/inputs/${inputId}`&&c.request.method==='PUT'){const body=JSON.parse(c.request.body),data=Buffer.from(body.data,'base64');assert.equal(body.offset,offset);parts.push(data);offset+=data.length;return c.json({id:inputId,offset,complete:offset===size});}
+  };
+  const text='Context: '+ 'ქართული\n'.repeat(4000),uploaded=await client.uploadContext(text);
+  assert.equal(uploaded.id,inputId);assert.equal(Buffer.concat(parts).toString('utf8'),text);
+  const job=await client.submit({kind:'action',prompt:'Use the context',contexts:[inputId],idempotencyKey:'context-task'});
+  assert.deepEqual(job.request.contexts,[inputId]);assert.equal(job.request.inputs,undefined);
+  assert.equal(peer.calls.some(c=>c.request.path==='/v2/inputs'||c.request.path==='/v2/permissions'),false);
+  await assert.rejects(client.uploadContext('x\0y'),error=>error.code==='invalid_context');
+  await assert.rejects(client.uploadContext('გ'.repeat(50000)),error=>error.code==='invalid_context');
+  assert.deepEqual(client.toolResult({ok:true},[inputId]),{$wdc:'tool-result',result:{ok:true},inputs:[inputId]});
+  assert.throws(()=>client.toolResult({},[inputId,inputId]),error=>error.code==='invalid_input');
+ }finally{await client?.close();restore();}
+});
+
+test('file permission and text context APIs reject older desktops before transfer',async()=>{
+ const peer=await runner(),restore=peer.install();let client;
+ try{
+  peer.handler=c=>c.request.path==='/v2/capabilities'?c.json({scopedToolsVersion:1,protocolVersion:2,pairing:peer.pairing}):undefined;
+  // Keep the valid pairing returned by the signed claim for this capability fixture.
+  const paired=await peer.pair();peer.handler=c=>c.request.path==='/v2/capabilities'?c.json({scopedToolsVersion:1,protocolVersion:2,pairing:paired.pairing}):undefined;
+  client=new BridgeClient({connection:paired.connection,origin:peer.origin});await client.connect();
+  await assert.rejects(client.upload(new Blob(['text'])),e=>e.code==='desktop_update_required');
+  await assert.rejects(client.uploadContext('context'),e=>e.code==='desktop_update_required');
+  await assert.rejects(client.requestPermissions({files:true}),e=>e.code==='desktop_update_required');
+  assert.equal(peer.calls.some(c=>['/v2/inputs','/v2/contexts','/v2/permissions'].includes(c.request.path)),false);
+ }finally{await client?.close();restore();}
 });

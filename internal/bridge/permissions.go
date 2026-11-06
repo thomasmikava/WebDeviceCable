@@ -154,6 +154,7 @@ func (a *App) waitPermission(ctx context.Context, op *PermissionRequest, complet
 	}
 }
 func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.ResponseWriter, *http.Request, *Pairing) error) http.HandlerFunc, control func(func(http.ResponseWriter, *http.Request) error) http.HandlerFunc) {
+	a.filePermissionRoutes(mux, control)
 	mux.HandleFunc("GET /v2/permissions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		writeJSON(w, 200, permissionSummary(p))
 		return nil
@@ -181,12 +182,35 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		var in struct {
 			Tools     []string `json:"tools"`
 			Workspace bool     `json:"workspace"`
+			Files     bool     `json:"files"`
 		}
 		if err = decode(w, r, &in); err != nil {
 			return err
 		}
 		if len(in.Tools) > 0 {
 			return fail(400, "invalid_permission", "App tools are execution-scoped and authorized by the application.")
+		}
+		if in.Files && in.Workspace {
+			return fail(400, "invalid_permission", "Request file and folder access separately.")
+		}
+		if in.Files {
+			if p.Files {
+				writeJSON(w, 200, map[string]string{"id": "", "status": "completed"})
+				return nil
+			}
+			for _, op := range a.permissions {
+				if op.PairingID == p.ID && op.LeaseID == lease && op.Kind == "files" && op.Status == "pending" && a.operationLive(op) {
+					writeJSON(w, 202, op)
+					return nil
+				}
+			}
+			op, err := a.newPermission(p, lease, "", "files", "Send and receive files", "", json.RawMessage(`{}`))
+			if err != nil {
+				return err
+			}
+			a.notifyConnections()
+			writeJSON(w, 202, op)
+			return nil
 		}
 		if permissionsSatisfied(p, in.Tools, in.Workspace) {
 			writeJSON(w, 200, map[string]string{"id": "", "status": "completed"})
@@ -293,11 +317,37 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if len(in.Result) == 0 {
 			return fail(400, "invalid_result", "A JSON result is required.")
 		}
+		if len(in.Result) > 32<<10 {
+			return fail(413, "result_too_large", "Tool results must be at most 32 KiB.")
+		}
+
 		if op.Status == "completed" {
 			if string(op.Result) != string(in.Result) {
 				return fail(409, "result_conflict", "This call already has a different result.")
 			}
 		} else if op.Status == "dispatched" {
+			envelope, err := parseFileToolResult(in.Result)
+			if err != nil {
+				return err
+			}
+			if envelope != nil {
+				if !p.Files {
+					return filePermissionDenied()
+				}
+				if _, err := a.selectedInputs(p, lease, envelope.Inputs); err != nil {
+					return err
+				}
+				if err := a.update(func(s *State) error {
+					j := findJob(s, op.JobID)
+					if j == nil || j.Status != "running" {
+						return fail(410, "execution_ended", "This execution has ended.")
+					}
+					markFileScope(s, j)
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
 			if op.Operation != nil {
 				if err := a.update(func(s *State) error {
 					if j := findJob(s, op.JobID); j != nil {
@@ -337,6 +387,17 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 			return fail(400, "grant_required", "Choose folders in this connection's Folder access settings.")
 		}
 
+		if op.Kind == "files" {
+			if in.Approve {
+				if err := a.update(func(s *State) error { a.setFiles(s, op.PairingID, true); return nil }); err != nil {
+					return err
+				}
+			}
+			a.resolveFilePermissions(op.PairingID, in.Approve)
+			a.notifyConnections()
+			writeJSON(w, 200, op)
+			return nil
+		}
 		op.Status = "denied"
 		if in.Approve {
 			op.Status = "approved"
@@ -357,62 +418,20 @@ func (a *App) permissionRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := decode(w, r, &in); err != nil {
 			return err
 		}
-		if len(in.Folders) > 16 {
-			return fail(400, "grant_limit", "Too many grants.")
+		folders, err := a.prepareFolderGrants(in.Folders)
+		if err != nil {
+			return err
 		}
 
-		ids := map[string]bool{}
-		for i := range in.Folders {
-			f := &in.Folders[i]
-			path, err := filepath.EvalSymlinks(f.Path)
-			if err != nil || !filepath.IsAbs(path) || a.protectedFolder(path) {
-				return fail(400, "invalid_folder", "Choose a project folder outside WDC and provider configuration directories.")
-			}
-			root, err := os.OpenRoot(path)
-			if err != nil {
-				return fail(400, "invalid_folder", "This folder cannot be opened.")
-			}
-			identity, e := rootIdentity(root)
-			root.Close()
-			if e != nil {
-				return e
-			}
-			f.Identity = identity
-			f.Path = path
-			f.Name = filepath.Base(path)
-			if !f.Write {
-				f.Automatic = false
-			}
-			if f.ID == "" {
-				f.ID = secret()
-			}
-			if !validStorageID(f.ID) || ids[f.ID] {
-				return fail(400, "invalid_folder", "Invalid folder ID.")
-			}
-			ids[f.ID] = true
-		}
 		if err := a.update(func(s *State) error {
 			pair := s.Pairings[p.ID]
-			pair.Folders = in.Folders
+			pair.Folders = folders
 			a.cancelPermissionWork(s, p.ID, "permissions_changed")
 			return nil
 		}); err != nil {
 			return err
 		}
-		for _, op := range a.permissions {
-			if op.PairingID == p.ID && op.Kind == "access" && op.Status == "pending" {
-				var requested struct {
-					Tools     []string `json:"tools"`
-					Workspace bool     `json:"workspace"`
-				}
-				_ = json.Unmarshal(op.Arguments, &requested)
-				op.Status = "denied"
-				if permissionsSatisfied(a.state.Pairings[p.ID], requested.Tools, requested.Workspace) {
-					op.Status = "completed"
-				}
-				a.signalPermission(op)
-			}
-		}
+		a.resolveFolderPermissions(p.ID)
 		writeJSON(w, 200, permissionSummary(a.state.Pairings[p.ID]))
 		return nil
 	}))
@@ -487,8 +506,63 @@ func permissionSummary(p *Pairing) map[string]any {
 	}
 	tools := map[string]AppTool{}
 	// Preserve the old response shape without implying WDC grants app actions.
-	return map[string]any{"tools": tools, "grants": map[string]ToolGrant{}, "folders": folders}
+	return map[string]any{"files": p.Files, "automaticApprovals": p.Automatic, "tools": tools, "grants": map[string]ToolGrant{}, "folders": folders}
 }
+func (a *App) prepareFolderGrants(folders []FolderGrant) ([]FolderGrant, error) {
+	if len(folders) > 16 {
+		return nil, fail(400, "grant_limit", "Too many grants.")
+	}
+
+	ids := map[string]bool{}
+	for i := range folders {
+		f := &folders[i]
+		path, err := filepath.EvalSymlinks(f.Path)
+		if err != nil || !filepath.IsAbs(path) || a.protectedFolder(path) {
+			return nil, fail(400, "invalid_folder", "Choose a project folder outside WDC and provider configuration directories.")
+		}
+		root, err := os.OpenRoot(path)
+		if err != nil {
+			return nil, fail(400, "invalid_folder", "This folder cannot be opened.")
+		}
+		identity, e := rootIdentity(root)
+		root.Close()
+		if e != nil {
+			return nil, e
+		}
+		f.Identity = identity
+		f.Path = path
+		f.Name = filepath.Base(path)
+		if !f.Write {
+			f.Automatic = false
+		}
+		if f.ID == "" {
+			f.ID = secret()
+		}
+		if !validStorageID(f.ID) || ids[f.ID] {
+			return nil, fail(400, "invalid_folder", "Invalid folder ID.")
+		}
+		ids[f.ID] = true
+	}
+	return folders, nil
+}
+
+func (a *App) resolveFolderPermissions(pairing string) {
+	for _, op := range a.permissions {
+		if op.PairingID == pairing && op.Kind == "access" && op.Status == "pending" {
+			var requested struct {
+				Tools     []string `json:"tools"`
+				Workspace bool     `json:"workspace"`
+			}
+			_ = json.Unmarshal(op.Arguments, &requested)
+			op.Status = "denied"
+			if permissionsSatisfied(a.state.Pairings[pairing], requested.Tools, requested.Workspace) {
+				op.Status = "completed"
+			}
+			a.signalPermission(op)
+		}
+	}
+}
+
 func (a *App) cancelPermissionWork(s *State, pairing, code string) {
 	affected := func(mode string) bool {
 		return mode == "workspace"

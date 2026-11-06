@@ -228,15 +228,27 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		writeJSON(w, 201, result)
 		return nil
 	}))
+	mux.HandleFunc("GET /api/pairings/{id}", control(func(w http.ResponseWriter, r *http.Request) error {
+		pairing := a.state.Pairings[r.PathValue("id")]
+		if pairing == nil {
+			return fail(404, "not_found", "Connection not found.")
+		}
+		writeJSON(w, 200, publicPairing(pairing))
+		return nil
+	}))
 	mux.HandleFunc("PATCH /api/pairings/{id}", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
-			DisplayName                *string            `json:"displayName"`
-			Paused                     *bool              `json:"paused"`
-			LogoID                     *string            `json:"logoId"`
-			Automatic                  *bool              `json:"automatic"`
-			Revoke                     bool               `json:"revoke"`
-			Actions                    *map[string]string `json:"actions"`
-			CommandPermissionsAccepted bool               `json:"commandPermissionsAccepted"`
+			ExpectedPermissionsRevision *uint64            `json:"expectedPermissionsRevision,omitempty"`
+			PermissionSaveID            string             `json:"permissionSaveId,omitempty"`
+			DisplayName                 *string            `json:"displayName"`
+			Paused                      *bool              `json:"paused"`
+			LogoID                      *string            `json:"logoId"`
+			Automatic                   *bool              `json:"automatic"`
+			Files                       *bool              `json:"files"`
+			Folders                     *[]FolderGrant     `json:"folders"`
+			Revoke                      bool               `json:"revoke"`
+			Actions                     *map[string]string `json:"actions"`
+			CommandPermissionsAccepted  bool               `json:"commandPermissionsAccepted"`
 		}
 		if e := decode(w, r, &in); e != nil {
 			return e
@@ -244,6 +256,24 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		id := r.PathValue("id")
 		if a.state.Pairings[id] == nil {
 			return fail(404, "not_found", "Pairing not found.")
+		}
+		if in.PermissionSaveID != "" && (!validStorageID(in.PermissionSaveID) || in.ExpectedPermissionsRevision == nil) {
+			return fail(400, "invalid_permission_save", "A permission save needs a valid ID and expected permission revision.")
+		}
+		payload, _ := jsonData(in)
+		saveHash := digest(string(payload))
+		pairing := a.state.Pairings[id]
+		// Resolve an accepted retry before checking its now-stale revision or
+		// revalidating paths that may have changed after the original save.
+		if in.PermissionSaveID != "" && pairing.PermissionSaveID == in.PermissionSaveID {
+			if pairing.PermissionSaveHash != saveHash {
+				return fail(409, "permission_save_conflict", "This save ID already belongs to different changes.")
+			}
+			writeJSON(w, 200, publicPairing(pairing))
+			return nil
+		}
+		if in.ExpectedPermissionsRevision != nil && *in.ExpectedPermissionsRevision != pairing.PermissionsRevision {
+			return fail(409, "permissions_changed", "Permissions changed. Reload the saved settings before applying this draft.")
 		}
 		if in.DisplayName != nil {
 			name := strings.TrimSpace(*in.DisplayName)
@@ -256,6 +286,13 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			if err := a.checkLogo(*in.LogoID); err != nil {
 				return err
 			}
+		}
+		if in.Folders != nil {
+			folders, err := a.prepareFolderGrants(*in.Folders)
+			if err != nil {
+				return err
+			}
+			in.Folders = &folders
 		}
 		var grants map[string]string
 		if in.Actions != nil {
@@ -273,6 +310,10 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			if p.Revoked {
 				return fail(409, "revoked", "Create a new pairing after revocation.")
 			}
+			if in.PermissionSaveID != "" {
+				p.PermissionSaveID = in.PermissionSaveID
+				p.PermissionSaveHash = saveHash
+			}
 			if in.Paused != nil {
 				p.Paused = *in.Paused
 			}
@@ -284,6 +325,13 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			}
 			if in.Automatic != nil {
 				p.Automatic = *in.Automatic
+			}
+			if in.Files != nil {
+				a.setFiles(s, id, *in.Files)
+			}
+			if in.Folders != nil {
+				p.Folders = *in.Folders
+				a.cancelPermissionWork(s, id, "permissions_changed")
 			}
 			if in.Actions != nil {
 				p.Actions = grants
@@ -311,6 +359,15 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			return nil
 		}); e != nil {
 			return e
+		}
+		if in.Files != nil {
+			if !*in.Files {
+				a.clearFileInputs(id)
+			}
+			a.resolveFilePermissions(id, *in.Files)
+		}
+		if in.Folders != nil {
+			a.resolveFolderPermissions(id)
 		}
 		a.notifyConnections()
 		writeJSON(w, 200, publicPairing(a.state.Pairings[id]))
@@ -450,7 +507,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/capabilities", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		writeJSON(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities(), "protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p), "appToolPermissions": "application", "fileTransfer": true, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
+		writeJSON(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities(), "protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p), "appToolPermissions": "application", "fileTransfer": true, "filePermissionsVersion": 1, "textContextVersion": 1, "toolResultFilesVersion": 1, "nativeFileInputsVersion": 1, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/actions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {

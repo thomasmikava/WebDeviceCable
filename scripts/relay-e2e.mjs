@@ -42,7 +42,7 @@ try {
  for(let i=0;i<150;i++){try{base=JSON.parse(await readFile(dir+'/desktop/runner.json','utf8')).url;break}catch{}await wait(50)}assert.ok(base,stderr);
  control=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+await readFile(dir+'/desktop/admin.key','utf8')}}).then(r=>r.json());
  if(native){for(let i=0;i<250;i++){const state=await api('/state',undefined,'GET');if(!state.nativeChecking&&state.native.length)break;await wait(100)}await api('/sharing',{names:true,models:true,versions:true},'PATCH')}
- const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7',logoURL:origin+'/logo.svg',requestedPermissions:{automaticApprovals:true}});
+ const enrollment=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'admin-7',logoURL:origin+'/logo.svg',requestedPermissions:{automaticApprovals:true,files:true}});
  const pendingClient=new RelayClient({baseURL:url,apiKey:key,connectionId:enrollment.connectionId,account:{appId:'kings-international',appUser:'admin-7'},origin});
  assert.equal((await pendingClient.status()).enrollmentStatus,'pending');await pendingClient.close();
  const declined=await RelayClient.enroll({baseURL:url,apiKey:key,appUser:'decline-fixture'});

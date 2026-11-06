@@ -24,7 +24,7 @@ try{
  let state;
  for(let i=0;i<200;i++){state=await api('/state',undefined,'GET');if(!state.nativeChecking&&state.native?.length)break;await delay(100)}
  const native=state.native.find(p=>p.id===provider);assert.ok(native?.execution,JSON.stringify(native));console.log('Native compatibility passed:',provider,native.version);
- const invite=await api('/invitations',{appId:'native-check',name:'Native check',origin,appUser:'owner',mode:'restricted',automatic:false});
+ const invite=await api('/invitations',{appId:'native-check',name:'Native check',origin,appUser:'owner',mode:'restricted',automatic:false,files:true});
  const paired=await BridgeClient.pair({baseURL:base,origin,invitation:invite.invitation,appId:'native-check',appUser:'owner'});
  client=new BridgeClient({connection:paired.connection,origin,groups:[{id:'chat',name:'Chat',kind:'ai'}]});clients.push(client);await client.connect();
  await api(`/pairings/${paired.pairing.id}/routing`,{expectedRevision:0,routing:{default:{provider,reasoning:'low'}}},'PUT');
@@ -42,6 +42,15 @@ try{
  const structured=await approved(client.session({group:'chat'}),{prompt:'What is the cable word in the supplied document? Return the JSON object.',inputs:[document.id,...(raster?[raster.id]:[])],outputSchema:{type:'object',properties:{word:{type:'string'}},required:['word'],additionalProperties:false}});
  assert.deepEqual(structured.final.json,{word:'saffron'});await client.removeInput(document.id);
  if(raster)await client.removeInput(raster.id);
+ if(process.argv.includes('--documents')){
+  const files=[];const names=['notes.pdf','notes.doc','notes.docx','tasks.xls','tasks.xlsx'];
+  for(const name of names){const input=await client.upload(new Blob([await readFile('internal/bridge/testdata/attachments/'+name)],{type:'application/octet-stream'}),name);files.push(input.id);}
+  const properties=Object.fromEntries(['pdf','doc','docx','xls','xlsx'].map(type=>[type,{type:'string'}]));
+  const documents=await approved(client.session({group:'chat'}),{prompt:'Read all five supplied documents. Each contains a color/spice marker in its text or table. Return that marker for each file type (pdf,doc,docx,xls,xlsx), with no extra text.',inputs:files,outputSchema:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}});
+  for(const type of Object.keys(properties))assert.match(documents.final.json[type],/saffron/i);
+  for(const id of files)await client.removeInput(id);
+  console.log('Native document attachments passed: PDF, DOC, DOCX, XLS and XLSX.');
+ }
  if(process.argv.includes('--images')){
   async function imageJob(request){const j=await client.submit({...request,provider:'codex',idempotencyKey:crypto.randomUUID(),timeoutSeconds:240});await api(`/jobs/${j.id}/decision`,{approve:true});let final;for await(const next of client.stream(j.id))final=next;assert.equal(final.status,'completed',JSON.stringify(final));assert.ok(final.artifacts?.length);const blob=await client.artifact(final);assert.equal(blob.type,'image/png');assert.ok(blob.size>1000);return {final,blob};}
   const generated=await imageJob({kind:'image-generate',prompt:'Generate a small simple image using the built-in image generation tool: one solid yellow circle on a plain white background.'});

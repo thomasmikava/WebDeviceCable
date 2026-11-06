@@ -341,6 +341,7 @@ func TestWorkspaceEditRechecksLeaseAndCancellation(t *testing.T) {
 
 func TestOpaqueFilesAndUnsafeOutputs(t *testing.T) {
 	f, token, lease, job := makeToolJob(t, "restricted")
+	grantFiles(t, f, token)
 	data := []byte{0, 1, 2, 255, 10}
 	meta := map[string]any{"name": "sample.anything", "mediaType": "application/octet-stream", "size": len(data), "sha256": fileHash(data)}
 	origin := "https://tools.example"
@@ -417,6 +418,7 @@ func TestFileEnabledCommandRoundTrip(t *testing.T) {
 	action.Files = true
 	f := commandFixture(t, false, action)
 	token, pair := f.pair(t, "file-app", f.origin, "owner", true)
+	grantFiles(t, f, token)
 	grantCommands(t, f, pair, action.ID)
 	lease := f.lease(t, f.origin, token)
 	data := []byte{0, 1, 255, 3, 5, 7, 0}

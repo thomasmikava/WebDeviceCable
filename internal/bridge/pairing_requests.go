@@ -16,6 +16,7 @@ type invitationInput struct {
 	Name                       string            `json:"name"`
 	Origin                     string            `json:"origin"`
 	AppUser                    string            `json:"appUser"`
+	Files                      bool              `json:"files"`
 	Automatic                  bool              `json:"automatic"`
 	Mode                       string            `json:"mode"`
 	Actions                    map[string]string `json:"actions"`
@@ -32,7 +33,7 @@ func (a *App) createInvitation(in invitationInput, origin string) (map[string]an
 			in.Mode = "commands"
 		}
 	}
-	p := Pairing{LogoID: in.LogoID, ClientPublicKey: in.PublicKey, ID: secret(), AppID: in.AppID, Name: in.Name, Origin: in.Origin, AppUser: in.AppUser, Automatic: in.Automatic, Mode: in.Mode, DeviceID: a.state.DeviceID, CreatedAt: a.now()}
+	p := Pairing{LogoID: in.LogoID, ClientPublicKey: in.PublicKey, ID: secret(), AppID: in.AppID, Name: in.Name, Origin: in.Origin, AppUser: in.AppUser, Automatic: in.Automatic, Files: in.Files, Mode: in.Mode, DeviceID: a.state.DeviceID, CreatedAt: a.now()}
 	if len(in.Actions) > 0 && !in.CommandPermissionsAccepted {
 		return nil, fail(400, "command_consent_required", "Command access must be explicitly accepted with OS account permissions.")
 	}
@@ -150,6 +151,7 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 		var in struct {
 			Approve   bool    `json:"approve"`
 			Automatic *bool   `json:"automatic"`
+			Files     *bool   `json:"files"`
 			LogoID    *string `json:"logoId"`
 		}
 		if err := decode(w, r, &in); err != nil {
@@ -171,6 +173,10 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 			if in.Automatic != nil {
 				automatic = *in.Automatic
 			}
+			files := request.RequestedPermissions.Files
+			if in.Files != nil {
+				files = *in.Files
+			}
 			logoID := ""
 			if in.LogoID != nil {
 				logoID = *in.LogoID
@@ -178,7 +184,7 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 			if err := a.checkLogo(logoID); err != nil {
 				return err
 			}
-			result, err := a.createInvitation(invitationInput{LogoID: logoID, Automatic: automatic, PublicKey: request.PublicKey, AppID: request.AppID, Name: request.Name, AppUser: request.AppUser, Origin: request.Origin}, origin)
+			result, err := a.createInvitation(invitationInput{LogoID: logoID, Automatic: automatic, Files: files, PublicKey: request.PublicKey, AppID: request.AppID, Name: request.Name, AppUser: request.AppUser, Origin: request.Origin}, origin)
 			if err != nil {
 				return err
 			}

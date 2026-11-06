@@ -118,8 +118,9 @@ export class RelayClient extends BridgeClient {
     const suggestions=connectionReviewOptions(options);
     return (async()=>{
       if(options.logoURL||options.requestedPermissions){
-        let capability:{connectionReviewVersion?:number};
+        let capability:{connectionReviewVersion?:number;filePermissionsVersion?:number};
         try{capability=await relayRequest(options,'/relay/v1/capabilities');}catch(error){if(error instanceof BridgeError&&error.status===404)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.1 or later to review connection settings.',409);throw error;}
+        if(options.requestedPermissions?.files && capability.filePermissionsVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to review file access.',409);
         if(capability.connectionReviewVersion!==1)throw new BridgeError('relay_update_required','Update the WDC relay to 0.2.1 or later to review connection settings.',409);
       }
       return relayRequest<RelayEnrollment>(options,'/relay/v1/enrollments',{method:'POST',body:JSON.stringify({appUser:options.appUser,...suggestions})});

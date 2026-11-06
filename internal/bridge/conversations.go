@@ -8,6 +8,7 @@ import (
 )
 
 type Conversation struct {
+	UsesFiles   bool           `json:"usesFiles,omitempty"`
 	Tools       []AppTool      `json:"tools,omitempty"`
 	ToolSetHash string         `json:"toolSetHash"`
 	Mode        string         `json:"mode,omitempty"`
@@ -159,6 +160,7 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 			TimeoutSeconds int               `json:"timeoutSeconds"`
 			OutputSchema   json.RawMessage   `json:"outputSchema,omitempty"`
 			Inputs         []string          `json:"inputs,omitempty"`
+			Contexts       []string          `json:"contexts,omitempty"`
 		}
 		if err := decode(w, r, &in); err != nil {
 			return err
@@ -167,7 +169,7 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 		if c == nil || c.PairingID != p.ID {
 			return fail(404, "not_found", "Session not found.")
 		}
-		request := JobRequest{Kind: "action", Group: c.Group, ConversationID: c.ID, Prompt: in.Prompt, Arguments: in.Arguments, IdempotencyKey: in.IdempotencyKey, TimeoutSeconds: in.TimeoutSeconds, OutputSchema: in.OutputSchema, Inputs: in.Inputs}
+		request := JobRequest{Kind: "action", Group: c.Group, ConversationID: c.ID, Prompt: in.Prompt, Arguments: in.Arguments, IdempotencyKey: in.IdempotencyKey, TimeoutSeconds: in.TimeoutSeconds, OutputSchema: in.OutputSchema, Inputs: in.Inputs, Contexts: in.Contexts}
 		job, duplicate, err := a.createJob(p, request, lease)
 		if err != nil {
 			return err
