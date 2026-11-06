@@ -146,6 +146,7 @@ func TestNativeFilesStayWithinPairingAndLease(t *testing.T) {
 	origin := "http://127.0.0.1:47322"
 	token, pair := f.pair(t, "files", origin, "alice", false)
 	other, _ := f.pair(t, "files", origin, "bob", false)
+	grantFiles(t, f, token)
 	lease := f.lease(t, origin, token)
 	otherLease := f.lease(t, origin, other)
 	image := image.NewRGBA(image.Rect(0, 0, 256, 256))

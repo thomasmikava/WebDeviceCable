@@ -70,15 +70,19 @@ func (a *App) checkProgramRequest(p *Pairing, plan *ExecutionPlan, request JobRe
 	if p.ProgramGrants[program.ID] != program.hash() {
 		return fail(403, "program_not_granted", "Grant this custom AI program OS account permissions in this connection's Program access settings.")
 	}
-	if request.Mode == "app-tools" || request.Mode == "workspace" || len(request.OutputSchema) > 0 || len(request.Inputs) > 0 || plan.Kind != "text" {
-		return fail(400, "unsupported_feature", "This custom integration supports text only. Structured output, files, images and app tools are unavailable.")
+	if request.Mode == "app-tools" || request.Mode == "workspace" || len(request.OutputSchema) > 0 || plan.Kind != "text" {
+		return fail(400, "unsupported_feature", "This custom integration supports text only. Structured output, image generation and app tools are unavailable.")
 	}
 	info := customProgramInfo{}
 	for _, status := range a.native {
 		if status.ID == program.ID {
 			info.Sessions = status.Sessions
+			info.Files = status.Files
 			info.Models = status.Models
 		}
+	}
+	if len(request.Inputs) > 0 && !info.Files {
+		return fail(400, "unsupported_feature", "This custom AI program has not declared file input support.")
 	}
 	return customOptions(info, plan.ExecutionTarget, request.ConversationID != "")
 }
@@ -433,6 +437,7 @@ type customProgramInfo struct {
 	Version  string        `json:"version"`
 	Account  string        `json:"account,omitempty"`
 	Sessions bool          `json:"sessions"`
+	Files    bool          `json:"files,omitempty"`
 	Models   []NativeModel `json:"models,omitempty"`
 }
 

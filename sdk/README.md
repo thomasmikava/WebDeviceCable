@@ -63,3 +63,5 @@ For self-hosting, copy `index.js`, `secure.js` and `storage.js` together from th
 For server-to-desktop connections, use the separate [`@webdevicecable/relay`](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/relay.md) Node package and Docker relay. MIT licensed.
 
 Version 0.2.1 adds optional `logoURL` and `requestedPermissions.automaticApprovals` to connection review. It removes the fixed tool-count cap while keeping byte/schema budgets, supports optional/nullable tool inputs and open objects, and exposes authenticated `context.reportOperation()` details for dispatcher tools marked `operationDetails:true`. New features require the corresponding desktop capabilities; existing pairings remain valid.
+
+Version 0.2.2 adds explicit file permissions, bounded text context uploads and image/document tool results. Upgrade the desktop and relay runtime before using these features. Existing connections need the owner to enable **Send and receive files**. See the [file permission guide](https://github.com/thomasmikava/WebDeviceCable/blob/HEAD/docs/file-permissions.md).

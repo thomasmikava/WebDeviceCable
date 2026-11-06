@@ -79,20 +79,18 @@ func (a *App) startNative(job *Job) {
 	run := &commandRun{jobID: job.ID, limit: a.textLimit(), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
 	a.commands[job.ID] = run
 	inputs, err := a.selectedInputs(a.state.Pairings[job.PairingID], job.LeaseID, job.Request.Inputs)
+	prompt, promptError := a.executionPrompt(job)
 	if err == nil {
-		for _, input := range inputs {
-			if err = validateProviderFile(input.MediaType, input.Data); err != nil {
-				break
-			}
-		}
+		err = promptError
 	}
+
 	if err != nil {
 		run.complete(err, failureFor(400, "unsupported_input", "This native client cannot accept this input directly. Use a file-enabled command or a supported native input format."))
 		close(run.stopped)
 		cancel()
 		return
 	}
-	turn := conversationTurn{JobID: job.ID, Prompt: job.Request.Prompt, Run: run, Schema: job.Request.OutputSchema, Inputs: inputs}
+	turn := conversationTurn{JobID: job.ID, Prompt: prompt, Run: run, Schema: job.Request.OutputSchema, Inputs: inputs}
 	id := job.Request.ConversationID
 	conversation := a.conversations[id]
 	if id == "" || conversation == nil {
@@ -251,11 +249,18 @@ func (a *App) codexLoop(ctx context.Context, c *commandConversation, dir string,
 		}
 		seenCalls[callKey] = true
 		result, err := a.invokeNativeTool(callCtx, active.JobID, in.Tool, in.Arguments)
+		var content []any
+		if err == nil {
+			content, err = a.nativeToolContent(callCtx, active.JobID, result, true)
+		}
+		if err == nil {
+			content, err = deliverCodexToolImages(callCtx, rpc, thread.Thread.ID, currentTurn, in.Tool+" (call "+string(m.ID)+")", content)
+		}
 		success := err == nil
 		if err != nil {
-			result, _ = json.Marshal(map[string]string{"error": err.Error()})
+			content = []any{map[string]any{"type": "inputText", "text": err.Error()}}
 		}
-		return rpc.send(map[string]any{"id": m.ID, "result": map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(result)}}, "success": success}})
+		return rpc.send(map[string]any{"id": m.ID, "result": map[string]any{"contentItems": content, "success": success}})
 	}
 	for {
 		if active == nil {
@@ -283,6 +288,11 @@ func (a *App) codexLoop(ctx context.Context, c *commandConversation, dir string,
 		}
 		if current != account {
 			failRun(fail(403, "native_account_changed", "Codex changed accounts. Reconnect this application."))
+			return
+		}
+		active.Inputs, e = prepareProviderInputs(active.Run.ctx, active.Inputs, "codex")
+		if e != nil {
+			failRun(e)
 			return
 		}
 		active.Run.mu.Lock()
@@ -364,6 +374,7 @@ func (a *App) codexLoop(ctx context.Context, c *commandConversation, dir string,
 				failRun(errors.New("cross-turn native event"))
 				return
 			}
+
 			switch m.Method {
 			case "thread/tokenUsage/updated":
 				active.Run.mu.Lock()

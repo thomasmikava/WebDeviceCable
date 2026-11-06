@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	_ "golang.org/x/image/webp"
 	"image"
+	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
@@ -23,6 +25,7 @@ const maxNativeFile = 8 << 20
 const fileChunk = 24 << 10
 
 type nativeInput struct {
+	Context   bool   `json:"-"`
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	MediaType string `json:"mediaType"`
@@ -76,12 +79,15 @@ func validateProviderFile(media string, data []byte) error {
 	return nil
 }
 func (a *App) selectedInputs(p *Pairing, lease string, ids []string) ([]nativeInput, error) {
+	if len(ids) > 0 && !p.Files {
+		return nil, filePermissionDenied()
+	}
 	result := []nativeInput{}
 	total := 0
 	seen := map[string]bool{}
 	for _, id := range ids {
 		input := a.inputs[id]
-		if input == nil || input.PairingID != p.ID || input.LeaseID != lease || len(input.Data) != input.Size || fileHash(input.Data) != input.Hash || seen[id] {
+		if input == nil || input.Context || input.PairingID != p.ID || input.LeaseID != lease || len(input.Data) != input.Size || fileHash(input.Data) != input.Hash || seen[id] {
 			return nil, fail(400, "invalid_input", "Use completed inputs uploaded by this requesting tab.")
 		}
 		if e := validateNativeFile(input.MediaType, input.Data); e != nil {
@@ -97,10 +103,14 @@ func (a *App) selectedInputs(p *Pairing, lease string, ids []string) ([]nativeIn
 	return result, nil
 }
 func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.ResponseWriter, *http.Request, *Pairing) error) http.HandlerFunc, control func(func(http.ResponseWriter, *http.Request) error) http.HandlerFunc) {
-	mux.HandleFunc("POST /v2/inputs", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
+	createInput := paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		lease, e := a.liveLease(r, p)
 		if e != nil {
 			return e
+		}
+		contextInput := r.URL.Path == "/v2/contexts"
+		if !contextInput && !p.Files {
+			return filePermissionDenied()
 		}
 		var in nativeInput
 		if e = decode(w, r, &in); e != nil {
@@ -112,6 +122,10 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if in.MediaType == "" {
 			in.MediaType = "application/octet-stream"
 		}
+		if contextInput && (in.MediaType != "text/plain" || in.Size > 128<<10) {
+			return fail(400, "invalid_context", "Text context must be UTF-8 plain text of at most 128 KiB.")
+		}
+		in.Context = contextInput
 		if e := validateNativeFile(in.MediaType, nil); e != nil {
 			return fail(400, "invalid_input", e.Error())
 		}
@@ -122,7 +136,7 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 				count++
 			}
 		}
-		if count >= 8 || reserved+in.Size > 64<<20 {
+		if count >= 64 || reserved+in.Size > 64<<20 {
 			return fail(429, "input_limit", "Remove unused inputs before uploading more.")
 		}
 		in.ID = secret()
@@ -132,7 +146,9 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		a.inputs[in.ID] = &in
 		writeJSON(w, 201, in)
 		return nil
-	}))
+	})
+	mux.HandleFunc("POST /v2/inputs", createInput)
+	mux.HandleFunc("POST /v2/contexts", createInput)
 	mux.HandleFunc("PUT /v2/inputs/{id}", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
 		lease, e := a.liveLease(r, p)
 		if e != nil {
@@ -141,6 +157,9 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		input := a.inputs[r.PathValue("id")]
 		if input == nil || input.PairingID != p.ID || input.LeaseID != lease {
 			return fail(404, "not_found", "Input not found.")
+		}
+		if !input.Context && !p.Files {
+			return filePermissionDenied()
 		}
 		var in struct {
 			Offset int    `json:"offset"`
@@ -158,6 +177,10 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 			if fileHash(input.Data) != input.Hash {
 				delete(a.inputs, input.ID)
 				return fail(400, "invalid_input", "File hash mismatch.")
+			}
+			if input.Context && (!utf8.Valid(input.Data) || bytes.IndexByte(input.Data, 0) >= 0) {
+				delete(a.inputs, input.ID)
+				return fail(400, "invalid_context", "Text context must be UTF-8 without NUL bytes.")
 			}
 			if e = validateNativeFile(input.MediaType, input.Data); e != nil {
 				delete(a.inputs, input.ID)
@@ -182,6 +205,9 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		j := findJob(&a.state, r.PathValue("id"))
 		if j == nil || j.PairingID != p.ID {
 			return fail(404, "not_found", "Artifact not found.")
+		}
+		if !p.Files {
+			return filePermissionDenied()
 		}
 		artifact, e := findArtifact(j, r.PathValue("artifact"))
 		if e != nil {
@@ -254,6 +280,10 @@ func (a *App) saveNativeImage(jobID, encoded string) (Artifact, error) {
 	job := findJob(&a.state, jobID)
 	if job == nil || job.Status != "running" {
 		return Artifact{}, errors.New("request ended before image completed")
+	}
+	p := a.state.Pairings[job.PairingID]
+	if p == nil || !p.Files {
+		return Artifact{}, filePermissionDenied()
 	}
 	used := int64(0)
 	root := filepath.Join(a.dir, "artifacts")

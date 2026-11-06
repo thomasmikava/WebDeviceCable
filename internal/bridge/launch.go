@@ -181,7 +181,7 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(map[string]any{"status": request.Status, "invitation": request.Invitation, "connectionReviewVersion": 1})
+		body, _ := json.Marshal(map[string]any{"status": request.Status, "invitation": request.Invitation, "connectionReviewVersion": 1, "filePermissionsVersion": 1})
 		encrypted, err := sealMessage(cipher, in.ID, "launch", body)
 		if err != nil {
 			return err

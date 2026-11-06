@@ -132,6 +132,8 @@ export class RelayClient extends BridgeClient {
                         throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
                     throw error;
                 }
+                if (options.requestedPermissions?.files && capability.filePermissionsVersion !== 1)
+                    throw new BridgeError('relay_update_required', 'Update the WDC relay to review file access.', 409);
                 if (capability.connectionReviewVersion !== 1)
                     throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
             }

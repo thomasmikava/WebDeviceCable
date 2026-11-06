@@ -68,6 +68,15 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 	if plan.Kind == "command" && a.actions[plan.Action].Session != nil && in.ConversationID == "" {
 		return nil, false, fail(400, "session_required", "This command needs a session. Use the SDK session() helper.")
 	}
+	if (len(in.Inputs) > 0 || plan.Kind == "image-generate" || plan.Kind == "image-edit" || plan.Kind == "command" && a.actions[plan.Action].Files) && !p.Files {
+		return nil, false, filePermissionDenied()
+	}
+	if _, err := a.contextText(p, lease, in.Contexts); err != nil {
+		return nil, false, err
+	}
+	if len(in.Contexts) > 0 && plan.Kind == "command" && a.actions[plan.Action].Session == nil {
+		return nil, false, fail(400, "invalid_context", "Text context requires a session-enabled command.")
+	}
 	if len(in.Inputs) > 0 {
 		if _, err := a.selectedInputs(p, lease, in.Inputs); err != nil {
 			return nil, false, err
@@ -78,12 +87,12 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 	}
 	imageInput := false
 	for _, id := range in.Inputs {
-		if input := a.inputs[id]; input != nil && (input.MediaType == "image/png" || input.MediaType == "image/jpeg") {
+		if input := a.inputs[id]; input != nil && (input.MediaType == "image/png" || input.MediaType == "image/jpeg" || input.MediaType == "image/webp" || input.MediaType == "image/gif") {
 			imageInput = true
 		}
 	}
 	if plan.Kind == "image-edit" && !imageInput {
-		return nil, false, fail(400, "image_required", "Image editing needs a supplied PNG or JPEG.")
+		return nil, false, fail(400, "image_required", "Image editing needs a supplied PNG, JPEG, WebP or GIF.")
 	}
 	job := &Job{ID: secret(), PairingID: p.ID, Request: in, RequestHash: hash, LeaseID: lease, Status: "awaiting_approval", Billing: "none", Revision: 1, CreatedAt: a.now(), Plan: plan, ActionHash: plan.ActionHash, ActionTitle: title}
 	for _, id := range in.Inputs {
@@ -116,6 +125,9 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		// risking execution again after a crash or ambiguous submission.
 		if err := a.reserveReceipt(key, Receipt{JobID: job.ID, Hash: hash, ToolSetHash: in.ToolSetHash, LeaseHash: digest(lease)}); err != nil {
 			return err
+		}
+		if len(in.Inputs) > 0 || plan.Kind == "image-generate" || plan.Kind == "image-edit" || plan.Kind == "command" && a.actions[plan.Action].Files {
+			markFileScope(s, job)
 		}
 		s.Jobs = append(s.Jobs, job)
 		if c := s.Conversations[in.ConversationID]; c != nil {

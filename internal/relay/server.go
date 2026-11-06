@@ -243,7 +243,7 @@ func (s *Server) Handler() http.Handler {
 		if s.project(w, r) == nil {
 			return
 		}
-		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
+		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "filePermissionsVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
 	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
@@ -340,6 +340,10 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	p := s.projects[t.ProjectID]
 	if e != nil || inv.AppID != p.AppID || inv.AppUser != t.AppUser || inv.Origin != p.Origin {
 		problem(w, 400, "identity_mismatch")
+		return
+	}
+	if t.RequestedPermissions.Files && inv.FilePermissionsVersion != 1 {
+		problem(w, 409, "desktop_update_required")
 		return
 	}
 	if (t.LogoURL != "" || t.RequestedPermissions.AutomaticApprovals) && inv.ConnectionReviewVersion != 1 {

@@ -21,6 +21,7 @@ export interface JobRequest {
   conversationId?: string;
  outputSchema?: Record<string,unknown>;
  inputs?: string[];
+ contexts?:string[];
 }
 export interface Job {
   toolOperations?: ToolOperationRecord[];
@@ -38,7 +39,7 @@ export interface AdmissionStatus { available: boolean; kind?: 'native' | 'comman
 export interface Pairing {
   groupsDeclared?: boolean;
   id: string; appId: string; appUser: string; name: string; origin: string;
-  deviceId: string; automatic: boolean; paused: boolean; revoked: boolean; mode: 'restricted' | 'commands'; actions?: Record<string, string>;
+  deviceId: string; files:boolean; automatic: boolean; paused: boolean; revoked: boolean; mode: 'restricted' | 'commands'; actions?: Record<string, string>;
 }
 export interface Capability {
   integration?: 'codex' | 'claude' | 'custom'; sessions?: boolean; streaming?: boolean; isolation?: 'native' | 'os-account';
@@ -48,7 +49,7 @@ export interface Capability {
 }
 export interface ActionArgument { name: string; title?: string; type?: string; default?: string; rejectNull?: boolean; choices?: { title?: string; value: string }[] }
 export interface CommandAction { id: string; title?: string; arguments: ActionArgument[] | null; timeout: number; available: boolean; sessions: boolean }
-export interface Capabilities {toolInputSchemaVersion?:number;toolOperationDetailsVersion?:number;connectionReviewVersion?:number;scopedToolsVersion?:number; limits?:Record<string,number>;routingVersion?: number; routingConfigured?: boolean; appToolPermissions?:'application';fileTransfer:boolean;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
+export interface Capabilities {filePermissionsVersion?:number;textContextVersion?:number;toolResultFilesVersion?:number;toolInputSchemaVersion?:number;toolOperationDetailsVersion?:number;connectionReviewVersion?:number;scopedToolsVersion?:number; limits?:Record<string,number>;routingVersion?: number; routingConfigured?: boolean; appToolPermissions?:'application';fileTransfer:boolean;nativeFileInputsVersion?:number;maxTextBytes:number; protocolVersion: 2; pairing: Pairing; providers: Capability[]; actions: CommandAction[]; connectionTest: boolean; leaseSeconds: number; modes: string[]; remoteAccess: false }
 const done = (job: Job) => ['completed', 'cancelled', 'timed_out', 'blocked', 'interrupted', 'failed'].includes(job.status);
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function json<T>(response: Response): Promise<T> {
@@ -74,7 +75,7 @@ export interface GroupDefinition extends ActionGroup { children?: GroupDefinitio
 export type ActionGroups = GroupDefinition[] | Record<string, string>;
 export interface Conversation { toolSetHash:string; id: string; group?: string; status: 'open' | 'closed'; code?: string; lastJobId?: string; turns: number; createdAt: string; updatedAt: string }
 export interface SessionOptions { tools?: AppTool[]; mode?: "restricted" | "app-tools" | "workspace"; group?: string; provider?: Provider; action?: string; id?: string }
-export interface MessageOptions { outputSchema?: Record<string,unknown>; inputs?:string[]; prompt?: string; arguments?: Record<string, string>; timeoutSeconds?: number; idempotencyKey?: string }
+export interface MessageOptions { outputSchema?: Record<string,unknown>; inputs?:string[]; contexts?:string[]; prompt?: string; arguments?: Record<string, string>; timeoutSeconds?: number; idempotencyKey?: string }
 export type RunOptions = Omit<JobRequest, 'idempotencyKey' | 'kind'> & { kind?: JobRequest['kind']; idempotencyKey?: string };
 export interface AppToolDefinition {id:string;title:string;description:string;inputSchema:Record<string,unknown>;readOnly?:boolean;operationDetails?:boolean}
 export interface ToolOperation {id:string;title:string;version?:string}
@@ -82,11 +83,11 @@ export interface ToolOperationRecord extends ToolOperation {callId:string;toolId
 export interface ToolCallbackContext {reportOperation:(operation:ToolOperation)=>Promise<void>;idempotencyKey:string;jobId:string;conversationId?:string;requestIdempotencyKey:string;toolSetHash:string;signal:AbortSignal}
 export interface AppTool extends AppToolDefinition {execute:(args:Record<string,unknown>,context:ToolCallbackContext)=>unknown|Promise<unknown>}
 /** App tool metadata is descriptive; its app owns authorization. Legacy grants is always empty. */
-export interface PermissionStatus {tools:Record<string,AppToolDefinition&{hash:string}>;grants:Record<string,{hash:string;automatic:boolean}>;folders:{id:string;name:string;write:boolean;automatic:boolean}[]}
+export interface PermissionStatus {files:boolean;automaticApprovals:boolean;tools:Record<string,AppToolDefinition&{hash:string}>;grants:Record<string,{hash:string;automatic:boolean}>;folders:{id:string;name:string;write:boolean;automatic:boolean}[]}
 /** Suggestions reviewed by the desktop owner before connecting. */
 export interface ConnectionReviewOptions {
   logoURL?: string;
-  requestedPermissions?: { automaticApprovals?: boolean };
+  requestedPermissions?: { automaticApprovals?: boolean; files?:boolean };
 }
 export interface PairingOptions extends ConnectionReviewOptions {
   appId: string; name: string; appUser: string; baseURL?: string; timeoutMs?: number; launchInstalled?: boolean;
@@ -97,7 +98,7 @@ export function connectionReviewOptions(options: ConnectionReviewOptions, origin
     try { url = new URL(options.logoURL); } catch { throw new BridgeError('invalid_logo', 'Supply a direct logo HTTPS URL.', 400); }
     if (typeof options.logoURL !== 'string' || options.logoURL.length > 2048 || url.username || url.password || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(url.hostname) && (!origin || url.origin === origin)))) throw new BridgeError('invalid_logo', 'Supply a logo HTTPS URL, or the app’s loopback HTTP URL.', 400);
   }
-  if (options.requestedPermissions !== undefined && (typeof options.requestedPermissions !== 'object' || options.requestedPermissions === null || Array.isArray(options.requestedPermissions) || Object.keys(options.requestedPermissions).some(key => key !== 'automaticApprovals') || options.requestedPermissions.automaticApprovals !== undefined && typeof options.requestedPermissions.automaticApprovals !== 'boolean')) throw new BridgeError('invalid_permissions', 'automaticApprovals must be a boolean.', 400);
+  if (options.requestedPermissions !== undefined && (typeof options.requestedPermissions !== 'object' || options.requestedPermissions === null || Array.isArray(options.requestedPermissions) || Object.entries(options.requestedPermissions).some(([key,value]) => !['automaticApprovals','files'].includes(key) || value !== undefined && typeof value !== 'boolean'))) throw new BridgeError('invalid_permissions', 'automaticApprovals and files must be booleans.', 400);
   return {...(options.logoURL ? {logoURL:options.logoURL} : {}), ...(options.requestedPermissions ? {requestedPermissions:{...options.requestedPermissions}} : {})};
 }
 export interface ClientOptions { minimumRoutingVersion?: number; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
@@ -197,6 +198,7 @@ export class BridgeClient {
   private toolInputSchemaVersion?:number;
   private toolOperationDetailsVersion?:number;
  private executions=new Map<string,ToolExecution>();
+ private filePermissionsVersion?:number; private textContextVersion?:number; private toolResultFilesVersion?:number;
  private sessions=new Map<string,{tools:AppTool[];hash:string}>();
  private activeCalls=new Set<string>();
  private callbackCount=0;
@@ -250,6 +252,7 @@ export class BridgeClient {
       const receive = (event: MessageEvent) => {
         if (event.source !== popup || event.origin !== endpoint || event.data?.requestId !== requestId) return;
         if (event.data.type === 'wdc:pairing-ready') {
+          if(options.requestedPermissions?.files && event.data.filePermissionsVersion!==1){fail(new BridgeError('desktop_update_required','Update WDC desktop to review file access.',409));return;}
           if ((options.logoURL || options.requestedPermissions) && event.data.connectionReviewVersion !== 1) { fail(new BridgeError('desktop_update_required','Update WDC desktop to 0.2.1 or later to review this app’s logo and requested permissions.',409)); return; }
           popup.postMessage({type:'wdc:pairing-request',requestId,appId:options.appId,name:options.name,appUser:options.appUser,...connectionReviewOptions(options,window.location.origin)},endpoint);
         }
@@ -298,8 +301,8 @@ export class BridgeClient {
   get connected(): boolean { return !this.closed && Date.now() < this.leaseExpiresAt; }
   permissions():Promise<PermissionStatus>{return this.request('/v2/permissions').then(json<PermissionStatus>);}
   permissionRequest(id:string):Promise<{id:string;status:string}>{return this.request(`/v2/permissions/${encodeURIComponent(id)}`).then(json<{id:string;status:string}>);}
-  async requestPermissions(request:{workspace?:boolean},options:{wait?:boolean;signal?:AbortSignal}={}):Promise<{id:string;status:string}>{
-    await this.connect();let result=await this.request('/v2/permissions',{method:'POST',body:JSON.stringify(request)}).then(json<{id:string;status:string}>);
+  async requestPermissions(request:{workspace?:boolean;files?:boolean},options:{wait?:boolean;signal?:AbortSignal}={}):Promise<{id:string;status:string}>{
+    await this.connect();if(request.files && this.filePermissionsVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to manage file access.',409);let result=await this.request('/v2/permissions',{method:'POST',body:JSON.stringify(request)}).then(json<{id:string;status:string}>);
     if(options.wait===false)return result;
     while(result.status==='pending'&&!this.closed){if(options.signal?.aborted)throw options.signal.reason??new DOMException('Aborted','AbortError');await sleep(650);result=await this.permissionRequest(result.id);}
     if(result.status!=='completed')throw new BridgeError('permission_denied','The requested access was not approved in WebDeviceCable.',403,{category:'permission'});
@@ -366,7 +369,17 @@ export class BridgeClient {
       try{result=await tool.execute(call.arguments,{idempotencyKey:call.id,jobId:call.jobId,conversationId:call.conversationId,requestIdempotencyKey:call.requestIdempotencyKey,toolSetHash:call.toolSetHash,signal:entry.controller.signal,reportOperation:operation=>this.reportOperation(call,entry,operation)});if(result===undefined)result=null;}
       catch{result={error:'The application could not complete this tool call.'};}
       try{if(byteLength(JSON.stringify(result))>32768)result={error:'Tool result exceeds the 32 KiB limit. Return a summary or file reference.'};}catch{result={error:'Tool result must be serializable JSON.'};}
-      if(!this.closed&&!entry.controller.signal.aborted)await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result})}).then(json);
+      if(!this.closed&&!entry.controller.signal.aborted){
+        try {await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result})}).then(json);}
+        catch(error){
+          // A verified validation rejection did not accept the file result. Do
+          // not rerun the handler; deliver its JSON plus an explicit file error.
+          if(!result||typeof result!=='object'||!('$wdc' in result)||result.$wdc!=='tool-result'||!(error instanceof BridgeError)||![400,403].includes(error.status)||!['invalid_input','invalid_result','files_not_granted'].includes(error.code)||this.closed||entry.controller.signal.aborted)throw error;
+          let fallback:unknown={result:'result' in result?result.result:null,fileDelivery:{ok:false,code:error.code,message:'The application tool may have completed, but its files could not be delivered. Do not claim to have inspected them or repeat the tool automatically.'}};
+          if(byteLength(JSON.stringify(fallback))>32768)fallback={error:'The application tool may have completed, but its file result could not be delivered. Never repeat it automatically.'};
+          await this.request(`/v2/tool-calls/${call.id}/result`,{method:'POST',body:JSON.stringify({result:fallback})}).then(json);
+        }
+      }
     }catch{/* No automatic replay of uncertain tool operations. */}
   }
   private async reportOperation(call:ToolCall,entry:ToolExecution,operation:ToolOperation):Promise<void>{
@@ -401,7 +414,8 @@ export class BridgeClient {
     const request = {...input,idempotencyKey:input.idempotencyKey ?? crypto.randomUUID()};
     const body = serialize(request);
     if(byteLength(body)>40960)throw validation('request_too_large','Message exceeds 40 KiB.');
-    const scope=this.sessions.get(id);
+    this.checkExecutionInputs(input);
+ const scope=this.sessions.get(id);
     const installed=this.install(request.idempotencyKey,scope?.tools??[],body,id,scope?.hash);
     let uncertain=false;
     try { return this.observe(await this.request(`/v2/conversations/${encodeURIComponent(id)}/turns`,{method:'POST',body}).then(json<Job>)); }
@@ -426,13 +440,29 @@ export class BridgeClient {
   }
   capabilities(): Promise<Capabilities> { return this.request('/v2/capabilities').then(json<Capabilities>); }
   async preflight(request: Omit<JobRequest,'idempotencyKey'>, features: string[] = []):Promise<AdmissionStatus>{
-    const tools=captureTools(request.tools,request.mode);const body=creationBody({request:{...request,tools:definitions(tools),idempotencyKey:'preflight-check'},features},true);await this.connect();this.checkTools(tools);return this.request('/v2/admission',{method:'POST',body}).then(json<AdmissionStatus>);
+    const tools=captureTools(request.tools,request.mode);const body=creationBody({request:{...request,tools:definitions(tools),idempotencyKey:'preflight-check'},features},true);await this.connect();this.checkTools(tools);this.checkExecutionInputs(request,features);return this.request('/v2/admission',{method:'POST',body}).then(json<AdmissionStatus>);
   }
   /** File bytes stay unchanged and scoped to this requesting tab. */
   async upload(file: Blob, name = 'input'): Promise<UploadedInput> {
-    await this.connect(); if(file.size<0||file.size>8*1024*1024)throw new BridgeError('invalid_input','Files must be at most 8 MiB.',400);
+    await this.connect();if(this.filePermissionsVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to approve file access before uploading files.',409);
+    return this.uploadInput(file,name,'/v2/inputs');
+  }
+  /** Large prompt text, never a local file or custom-program file manifest. */
+  async uploadContext(text:string):Promise<UploadedInput>{
+    if(typeof text!=='string'||text.includes('\0')||byteLength(text)>128*1024)throw validation('invalid_context','Text context must be NUL-free UTF-8 of at most 128 KiB.');
+    await this.connect();if(this.textContextVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to send large text context without file access.',409);
+    return this.uploadInput(new Blob([text],{type:'text/plain'}),'Conversation context','/v2/contexts');
+  }
+  /** Hold the supplied uploads until the owning execution finishes. */
+  toolResult(result:unknown,inputs:string[]):unknown{
+    if(this.toolResultFilesVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to return files to the chat AI.',409);
+    if(!Array.isArray(inputs)||inputs.length<1||inputs.length>8||new Set(inputs).size!==inputs.length||inputs.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id)))throw validation('invalid_input','Supply 1–8 completed upload IDs.');
+    return {$wdc:'tool-result',result,inputs:[...inputs]};
+  }
+  private async uploadInput(file:Blob,name:string,path:string):Promise<UploadedInput>{
+     if(file.size<0||file.size>8*1024*1024)throw new BridgeError('invalid_input','Files must be at most 8 MiB.',400);
     const data=new Uint8Array(await file.arrayBuffer()), sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data))).map(b=>b.toString(16).padStart(2,'0')).join('');
-    const input=await this.request('/v2/inputs',{method:'POST',body:JSON.stringify({name,mediaType:file.type,size:data.length,sha256})}).then(json<UploadedInput>);
+    const input=await this.request(path,{method:'POST',body:JSON.stringify({name,mediaType:file.type,size:data.length,sha256})}).then(json<UploadedInput>);
     try {
       for(let offset=0;offset<data.length;offset+=24576){const part=data.subarray(offset,offset+24576);let binary='';for(const byte of part)binary+=String.fromCharCode(byte);await this.request(`/v2/inputs/${input.id}`,{method:'PUT',body:JSON.stringify({offset,data:btoa(binary)})}).then(json);}
       return input;
@@ -441,6 +471,7 @@ export class BridgeClient {
   removeInput(id:string):Promise<{ok:boolean}>{return this.request(`/v2/inputs/${encodeURIComponent(id)}`,{method:'DELETE'}).then(json<{ok:boolean}>);}
   /** Signed/encrypted chunks, checked again against the signed file hash. */
   async artifact(job: Job, artifact: Artifact = job.artifacts?.[0] as Artifact):Promise<Blob>{
+    await this.connect();this.checkExecutionInputs({kind:"image-generate"});
     if(!artifact||!Number.isSafeInteger(artifact.size)||artifact.size<0||artifact.size>8*1024*1024)throw new BridgeError('invalid_artifact','Invalid output file.',400);
     const data=new Uint8Array(artifact.size);let offset=0;
     while(offset<data.length){const part=await this.request(`/v2/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(artifact.id)}/${offset}`).then(json<{id:string;offset:number;data:string;complete:boolean}>);const bytes=Uint8Array.from(atob(part.data),c=>c.charCodeAt(0));if(part.id!==artifact.id||part.offset!==offset||bytes.length<1||bytes.length>24576||offset+bytes.length>data.length||part.complete!==(offset+bytes.length===data.length))throw new BridgeError('verification_failed','Invalid output file chunk.',0);data.set(bytes,offset);offset+=bytes.length;}
@@ -461,7 +492,8 @@ export class BridgeClient {
         if(capabilities.scopedToolsVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to 0.2.0 or later before using this SDK.',409);
         this.legacyToolCountLimit=capabilities.limits?.toolsPerExecution;
         this.toolInputSchemaVersion=capabilities.toolInputSchemaVersion;this.toolOperationDetailsVersion=capabilities.toolOperationDetailsVersion;
-        const {pairing} = capabilities;
+        this.filePermissionsVersion=capabilities.filePermissionsVersion;this.textContextVersion=capabilities.textContextVersion;this.toolResultFilesVersion=capabilities.toolResultFilesVersion;
+ const {pairing} = capabilities;
         if (this.options.minimumRoutingVersion && (capabilities.routingVersion ?? 1) < this.options.minimumRoutingVersion)
           throw new BridgeError('desktop_update_required','Update WebDeviceCable before configuring workflow models and reasoning.',409);
         if (this.options.account && (pairing.appId !== this.options.account.appId || pairing.appUser !== this.options.account.appUser || pairing.origin !== appOrigin(this.options.origin) || pairing.deviceId !== this.options.connection.identity.deviceId)) throw new BridgeError('identity_mismatch','This connection belongs to another app or account. Disconnect and pair this account.',403);
@@ -510,12 +542,16 @@ export class BridgeClient {
   async submit(request: JobRequest): Promise<Job> {
     if (this.closed) throw new BridgeError('lease_required', 'Call connect() for this requesting tab first.', 410);
     const tools=captureTools(request.tools,request.mode);const body=creationBody({...request,tools:definitions(tools)});
-    this.checkTools(tools);
+    this.checkTools(tools);this.checkExecutionInputs(request);
     const installed=this.install(request.idempotencyKey,tools,body);
     let uncertain=false;
     try { return this.observe(await json<Job>(await this.request('/v2/jobs', { method: 'POST', body }))); }
     catch (error) { uncertain=!(error instanceof BridgeError&&error.status>0&&!networkError(error));return unknownSubmission(error, request.idempotencyKey); }
     finally{this.settleSubmission(request.idempotencyKey,installed,uncertain);}
+  }
+  private checkExecutionInputs(request:{kind?:string;inputs?:string[];contexts?:string[]},features:string[]=[]):void{
+    if((request.inputs?.length||request.kind==='image-generate'||request.kind==='image-edit'||features.some(feature=>['fileTransfer','imageInput','documentInput','imageGeneration','imageEditing'].includes(feature))) && this.filePermissionsVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to approve file access before using files or images.',409);
+    if(request.contexts?.length && this.textContextVersion!==1)throw new BridgeError('desktop_update_required','Update WebDeviceCable to accept text context.',409);
   }
   private checkTools(tools:AppTool[]):void {
     const count=tools.length, schema=tools.some(tool=>!legacyToolSchema(tool.inputSchema)),operation=tools.some(tool=>tool.operationDetails);

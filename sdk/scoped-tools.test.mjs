@@ -312,3 +312,16 @@ test('new tool features fail before submission against older desktops',async()=>
   } finally {await p.client.close();}
  }
 });
+
+
+test('a verified file-result rejection returns its uncertainty without repeating the claimed handler',async()=>{
+ const p=peer();let executed=0;
+ p.beforeRequest=(path,body)=>path.endsWith('/result')&&body.result?.$wdc==='tool-result'?Response.json({error:{code:'invalid_input',message:'This upload belongs to another lease.'}},{status:400}):undefined;
+ try {
+  await p.client.connect();const job=await p.client.submit({kind:'action',idempotencyKey:'foreign-file-result',tools:[tool(()=>{executed++;return {$wdc:'tool-result',result:{saved:true},inputs:['a'.repeat(64)]};})]});
+  p.calls.push(callback(job,'file-callback'));
+  await until(()=>p.results.length===1);
+  assert.equal(executed,1);assert.equal(p.claims.length,1);
+  assert.deepEqual(p.results[0].result.result,{saved:true});assert.equal(p.results[0].result.fileDelivery.code,'invalid_input');assert.match(p.results[0].result.fileDelivery.message,/do not.*repeat/i);
+ } finally {await p.client.close();}
+});

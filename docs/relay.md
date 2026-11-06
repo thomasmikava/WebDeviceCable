@@ -159,6 +159,8 @@ Run `npm ci --prefix tests/relay-contract`, `go test -race ./internal/relay ./in
 After packaging, set `WDC_RELAY_SDK=dist/relay-client/cjs/relay.js` or `WDC_RELAY_SDK=dist/relay-client/relay.js` to exercise the shipped CommonJS or ESM entry with the same Docker harness. The harness always registers its projects through the management API and checks independent projects on one desktop, cross-project isolation, key rotation, restart and project revocation alongside the direct client. CI exercises both formats and verifies their runtime exports and TypeScript declarations.
 
 
-## Connection review preview
+## Connection review
 
-The unpublished 0.2.1 preview accepts `logoURL` and `requestedPermissions: { automaticApprovals: true }` on `RelayClient.enroll`, matching browser pairing. Suggestions are stored with the enrollment ticket and reviewed on the desktop; the user can change them before approval. They do not alter existing connections. See [connection review](connection-review.md) for local testing, image limits and rollout requirements.
+Connection review accepts `logoURL` and `requestedPermissions: { automaticApprovals: true }` on `RelayClient.enroll`, matching browser pairing. Suggestions are stored with the enrollment ticket and reviewed on the desktop; the user can change them before approval. They do not alter existing connections. See [connection review](connection-review.md) for local testing, image limits and rollout requirements.
+
+Version 0.2.2 [file permissions](file-permissions.md) add optional `requestedPermissions.files` to relay enrollment. The backend uses the same desktop-approved grant, `requestPermissions({files:true})`, bounded `uploadContext()` / `contexts`, and file tool-result API as browser clients. The relay advertises `filePermissionsVersion:1` under project authentication and refuses a file suggestion if the desktop invitation cannot prove review support. Ordinary text context must not use `upload()` or require a file grant. Existing connections keep all their identities and other permissions, with file access off until explicitly approved.

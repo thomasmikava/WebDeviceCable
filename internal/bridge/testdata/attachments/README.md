@@ -1,0 +1,1 @@
+These synthetic documents contain only the attachment marker “saffron” and a small task table. Regenerate with `scripts/generate-attachment-fixtures.py`; its development tools are not desktop dependencies. The legacy DOC is a minimal Word 97 compound document built from the MS-DOC/MS-CFB structures. No third-party document content is included.

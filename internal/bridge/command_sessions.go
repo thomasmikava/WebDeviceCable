@@ -97,12 +97,16 @@ func (a *App) startConversationTurn(job *Job) {
 	run := &commandRun{jobID: job.ID, limit: a.textLimit(), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
 	a.commands[job.ID] = run
 	inputs, err := a.selectedInputs(a.state.Pairings[job.PairingID], job.LeaseID, job.Request.Inputs)
+	prompt, promptError := a.executionPrompt(job)
+	if err == nil {
+		err = promptError
+	}
 	if err != nil {
 		run.complete(err, failureFor(400, "invalid_input", "Supplied files are no longer available."))
 		close(run.stopped)
 		return
 	}
-	turn := conversationTurn{JobID: job.ID, Prompt: job.Request.Prompt, Arguments: job.Request.Arguments, Run: run, Inputs: inputs}
+	turn := conversationTurn{JobID: job.ID, Prompt: prompt, Arguments: job.Request.Arguments, Run: run, Inputs: inputs}
 	conversation := a.conversations[job.Request.ConversationID]
 	if conversation == nil {
 		processContext, stop := context.WithCancel(context.Background())
@@ -266,6 +270,19 @@ func (c *commandConversation) loop(ctx context.Context, action configuredAction,
 				}
 				owner.mu.Unlock()
 				err = customOptions(info, target, action.continuing)
+			}
+			if err == nil && len(turn.Inputs) > 0 && !info.Files {
+				err = fail(400, "unsupported_feature", "This custom AI program no longer supports supplied files.")
+			}
+			if err == nil {
+				owner.mu.Lock()
+				j := findJob(&owner.state, turn.JobID)
+				allowed := j != nil && owner.state.Pairings[j.PairingID] != nil && owner.state.Pairings[j.PairingID].Files
+				if info.Files && allowed && j != nil {
+					err = owner.update(func(s *State) error { markFileScope(s, findJob(s, turn.JobID)); return nil })
+				}
+				owner.mu.Unlock()
+				action.Files = info.Files && allowed
 			}
 			if err == nil {
 				account := info.Account

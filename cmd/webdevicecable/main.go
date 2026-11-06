@@ -59,6 +59,9 @@ func run(args []string) error {
 		launchURI = args[1]
 		args = append([]string{"start"}, args[2:]...)
 	}
+	if len(args) == 1 && args[0] == "internal-document" {
+		return bridge.RunDocumentHelper()
+	}
 	if len(args) == 1 && args[0] == "internal-mcp" {
 		return bridge.RunMCPHelper()
 	}

@@ -55,9 +55,9 @@ func RunMCPHelper() error {
 				callErr = e
 				break
 			}
-			data, e := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+			data, e := io.ReadAll(io.LimitReader(resp.Body, (24<<20)+1))
 			resp.Body.Close()
-			if e != nil || resp.StatusCode != 200 || json.Unmarshal(data, &result) != nil {
+			if e != nil || len(data) > 24<<20 || resp.StatusCode != 200 || json.Unmarshal(data, &result) != nil {
 				callErr = errors.New("private tool request failed")
 			}
 		default:
@@ -134,11 +134,14 @@ func (a *App) startToolAdapter(ctx context.Context, c *commandConversation, defi
 			return
 		}
 		data, err := a.invokeNativeTool(active.ctx, active.jobID, in.Params.Name, in.Params.Arguments)
-		text := string(data)
-		if err != nil {
-			text = err.Error()
+		var content []any
+		if err == nil {
+			content, err = a.nativeToolContent(active.ctx, active.jobID, data, false)
 		}
-		writeJSON(w, 200, map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": err != nil})
+		if err != nil {
+			content = []any{map[string]any{"type": "text", "text": err.Error()}}
+		}
+		writeJSON(w, 200, map[string]any{"content": content, "isError": err != nil})
 	})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 6 * time.Minute, MaxHeaderBytes: 4096}
 	go server.Serve(listener)

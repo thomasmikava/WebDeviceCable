@@ -28,6 +28,7 @@ import (
 var b64 = base64.RawURLEncoding
 
 type invitation struct {
+	FilePermissionsVersion  int    `json:"filePermissionsVersion,omitempty"`
 	ConnectionReviewVersion int    `json:"connectionReviewVersion,omitempty"`
 	V                       int    `json:"v"`
 	Secret                  string `json:"secret"`

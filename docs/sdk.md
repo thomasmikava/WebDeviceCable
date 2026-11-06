@@ -13,11 +13,11 @@ Start with [Integrate WDC](integrate.md) for the complete browser setup. `Connec
 const { connection } = await BridgeClient.requestPairing({
   appId: 'writer.example', name: 'Writer', appUser: signedInUser.id,
   logoURL: 'https://writer.example/logo.png',
-  requestedPermissions: { automaticApprovals: true },
+  requestedPermissions: { automaticApprovals: true, files: true },
 });
 ```
 
-The optional logo and requested permission fields require the [unpublished 0.2.1 local preview](connection-review.md). The user can edit the proposed approval setting before Connect. The logo appears as app identity; replacement, upload and removal are available in the connected app’s settings. Omitting `automaticApprovals` retains Ask each time. Existing pairings are unchanged.
+Logo and approval suggestions use [connection review](connection-review.md); the new optional file suggestion requires the [file-permission candidate](file-permissions.md). The user can edit the proposed approval setting before Connect. The logo appears as app identity; replacement, upload and removal are available in the connected app’s settings. Omitting `automaticApprovals` retains Ask each time. Existing pairings are unchanged.
 
 The packaged application registers `webdevicecable://connect`. The SDK opens a small connection window, offers to launch WDC and waits for explicit approval on **Connections**. The launch URL carries a public key, request ID and origin, never an invitation or control secret. The installed launcher enables a bounded rendezvous; the browser then proves possession of that key using its actual Origin. Invitation delivery is signed and encrypted, and the invitation is bound to the requesting key. Requests expire after five minutes.
 
@@ -105,13 +105,15 @@ render(job.json); // independently schema-checked by WDC
 await bridge.removeInput(input.id);
 
 const picture = await bridge.run({
-  kind: 'image-generate', provider: 'codex', prompt: 'A yellow circle on white.',
+  kind: 'image-generate', group: 'ai.images', prompt: 'A yellow circle on white.',
 });
 const png = await bridge.artifact(picture); // Blob; verified encrypted chunks + hash
-// Editing: upload the PNG, then kind:'image-edit', inputs:[reference.id].
+// Editing: upload the original image(s), then kind:'image-edit', inputs:[reference.id].
 ```
 
-Session messages accept the same `inputs` and `outputSchema` fields. Uploads are tab-bound and memory-only; keep them until the approved request starts. They are removed on tab-lease expiry/revocation. A failed/ambiguous upload is discarded; upload again explicitly rather than replaying a partial chunk. Outputs remain pairing-scoped until history deletion. Do not log file contents or treat model text as trusted HTML. `job.billing` is `native_subscription` only once native execution starts, otherwise `none`; usage is reported only when supplied by the native client. See [supported formats, schema subset, sizes and native-cache behavior](native-execution.md).
+Declare `ai.images` as an AI group, and let the owner choose its image-capable program in WDC. Grouped text/image submissions and `preflight` use that route without an explicit provider. Image generation/editing currently require a Codex route; preflight reports incompatible or unavailable routes without starting inference. Direct requests without a group can instead supply `provider: 'codex'` (or another configured program ID). Browser and relay clients use the same selection rules.
+
+Session messages accept the same `inputs` and `outputSchema` fields. Uploads are tab-bound and memory-only; keep them until the owning execution finishes. They are removed on tab-lease expiry/revocation. A failed/ambiguous upload is discarded; upload again explicitly rather than replaying a partial chunk. Outputs remain pairing-scoped until history deletion. Do not log file contents or treat model text as trusted HTML. `job.billing` is `native_subscription` only once native execution starts, otherwise `none`; usage is reported only when supplied by the native client. See [supported formats, schema subset, sizes and native-cache behavior](native-execution.md).
 
 
 ## Tools and permission APIs
@@ -135,3 +137,8 @@ A conflicting submission never removes the original execution's callbacks. Match
 Desktop capabilities and authenticated relay `GET /relay/v1/capabilities` advertise `scopedToolsVersion:1`, `toolInputSchemaVersion:1`, `toolOperationDetailsVersion:1` and explicit byte/schema budgets. Version 0.2.1 removes the fixed tool-count cap; current capabilities omit `toolsPerExecution`. New SDKs return a clear desktop/relay update requirement if a proposed catalog exceeds an older peer's advertised positive count cap, before submission or callback registration. Definition, schema and ordinary-request byte checks remain local SDK validation errors where possible. See [execution limits and example](integrate.md#optional-app-tools-and-folders).
 
 Text output defaults to 1 MiB, configured by `bridge.maxTextBytes` (4 KiB–2 MiB). Exceeding it produces `output_limit` with retained partial output. Negotiated `fragments-v1` transparently handles larger signed/encrypted snapshots, including Unicode boundaries; `stream()` continues yielding complete verified replacement snapshots. Pairing identities do not change. Native sessions follow the tab lease without a default idle timeout; owner-defined command session timeouts remain available.
+
+
+`upload()` preserves arbitrary original file bytes; file-enabled commands/custom programs decide which formats they understand. Check desktop `nativeFileInputsVersion >= 1` before relying on the expanded built-in document adapter path. Claude receives PDF documents directly; Codex PDF and native Office inputs use bounded adapter representations, with explicit errors for unreadable content. See [native execution](native-execution.md) for budgets and reader limits.
+
+File access is independent of automatic execution. See [file permissions and text context](file-permissions.md) for one-time grants, revocation, `uploadContext()` / `contexts`, and `toolResult()` image/file callback results. These APIs require the coordinated 0.2.2 desktop and relay release.

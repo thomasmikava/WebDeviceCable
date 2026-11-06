@@ -16,6 +16,12 @@ import (
 // Re-executed test binary stands in for the installed CLI. These tests never
 // contact a provider and exercise the real process/permission/session path.
 func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "internal-document" {
+		if RunDocumentHelper() != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "claude" {
 		claudeFixtureMain()
 		os.Exit(0)
@@ -81,6 +87,9 @@ func claudeFixtureMain() {
 		os.Exit(95)
 	}
 	id, mode := value("--session-id"), value("--model")
+	if fixtureMode, err := os.ReadFile(filepath.Join(root, "stream-mode")); err == nil {
+		mode = string(fixtureMode)
+	}
 	dir, _ := os.Getwd()
 	prompts := []string{}
 	scanner := bufio.NewScanner(os.Stdin)
@@ -118,6 +127,25 @@ func claudeFixtureMain() {
 		}
 		emit(map[string]any{"type": "system", "subtype": "ui_invalidate", "message": "Sign-in state refreshed", "session_id": id})
 		emit(map[string]any{"type": "system", "subtype": "init", "session_id": id, "cwd": dir, "claude_code_version": claudeMinimumVersion, "model": "fixture-native-model", "permissionMode": "dontAsk", "apiKeySource": "none", "tools": tools, "mcp_servers": mcp, "skills": []string{}})
+		if mode == "progress" || mode == "progress-cross" || mode == "progress-missing" {
+			progressSession := id
+			if mode == "progress-cross" {
+				progressSession = "foreign-session-private"
+			} else if mode == "progress-missing" {
+				progressSession = ""
+			}
+			// Captured shape of a foreground MCP tool heartbeat in Claude 2.1.308.
+			// Content-shaped extras must never become assistant output.
+			emit(map[string]any{"type": "tool_progress", "session_id": progressSession, "parent_tool_use_id": "parent-tool-private", "tool_use_id": "parent-tool-private-heartbeat-0", "tool_name": "mcp__wdc__fixture", "heartbeat": true, "elapsed_time_seconds": 30, "message": "progress-is-not-assistant-output", "event": map[string]any{"type": "content_block_delta", "delta": map[string]string{"type": "text_delta", "text": "progress-is-not-assistant-output"}}})
+		}
+		if strings.HasPrefix(mode, "parent-") {
+			event := map[string]any{"type": strings.TrimPrefix(mode, "parent-"), "session_id": id, "parent_tool_use_id": "parent-tool-private"}
+			if mode == "parent-system" {
+				event["subtype"] = "init"
+			}
+			emit(event)
+			continue
+		}
 		if mode == "cross" {
 			id = "another-session"
 		}
@@ -273,7 +301,23 @@ func TestClaudeOwnedSessionStreamsContinuesAndCancels(t *testing.T) {
 }
 
 func TestClaudeProtocolAndIsolationFailures(t *testing.T) {
-	for _, tc := range []struct{ mode, code string }{{"badtools", "native_isolation_unavailable"}, {"badmcp", "native_isolation_unavailable"}, {"cross", "native_protocol_error"}, {"tooluse", "permission_denied"}, {"hook", "permission_denied"}, {"malformed", "native_protocol_error"}, {"limit", "rate_limited"}, {"oversized", "invalid_model_output"}} {
+	for _, tc := range []struct{ mode, code string }{
+		{"badtools", "native_isolation_unavailable"},
+		{"badmcp", "native_isolation_unavailable"},
+		{"cross", "native_protocol_error"},
+		{"progress-cross", "native_protocol_error"},
+		{"progress-missing", "native_protocol_error"},
+		{"parent-assistant", "native_protocol_error"},
+		{"parent-stream_event", "native_protocol_error"},
+		{"parent-result", "native_protocol_error"},
+		{"parent-system", "native_protocol_error"},
+		{"parent-unknown", "native_protocol_error"},
+		{"tooluse", "permission_denied"},
+		{"hook", "permission_denied"},
+		{"malformed", "native_protocol_error"},
+		{"limit", "rate_limited"},
+		{"oversized", "invalid_model_output"},
+	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			f, _ := claudeFixture(t)
 			origin := "https://chat.example"
@@ -289,7 +333,48 @@ func TestClaudeProtocolAndIsolationFailures(t *testing.T) {
 			if job.Status != "failed" || job.Code != tc.code {
 				t.Fatalf("unsafe or incorrect completion: %+v", job)
 			}
+			if strings.Contains(job.Diagnostic, "foreign-session-private") || strings.Contains(job.Diagnostic, "parent-tool-private") {
+				t.Fatal("protocol diagnostic retained raw session or tool identity", job.Diagnostic)
+			}
+			if strings.HasPrefix(tc.mode, "progress-") && !strings.Contains(job.Diagnostic, `type="tool_progress" subtype="" session_matches=false`) {
+				t.Fatal("missing safe event attribution for rejected progress", job.Diagnostic)
+			}
 		})
+	}
+}
+
+func TestClaudeToolProgressPreservesOutputAndContinuingSession(t *testing.T) {
+	f, root := claudeFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "stream-mode"), []byte("progress"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	origin := "https://chat.example"
+	token, _ := f.pair(t, "chat", origin, "alice", true)
+	lease := f.lease(t, origin, token)
+	c := createConversation(t, f, origin, token, lease, map[string]any{"provider": "claude"})
+	var previousPID int
+	for i, prompt := range []string{"Remember saffron", "Recall the word"} {
+		id := conversationTurnJob(t, f, origin, token, lease, c, fmt.Sprintf("claude-progress-%d", i), prompt)
+		job := waitClaudeJob(t, f, id, func(j *Job) bool {
+			if strings.Contains(j.Output, "progress-is-not-assistant-output") {
+				t.Fatal("progress content reached the assistant stream", j.Output)
+			}
+			return terminal(j.Status)
+		})
+		if job.Status != "completed" {
+			t.Fatalf("foreground tool heartbeat ended the session: %+v", job)
+		}
+		var output struct {
+			Prompts []string `json:"prompts"`
+			PID     int      `json:"pid"`
+		}
+		if err := json.Unmarshal([]byte(job.Output), &output); err != nil {
+			t.Fatal("progress content polluted assistant output", err, job.Output)
+		}
+		if len(output.Prompts) != i+1 || output.Prompts[i] != prompt || i > 0 && output.PID != previousPID {
+			t.Fatal("progress notification lost the native session context", output)
+		}
+		previousPID = output.PID
 	}
 }
 
