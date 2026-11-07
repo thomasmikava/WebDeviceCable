@@ -28,7 +28,8 @@ type LaunchIntent struct {
 
 func ParseLaunchURI(raw string) (LaunchIntent, error) {
 	u, err := url.Parse(raw)
-	if err != nil || len(raw) > 4096 || u.Scheme != "webdevicecable" || u.Path != "" || u.Fragment != "" || u.User != nil {
+	// Windows URL canonicalization adds a root slash to authority-only links.
+	if err != nil || len(raw) > 4096 || u.Scheme != "webdevicecable" || (u.EscapedPath() != "" && u.EscapedPath() != "/") || u.Fragment != "" || u.User != nil {
 		return LaunchIntent{}, fail(400, "invalid_launch", "Invalid WebDeviceCable connection link.")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
