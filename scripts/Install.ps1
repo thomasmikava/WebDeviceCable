@@ -12,6 +12,9 @@ Copy-Item (Join-Path $PSScriptRoot 'WebDeviceCable.exe') $bridgeDestination -For
 Copy-Item (Join-Path $PSScriptRoot 'WebDeviceCable Launcher.exe') $bridgeDestination -Force
 Copy-Item (Join-Path $PSScriptRoot 'Uninstall.cmd') $bridgeDestination -Force
 Copy-Item (Join-Path $PSScriptRoot 'Uninstall.ps1') $bridgeDestination -Force
+foreach ($bridgeNotice in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'build-manifest.json')) {
+    Copy-Item (Join-Path $PSScriptRoot $bridgeNotice) $bridgeDestination -Force
+}
 $bridgeShell = New-Object -ComObject WScript.Shell
 $bridgeShortcut = $bridgeShell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'WebDeviceCable.lnk'))
 $bridgeShortcut.TargetPath = Join-Path $bridgeDestination 'WebDeviceCable Launcher.exe'

@@ -4,7 +4,7 @@ Start with [installation instructions](../INSTALL.md). Windows/Linux native Code
 
 Use a throwaway Rorido workspace or synthetic prompts/files. Record WDC version, OS version/architecture, browser/version and the exact native client/version shown in Settings. No access to your credentials, data directory or normal documents is needed for a useful report.
 
-1. Install from the downloaded archive. Open from the Start/applications menu or Applications, confirm one tray/menu-bar icon and reopen the control panel from it. Check the `webdevicecable:` launch from the website; invitation pairing is a separate fallback.
+1. Install from the downloaded installer (Windows `.exe`, macOS `.pkg`) or archive. On Windows, check a fresh install and an upgrade from the older ZIP/`Install.cmd` version; settings and connections should survive. Open from the Start/applications menu or Applications, confirm one tray/menu-bar icon and reopen the control panel from it. Check the `webdevicecable:` launch from the website; invitation pairing is a separate fallback.
 2. Run WDC's connection test before inference. Approve the correct website/account, choose program/model groups and confirm that a new connection cannot execute automatically until you allow it.
 3. In Rorido, try chat with one harmless app tool, a rule clarification, a short syllabus and a dummy quiz rubric/grade. Check cancellation. Leave credit fallback off to verify that a disconnected desktop gives an error instead of consuming credits.
 4. Where the installed Codex client supports it, generate a simple image and edit that image. Report unsupported capabilities exactly as shown; do not change native isolation settings to bypass a refusal.

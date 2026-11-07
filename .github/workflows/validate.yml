@@ -27,6 +27,17 @@ jobs:
       - run: npm run check:sdk-drift
       - run: scripts/check.sh
       - run: npm run test:package
+      - name: Install Windows packaging tools
+        run: |
+          case "$RUNNER_OS" in
+            macOS) brew install makensis sevenzip ;;
+            Windows)
+              choco install nsis 7zip --yes --no-progress
+              echo 'C:\Program Files (x86)\NSIS' >> "$GITHUB_PATH"
+              echo 'C:\Program Files\7-Zip' >> "$GITHUB_PATH"
+              ;;
+            Linux) sudo apt-get update && sudo apt-get install -y nsis p7zip-full ;;
+          esac
       - run: node --test scripts/release.test.mjs
       - name: Build local runner
         run: |
@@ -54,7 +65,7 @@ jobs:
           export WDC_RELEASE_PUBLIC_KEY=$(node --input-type=module -e "import{readFileSync}from'node:fs';import{createPublicKey}from'node:crypto';console.log(createPublicKey(readFileSync('keys/community-release.pub')).export({format:'der',type:'spki'}).subarray(-32).toString('base64'))")
           case "$RUNNER_OS" in
             macOS) python3 scripts/package.py --community --target darwin/arm64 ;;
-            Windows) python scripts/package.py --community --target windows/amd64 ;;
+            Windows) python scripts/package.py --community --target windows/amd64 --target windows/arm64 ;;
             Linux) python3 scripts/package.py --community --target linux/amd64 ;;
           esac
           node --input-type=module <<'JS'

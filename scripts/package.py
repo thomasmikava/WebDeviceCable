@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'dist'
 VERSION = json.loads((ROOT/'package.json').read_text())['version']
 TARGETS = ['linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64']
+DOWNLOAD_NAMES = json.loads((ROOT/'scripts'/'download-names.json').read_text())
 SPARKLE_VERSION = '2.10.1'
 SPARKLE_SHA256 = '1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27'
 
@@ -67,6 +68,15 @@ def zip_stage(stage, destination, mac):
 def checksums(paths):
     return ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in sorted(paths))
 
+def nsis_compiler():
+    compiler = os.environ.get('WDC_MAKENSIS') or shutil.which('makensis')
+    if not compiler and os.name == 'nt':
+        candidate = Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)'))/'NSIS'/'makensis.exe'
+        if candidate.is_file(): compiler = str(candidate)
+    if not compiler:
+        raise SystemExit('Windows installers require NSIS 3 (macOS: brew install makensis; Windows: choco install nsis).')
+    return compiler
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target',action='append',choices=TARGETS)
@@ -76,6 +86,7 @@ def main():
     parser.add_argument('--out-dir',type=Path,default=OUT,help='Keep release artifacts in a separate directory')
     args=parser.parse_args()
     targets=args.target or TARGETS
+    compiler=nsis_compiler() if any(t.startswith('windows/') for t in targets) else None
     out=args.out_dir.resolve()
     distribution='official' if args.release else 'community' if args.community else 'unsigned-preview'
     pub=''
@@ -101,6 +112,7 @@ def main():
     for target in targets:
         system,arch=target.split('/')
         stem=f'WebDeviceCable-{VERSION}-{system}-{arch}'
+        download=f'WebDeviceCable-{VERSION}-{DOWNLOAD_NAMES[target]}'
         stage=out/'staging'/stem
         if stage.exists(): shutil.rmtree(stage)
         stage.mkdir(parents=True)
@@ -142,7 +154,7 @@ def main():
                     run(['codesign','--force','--timestamp=none','--sign','-',executable])
                 run(['codesign','--force','--timestamp=none','--sign','-',app.parent])
                 run(['codesign','--verify','--deep','--strict',app.parent])
-            archive=out/f'{stem}.zip';zip_stage(stage,archive,True)
+            archive=out/f'{download}.zip';zip_stage(stage,archive,True)
             if args.release:
                 notarize(archive);run(['xcrun','stapler','staple',app.parent]);run(['xcrun','stapler','validate',app.parent]);run(['spctl','--assess','--type','execute','--verbose=2',app.parent]);zip_stage(stage,archive,True)
             produced.append(archive)
@@ -150,7 +162,7 @@ def main():
                 payload=out/'staging'/f'{stem}-payload'
                 if payload.exists(): shutil.rmtree(payload)
                 (payload/'Applications').mkdir(parents=True);shutil.copytree(app.parent,payload/'Applications'/'WebDeviceCable.app',symlinks=True)
-                pkg=out/f'{stem}.pkg';pkg.unlink(missing_ok=True)
+                pkg=out/f'{download}.pkg';pkg.unlink(missing_ok=True)
                 command=['pkgbuild','--root',str(payload),'--identifier',f'org.webdevicecable.local.{arch}','--version',VERSION,'--install-location','/']
                 if args.release: command+=['--sign',require('WDC_INSTALLER_IDENTITY')]
                 run(command+[str(pkg)])
@@ -163,12 +175,24 @@ def main():
             if args.release:
                 for name in ['WebDeviceCable.exe','WebDeviceCable Launcher.exe','Install.ps1','Uninstall.ps1']:
                     run(['powershell.exe','-NoProfile','-File','scripts/sign-windows.ps1','-Path',stage/name,'-CertificateThumbprint',require('WDC_WINDOWS_CERTIFICATE')])
-            archive=out/f'{stem}.zip';zip_stage(stage,archive,False);produced.append(archive)
+            installer=out/f'{download}-Setup.exe';installer.unlink(missing_ok=True)
+            prefix='/' if os.name=='nt' else '-'
+            definitions=dict(VERSION=VERSION,NUMERIC_VERSION=VERSION.split('-')[0],ARCH=arch,
+                             ARCH_LABEL='x64' if arch=='amd64' else 'ARM64',STAGE=stage,OUTPUT=installer)
+            run([compiler,prefix+'V2',*[f'{prefix}D{key}={value}' for key,value in definitions.items()],
+                 ROOT/'scripts'/'windows-installer.nsi'])
+            if args.release:
+                run(['powershell.exe','-NoProfile','-File','scripts/sign-windows.ps1','-Path',installer,'-CertificateThumbprint',require('WDC_WINDOWS_CERTIFICATE')])
+            produced.append(installer)
+            if args.release:
+                # Existing signed updaters consume ZIP payloads, not setup programs.
+                # Community/manual downloads contain only the EXE installer.
+                archive=out/f'{download}-Update.zip';zip_stage(stage,archive,False);produced.append(archive)
         else:
             shutil.copy(ROOT/'internal'/'bridge'/'web'/'logo.svg',stage/'webdevicecable.svg')
             for source,name in [('install-linux.sh','install.sh'),('uninstall-linux.sh','uninstall.sh')]:
                 shutil.copy(ROOT/'scripts'/source,stage/name);(stage/name).chmod(0o755)
-            archive=out/f'{stem}.tar.gz';archive.unlink(missing_ok=True)
+            archive=out/f'{download}.tar.gz';archive.unlink(missing_ok=True)
             with tarfile.open(archive,'w:gz') as handle: handle.add(stage,arcname=stem)
             produced.append(archive)
         print(f'Built WebDeviceCable {target} ({distribution})',flush=True)

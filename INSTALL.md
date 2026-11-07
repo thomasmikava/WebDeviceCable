@@ -4,24 +4,28 @@ Download only from [WebDeviceCable releases](https://github.com/thomasmikava/Web
 
 ## Choose a download
 
-| Computer | Archive |
+| Computer | Download filename ending |
 | --- | --- |
-| Mac with Apple silicon | `darwin-arm64.zip` |
-| Mac with an Intel processor | `darwin-amd64.zip` |
-| Windows with Intel/AMD processor | `windows-amd64.zip` |
-| Windows on Arm | `windows-arm64.zip` |
-| Linux with Intel/AMD processor | `linux-amd64.tar.gz` |
-| Linux on Arm64 | `linux-arm64.tar.gz` |
+| Mac with Apple silicon (M1, M2, M3, M4 or later) | `macOS-Apple-Silicon.pkg` |
+| Mac with an Intel processor | `macOS-Intel.pkg` |
+| Windows with an Intel or AMD 64-bit processor (most PCs) | `Windows-x64-Setup.exe` |
+| Windows on Arm (for example, Snapdragon) | `Windows-ARM64-Setup.exe` |
+| Linux with an Intel or AMD 64-bit processor | `Linux-x64.tar.gz` |
+| Linux on Arm64 | `Linux-ARM64.tar.gz` |
 
-Each filename begins with `WebDeviceCable-VERSION-`. macOS also has `.pkg` installers. Published SHA-256 checksums cover the exact downloads; on macOS use `shasum -a 256 FILE`, on Linux `sha256sum FILE`, or on Windows `Get-FileHash FILE -Algorithm SHA256`, and compare with the release's `SHA256SUMS`.
+Each filename begins with `WebDeviceCable-VERSION-`, for example `WebDeviceCable-0.2.3-Windows-x64-Setup.exe`. **x64 works on both Intel and AMD PCs.** On Windows, find your processor under **Settings → System → About → System type**. macOS also has ZIP downloads if you prefer dragging the app into Applications.
+
+Releases through 0.2.2 use the older names: `windows-amd64.zip` means Windows x64 (Intel/AMD), `darwin` means macOS, and `arm64` means Arm. Those older Windows ZIPs require extraction and `Install.cmd`. New releases use the names above.
+
+Published SHA-256 checksums cover the exact downloads; on macOS use `shasum -a 256 FILE`, on Linux `sha256sum FILE`, or on Windows `Get-FileHash FILE -Algorithm SHA256`, and compare with the release's `SHA256SUMS`.
 
 The manifest has an independent Ed25519 signature. The public key is committed at `keys/community-release.pub`; release maintainers can verify it with `node scripts/release.mjs verify-community --dir DOWNLOAD_DIRECTORY --public-key TRUSTED_PUBLIC_KEY`. Use a key obtained from a trusted checkout or separately verified source, rather than trusting a replacement key supplied with an unknown download. This signature authenticates the release bytes; it does not remove OS installation warnings.
 
 ## Install and open
 
-**macOS:** unzip and drag `WebDeviceCable.app` into Applications, then open it. If macOS reports an unidentified developer, use the app-specific **System Settings → Privacy & Security → Open Anyway** option after checking the source. The `.pkg` is an alternative that installs the same app. Do not turn off Gatekeeper globally. See [Apple's instructions](https://support.apple.com/102445).
+**macOS:** open the `.pkg` installer, then open WebDeviceCable from Applications. Alternatively, unzip the ZIP and drag `WebDeviceCable.app` into Applications. If macOS reports an unidentified developer, use the app-specific **System Settings → Privacy & Security → Open Anyway** option after checking the source. Do not turn off Gatekeeper globally. See [Apple's instructions](https://support.apple.com/102445).
 
-**Windows:** extract the entire ZIP, then double-click `Install.cmd`. It installs for the current user and creates a Start-menu shortcut and URL association. If Windows shows an unrecognized-app warning, check the download source before using its app-specific continuation option. Some managed devices or Smart App Control configurations block unsigned apps entirely; report the message instead of disabling device-wide protection. See [Microsoft's explanation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+**Windows:** double-click the `Windows-x64-Setup.exe` or `Windows-ARM64-Setup.exe` download and follow the installer. It installs for the current user without administrator access, creates a Start-menu shortcut and URL association, and offers to open WDC when finished. No ZIP extraction is needed. Installing over an older ZIP-based installation preserves settings and connections. If Windows shows an unrecognized-app warning, check the download source before using its app-specific continuation option. Some managed devices or Smart App Control configurations block unsigned apps entirely; report the message instead of disabling device-wide protection. See [Microsoft's explanation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
 
 **Linux:** extract the archive, open a terminal in its folder and run `./install.sh`. Start WebDeviceCable from the applications menu, or run `~/.local/bin/WebDeviceCable desktop`. A desktop without StatusNotifier/AppIndicator support may not display a tray icon; the applications-menu shortcut and local control panel still work. No root install is needed.
 

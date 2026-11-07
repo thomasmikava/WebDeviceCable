@@ -1,0 +1,8 @@
+{
+  "linux/amd64": "Linux-x64",
+  "linux/arm64": "Linux-ARM64",
+  "darwin/amd64": "macOS-Intel",
+  "darwin/arm64": "macOS-Apple-Silicon",
+  "windows/amd64": "Windows-x64",
+  "windows/arm64": "Windows-ARM64"
+}

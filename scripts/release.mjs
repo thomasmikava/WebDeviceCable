@@ -3,7 +3,11 @@ import {generateKeyPairSync,createPrivateKey,createPublicKey,sign,verify,createH
 import {readFile,writeFile,mkdir,copyFile,mkdtemp,rm,readdir,lstat} from 'node:fs/promises';
 import {resolve,relative,sep,join} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 const root=resolve(import.meta.dirname,'..');
+const downloadNames=JSON.parse(readFileSync(join(root,'scripts/download-names.json'),'utf8'));
+function downloadStem(version,os,arch){return `WebDeviceCable-${version}-${downloadNames[`${os}/${arch}`]}`;}
+function inspectArtifact(file,stem){return JSON.parse(run(process.platform==='win32'?'python':'python3',[join(root,'scripts/inspect-artifact.py'),file,`${stem}/build-manifest.json`]));}
 const params=process.argv.slice(2),command=params.shift();
 function option(name,fallback){const i=params.indexOf(name);if(i<0)return fallback;if(!params[i+1]||params[i+1].startsWith('--'))throw Error(`${name} needs a value`);return params[i+1];}
 function run(file,args){const r=spawnSync(file,args,{cwd:root,encoding:'utf8'});if(r.status!==0)throw Error(`${file} failed: ${(r.stderr??'').slice(0,1500)}`);return r.stdout;}
@@ -24,15 +28,17 @@ async function communityFiles(dir,publicKey){
  if(report.distribution!=='community'||report.automaticUpdates!==false||report.releasePublicKey!==publicKey||!/^\d+\.\d+\.\d+$/.test(report.version)||!/^[a-f0-9]{40}$/.test(report.sourceCommit))throw Error('Invalid community release manifest.');
  if(JSON.stringify([...report.targets].sort())!==JSON.stringify([...targets].sort()))throw Error('A community release needs all six targets.');
  const expected=[];
+ // Older published releases keep their original names and ZIP installers.
+ const legacy=report.artifacts.includes(`WebDeviceCable-${report.version}-linux-amd64.tar.gz`);
  for(const target of targets){
   const [os,arch]=target.split('/'),stem=`WebDeviceCable-${report.version}-${os}-${arch}`;
-  const name=stem+(os==='linux'?'.tar.gz':'.zip');expected.push(name);
+  const download=legacy?stem:downloadStem(report.version,os,arch);
+  const name=download+(!legacy&&os==='windows'?'-Setup.exe':os==='linux'?'.tar.gz':'.zip');expected.push(name);
   await boundedFile(dir,name);
-  const inspect=`import sys,json,zipfile,tarfile\np=sys.argv[1];name=sys.argv[2]\nif p.endswith('.zip'):\n z=zipfile.ZipFile(p);i=z.getinfo(name);assert i.file_size<16384;data=z.read(name)\nelse:\n z=tarfile.open(p);i=z.getmember(name);assert i.isfile() and i.size<16384;data=z.extractfile(i).read()\nprint(data.decode())`;
-  const manifest=JSON.parse(run(process.platform==='win32'?'python':'python3',['-c',inspect,join(dir,name),`${stem}/build-manifest.json`]));
-  for(const field of ['version','distribution','sourceCommit','automaticUpdates','releasePublicKey'])if(manifest[field]!==report[field])throw Error(`Inconsistent archive manifest: ${name} (${field})`);
-  if(manifest.target!==target||manifest.protocolVersion!==2||manifest.stateVersion!==1)throw Error(`Incompatible archive: ${name}`);
-  if(os==='darwin')expected.push(stem+'.pkg');
+  const manifest=inspectArtifact(join(dir,name),stem);
+  for(const field of ['version','distribution','sourceCommit','automaticUpdates','releasePublicKey'])if(manifest[field]!==report[field])throw Error(`Inconsistent artifact manifest: ${name} (${field})`);
+  if(manifest.target!==target||manifest.protocolVersion!==2||manifest.stateVersion!==1)throw Error(`Incompatible artifact: ${name}`);
+  if(os==='darwin')expected.push(download+'.pkg');
  }
  if(JSON.stringify([...report.artifacts].sort())!==JSON.stringify([...expected].sort()))throw Error('Unexpected or missing community artifacts.');
  return {report,files:[...expected,'build-manifest.json','INSTALL.md','RELEASE_PUBLIC_KEY.pem'].sort()};
@@ -83,12 +89,18 @@ try{
   if(!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))throw Error('A stable semantic version is required.');
   const artifacts=[],files=[];
   for(const os of ['linux','darwin','windows'])for(const arch of ['amd64','arm64']){
-   const name=`WebDeviceCable-${version}-${os}-${arch}.${os==='linux'?'tar.gz':'zip'}`,file=join(dir,name),data=await readFile(file);
+   const download=downloadStem(version,os,arch);
+   const name=download+(os==='windows'?'-Update.zip':os==='linux'?'.tar.gz':'.zip'),file=join(dir,name),data=await boundedFile(dir,name);
    if(data.length>256*1024*1024)throw Error('Release artifact exceeds the update limit.');
    // Inspect only one bounded manifest; never extract untrusted archive entries.
-   const inspect=`import sys,json,zipfile,tarfile\np=sys.argv[1];name=sys.argv[2]\nif p.endswith('.zip'):\n z=zipfile.ZipFile(p);i=z.getinfo(name);assert i.file_size<16384;data=z.read(name)\nelse:\n z=tarfile.open(p);i=z.getmember(name);assert i.isfile() and i.size<16384;data=z.extractfile(i).read()\nprint(data.decode())`;
-   const manifest=JSON.parse(run(process.platform==='win32'?'python':'python3',['-c',inspect,file,`WebDeviceCable-${version}-${os}-${arch}/build-manifest.json`]));
+   const manifest=inspectArtifact(file,`WebDeviceCable-${version}-${os}-${arch}`);
    if(manifest.distribution!=='official'||manifest.version!==version||manifest.target!==`${os}/${arch}`||manifest.releasePublicKey!==publicKey)throw Error(`${name} is not an official build with this release key.`);
+   if(os==='windows'){
+    const setup=download+'-Setup.exe';await boundedFile(dir,setup);
+    const installed=inspectArtifact(join(dir,setup),'');
+    for(const field of ['version','target','distribution','sourceCommit','automaticUpdates','releasePublicKey','protocolVersion','stateVersion'])if(installed[field]!==manifest[field])throw Error(`Installer/update payload mismatch: ${setup} (${field})`);
+    files.push(setup);
+   }
    artifacts.push({os,arch,url:`https://github.com/thomasmikava/WebDeviceCable/releases/download/v${version}/${name}`,size:data.length,sha256:createHash('sha256').update(data).digest('hex')});files.push(name);
   }
   if(process.platform!=='darwin')throw Error('Finalize on macOS to generate and verify signed Sparkle feeds.');
@@ -98,7 +110,7 @@ try{
   for(const arch of ['amd64','arm64']){
    const temporary=await mkdtemp(join(root,'.local/appcast-'));
    try{
-    const name=`WebDeviceCable-${version}-darwin-${arch}.zip`;await copyFile(join(dir,name),join(temporary,name));
+    const name=downloadStem(version,'darwin',arch)+'.zip';await copyFile(join(dir,name),join(temporary,name));
     run(join(sparkle,'bin/generate_appcast'),['--ed-key-file',resolve(sparkleKey),'--maximum-deltas','0','--download-url-prefix',`https://github.com/thomasmikava/WebDeviceCable/releases/download/v${version}/`,temporary]);
     const appcast=`appcast-darwin-${arch}.xml`;await copyFile(join(temporary,'appcast.xml'),join(dir,appcast));
     run(join(sparkle,'bin/sign_update'),['--verify','--ed-key-file',resolve(sparkleKey),join(dir,appcast)]);files.push(appcast);
@@ -108,7 +120,7 @@ try{
   const signature=sign(null,Buffer.concat([domain,payload]),key);
   if(!verify(null,Buffer.concat([domain,payload]),createPublicKey(key),signature))throw Error('Release signature verification failed.');
   await writeFile(join(dir,'updates.json'),JSON.stringify({payload:payload.toString('base64'),signature:signature.toString('base64')})+'\n');files.push('updates.json');
-  for(const name of await readdir(dir))if(name===`WebDeviceCable-${version}-darwin-arm64.pkg`||name===`WebDeviceCable-${version}-darwin-amd64.pkg`||name===`webdevicecable-sdk-${version}.tgz`)files.push(name);
+  for(const name of await readdir(dir))if(['amd64','arm64'].some(arch=>name===downloadStem(version,'darwin',arch)+'.pkg')||name===`webdevicecable-sdk-${version}.tgz`)files.push(name);
   const lines=[];for(const name of files.sort())lines.push(`${createHash('sha256').update(await readFile(join(dir,name))).digest('hex')}  ${name}\n`);
   await writeFile(join(dir,'SHA256SUMS'),lines.join(''));
   console.log(`WebDeviceCable ${version}: verified metadata and checksums prepared locally. Nothing published.`);
