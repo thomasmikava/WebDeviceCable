@@ -21,6 +21,11 @@ for Codex or `CLAUDE_CONFIG_DIR` for Claude Code. WDC does not create native
 sign-ins, copy credentials or sign in on your behalf. Use that client's own
 login flow with the same profile configuration first.
 
+On Windows, automatic Codex detection also checks the desktop app's native CLI
+under `%LOCALAPPDATA%\OpenAI\Codex\bin`. WDC selects the most recently installed
+runtime containing `codex.exe` when Codex is absent from PATH. A CLI on PATH or
+an explicitly configured executable still takes precedence.
+
 **Check connection** invokes that entry's executable and profile without
 inference. It reports installation, compatibility, version, models and account
 identity when supplied. Sign-in and native safety checks are per entry. A missing
