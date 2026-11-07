@@ -43,17 +43,20 @@ Function .onInit
 !endif
 FunctionEnd
 
+; Native Windows makensis does not normalize mixed host path separators.
+; Change directory once so File instructions work on every build host.
+!cd "${STAGE}"
 Section "WebDeviceCable"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File "${STAGE}/build-manifest.json"
-  File "${STAGE}/WebDeviceCable.exe"
-  File "${STAGE}/WebDeviceCable Launcher.exe"
-  File "${STAGE}/Install.ps1"
-  File "${STAGE}/Uninstall.cmd"
-  File "${STAGE}/Uninstall.ps1"
-  File "${STAGE}/LICENSE"
-  File "${STAGE}/THIRD_PARTY_NOTICES.md"
+  File "build-manifest.json"
+  File "WebDeviceCable.exe"
+  File "WebDeviceCable Launcher.exe"
+  File "Install.ps1"
+  File "Uninstall.cmd"
+  File "Uninstall.ps1"
+  File "LICENSE"
+  File "THIRD_PARTY_NOTICES.md"
   ; Use native PowerShell so Installed Apps registration matches the app's
   ; native registry view, even though the NSIS bootstrap itself is 32-bit.
   nsExec::ExecToStack '"$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\Install.ps1" -NoOpen'
