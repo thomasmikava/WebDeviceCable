@@ -376,7 +376,8 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	requestID := secret()
 	origin := "https://website.example:8443"
-	uri := "webdevicecable://connect?" + url.Values{"requestId": {requestID}, "origin": {origin}, "publicKey": {publicKey(key)}}.Encode()
+	// Exercise the full consent flow with the root slash added by Windows.
+	uri := "webdevicecable://connect/?" + url.Values{"requestId": {requestID}, "origin": {origin}, "publicKey": {publicKey(key)}}.Encode()
 	object(t, f.rawReq("POST", "/api/launch-intents", f.origin, "", "", map[string]string{"uri": uri}, true), 403)
 	object(t, f.rawReq("POST", "/api/launch-intents", "", f.a.adminKey, "", map[string]string{"uri": uri}, false), 201)
 	object(t, f.rawReq("POST", "/api/launch-intents", "", f.a.adminKey, "", map[string]string{"uri": uri}, false), 409)
