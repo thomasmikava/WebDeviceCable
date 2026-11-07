@@ -1,7 +1,7 @@
 {
   "name": "webdevicecable",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.2.5",
   "scripts": {
     "build:sdk": "tsc -p sdk/tsconfig.json",
     "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",

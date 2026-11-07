@@ -46,13 +46,14 @@ func nativePath(name string) (string, error) {
 		return p, nil
 	}
 	home, _ := os.UserHomeDir()
-	paths := []string{filepath.Join(home, ".local", "bin", name), filepath.Join(home, ".npm-global", "bin", name), "/opt/homebrew/bin/" + name, "/usr/local/bin/" + name}
+	paths := nativePlatformPaths(name)
+	paths = append(paths, filepath.Join(home, ".local", "bin", name), filepath.Join(home, ".npm-global", "bin", name), "/opt/homebrew/bin/"+name, "/usr/local/bin/"+name)
 	if name == "codex" {
 		paths = append(paths, "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
 	}
 	for _, p := range paths {
-		if info, e := os.Stat(p); e == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return p, nil
+		if resolved, e := exec.LookPath(p); e == nil {
+			return resolved, nil
 		}
 	}
 	return "", fmt.Errorf("%s is not installed", name)
