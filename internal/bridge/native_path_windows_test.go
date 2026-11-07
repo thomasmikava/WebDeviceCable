@@ -76,3 +76,23 @@ func TestNativePathFindsWindowsCodexDesktopWithoutPATH(t *testing.T) {
 		t.Fatalf("searched a relative installation root: %v", paths)
 	}
 }
+
+func TestNativePathFindsWindowsUserBinWithoutPATH(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"codex", "claude"} {
+		path := filepath.Join(bin, name+".exe")
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := nativePath(name); err != nil || got != path {
+			t.Fatalf("%s: got %q, %v; want %q", name, got, err, path)
+		}
+	}
+}
