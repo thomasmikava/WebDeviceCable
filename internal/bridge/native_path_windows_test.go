@@ -10,6 +10,7 @@ import (
 func TestNativePathFindsWindowsCodexDesktopWithoutPATH(t *testing.T) {
 	local := t.TempDir()
 	t.Setenv("LOCALAPPDATA", local)
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	root := filepath.Join(local, "OpenAI", "Codex", "bin")
@@ -81,6 +82,7 @@ func TestNativePathFindsWindowsUserBinWithoutPATH(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0700); err != nil {
@@ -94,5 +96,63 @@ func TestNativePathFindsWindowsUserBinWithoutPATH(t *testing.T) {
 		if got, err := nativePath(name); err != nil || got != path {
 			t.Fatalf("%s: got %q, %v; want %q", name, got, err, path)
 		}
+	}
+}
+
+func TestNativePathFindsWindowsClaudeDesktopWithoutPATH(t *testing.T) {
+	for _, packaged := range []bool{false, true} {
+		name := "desktop"
+		if packaged {
+			name = "store"
+		}
+		t.Run(name, func(t *testing.T) {
+			local, roaming, home := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("LOCALAPPDATA", local)
+			t.Setenv("APPDATA", roaming)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("PATH", t.TempDir())
+			root := filepath.Join(roaming, "Claude", "claude-code")
+			if packaged {
+				root = filepath.Join(local, "Packages", "Claude_fixture", "LocalCache", "Roaming", "Claude", "claude-code")
+			}
+			write := func(path string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			old := filepath.Join(root, "2.1.310", "old", "claude.exe")
+			latest := filepath.Join(root, "2.1.317", "latest", "claude.exe")
+			write(old)
+			write(latest)
+			past := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(filepath.Dir(old), past, past); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "2.1.318", "incomplete", "claude.exe"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			check := func(want string) {
+				t.Helper()
+				if got, err := nativePath("claude"); err != nil || got != want {
+					t.Fatalf("got %q, %v; want %q", got, err, want)
+				}
+			}
+			check(latest)
+			if err := os.Remove(latest); err != nil {
+				t.Fatal(err)
+			}
+			check(old)
+			cli := filepath.Join(home, ".local", "bin", "claude.exe")
+			write(cli)
+			check(cli) // Keep a standalone CLI preferred over a desktop cache.
+			pathCLI := filepath.Join(t.TempDir(), "claude.exe")
+			write(pathCLI)
+			t.Setenv("PATH", filepath.Dir(pathCLI))
+			check(pathCLI)
+		})
 	}
 }

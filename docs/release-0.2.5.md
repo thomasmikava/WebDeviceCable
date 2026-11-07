@@ -8,6 +8,11 @@ other runtime components. A CLI on PATH or an explicitly configured executable
 still takes precedence. Windows fallback paths use Windows executable lookup
 rather than requiring Unix execute permission bits.
 
+Also detects Claude Desktop's bundled Code CLI in regular and Windows Store
+installations. A standalone user-bin or PATH installation retains precedence.
+The CLI's own authentication check distinguishes an installed executable from
+a saved CLI login; a Code-tab login is not copied into the CLI profile.
+
 The existing native sign-in, account, and isolation checks still determine
 whether the detected client is ready. No credentials are copied, and detection
 does not start a model request. To return an existing Codex entry to automatic
