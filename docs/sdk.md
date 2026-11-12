@@ -17,7 +17,7 @@ const { connection } = await BridgeClient.requestPairing({
 });
 ```
 
-Logo and approval suggestions use [connection review](connection-review.md); the new optional file suggestion requires the [file-permission candidate](file-permissions.md). The user can edit the proposed approval setting before Connect. The logo appears as app identity; replacement, upload and removal are available in the connected app’s settings. Omitting `automaticApprovals` retains Ask each time. Existing pairings are unchanged.
+Logo and approval suggestions use [connection review](connection-review.md); the new optional file suggestion requires the [file-permission candidate](file-permissions.md). Automatic approvals start off, even when requested by the app; the owner must enable them and confirm before Connect. The logo appears as app identity; replacement, upload and removal are available in the connected app’s settings. Omitting `automaticApprovals` retains Ask each time. Existing pairings are unchanged.
 
 The packaged application registers `webdevicecable://connect`. The SDK opens a small connection window, offers to launch WDC and waits for explicit approval on **Connections**. The launch URL carries a public key, request ID and origin, never an invitation or control secret. The installed launcher enables a bounded rendezvous; the browser then proves possession of that key using its actual Origin. Invitation delivery is signed and encrypted, and the invitation is bound to the requesting key. Requests expire after five minutes.
 

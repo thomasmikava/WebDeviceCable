@@ -10,6 +10,158 @@ try { controlSession=localStorage.getItem(controlStorageKey)??''; } catch { /* R
 function storeControlSession() { try { localStorage.setItem(controlStorageKey,controlSession); } catch { /* This panel still works for the current visit. */ } }
 function forgetControlSession() { try { if(localStorage.getItem(controlStorageKey)===controlSession)localStorage.removeItem(controlStorageKey); } catch {} controlSession=''; }
 
+// Pending routes contain only server-issued IDs. Never match by a name or origin.
+let pendingDefaults=[],pendingInvitations=[],invitationCopies=[],localDevice='',currentInvitation,invitationProgramChosen=false;
+const notificationPreference='wdc-desktop-notifications',panelStorage={local:null,session:null};
+try{panelStorage.local=window.localStorage;}catch{}
+try{panelStorage.session=window.sessionStorage;}catch{}
+let notificationsEnabled=false,notificationHintDismissed=false;
+const notifiedRequests=new Set(),desktopAlerts=new Map();
+try{notificationsEnabled=localStorage.getItem(notificationPreference)==='true';}catch{}
+function readLocal(storage,key,fallback){try{const value=JSON.parse(storage.getItem(key));return Array.isArray(fallback)&&!Array.isArray(value)?fallback:value??fallback;}catch{return fallback;}}
+function writeLocal(storage,key,value){try{storage.setItem(key,JSON.stringify(value));}catch{}}
+function loadDevicePreferences(){
+  if(localDevice===state.deviceId)return;
+  localDevice=state.deviceId;pendingDefaults=readLocal(panelStorage.local,`wdc-defaults:${localDevice}`,[]);
+  invitationCopies=readLocal(panelStorage.session,`wdc-invitations:${localDevice}`,[]);
+  for(const key of readLocal(panelStorage.session,`wdc-notified:${localDevice}`,[]))notifiedRequests.add(key);
+}
+function saveDefaults(){writeLocal(panelStorage.local,`wdc-defaults:${localDevice}`,pendingDefaults);}
+function saveInvitations(){writeLocal(panelStorage.session,`wdc-invitations:${localDevice}`,invitationCopies);}
+function firstReadyProgram(){return state?.providers.find(program=>program.execution && state.programs?.find(item=>item.id===program.id)?.type!=='custom')?.id??'';}
+function fillDefaultPrograms(select,selected=firstReadyProgram()){
+  select.replaceChildren(el('option',{value:''},'Choose after connecting'),...state.providers.map(program=>{
+    const custom=state.programs?.find(item=>item.id===program.id)?.type==='custom';
+    const option=el('option',{value:program.id},`${program.name} · ${custom?'grant access after connecting':program.execution?'Ready':'Unavailable'}`);
+    option.disabled=custom;return option;
+  }));select.value=selected;
+}
+function rememberDefault(identity,provider){
+  if(!provider)return;
+  pendingDefaults.push({...identity,provider,expiresAt:identity.expiresAt||Date.now()+300000});saveDefaults();
+}
+async function applyPendingDefaults(){
+  loadDevicePreferences();
+  for(const entry of [...pendingDefaults]){
+    const request=state.pairingRequests?.find(item=>item.id===entry.requestId);
+    const binding=state.relayConnections?.find(item=>item.relayUrl===entry.relayUrl && item.connectionId===entry.connectionId);
+    const id=entry.pairingId||request?.pairingId||binding?.pairingId;
+    if(id && !entry.pairingId){entry.pairingId=id;saveDefaults();}
+    const pair=state.pairings.find(item=>item.id===id);
+    const remove=()=>{pendingDefaults=pendingDefaults.filter(item=>item!==entry);saveDefaults();};
+    if(pair?.revoked || entry.expiresAt<Date.now()){remove();continue;}
+    if(!pair || entry.retryAfter>Date.now())continue;
+    if(pair.routing?.revision || pair.routing?.default || Object.keys(pair.routing?.groups??{}).length){remove();continue;}
+    try{
+      pair.routing=await api(`/pairings/${pair.id}/routing`,{method:'PUT',body:JSON.stringify({expectedRevision:pair.routing?.revision??0,routing:{default:{provider:entry.provider},groups:{}}})});remove();
+    }catch(error){
+      if(!csrf)return;
+      if(error.status===409){remove();continue;}
+      entry.retryAfter=Date.now()+15000;
+      if(!entry.warned){entry.warned=true;notify(`Couldn’t save the default program for ${pair.name}. Open Programs and models to review it. ${error.message}`);}
+    }
+  }
+}
+function countdown(expiresAt){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));return seconds?`Expires in ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`:'Expired';}
+function showInvitation(entry){
+  currentInvitation=entry;invitation=entry.invitation;$('invite-manual-copy')?.remove();
+  $('invite-token').textContent=`${invitation.slice(0,8)} ··· ${invitation.slice(-8)}`;
+  $('connect-start').hidden=true;$('invite-form').hidden=true;$('invite-result').hidden=false;$('connect-title').textContent='Invitation ready';
+  $('copy-invite').replaceChildren(icon('copy'),'Copy');$('copy-invite').disabled=false;
+  if(!$('connect-dialog').open)$('connect-dialog').showModal();updateCountdowns();$('copy-invite').focus();
+}
+function syncInvitations(invitations){
+  pendingInvitations=invitations.filter(item=>item.manual).map(item=>({pairingId:item.id,...item.pairing,expiresAt:new Date(item.expiresAt).getTime(),invitation:invitationCopies.find(copy=>copy.pairingId===item.id)?.invitation}));
+  invitationCopies=invitationCopies.filter(copy=>pendingInvitations.some(item=>item.pairingId===copy.pairingId));saveInvitations();
+}
+async function cancelInvitation(entry){
+  if(!await confirmAction(`Cancel invitation for ${entry.name}?`,'A copied invitation will stop working. This does not remove an already connected app.','Cancel invitation',true))return;
+  await api(`/invitations/${entry.pairingId}`,{method:'DELETE'});
+  pendingInvitations=pendingInvitations.filter(item=>item.pairingId!==entry.pairingId);
+  invitationCopies=invitationCopies.filter(item=>item.pairingId!==entry.pairingId);saveInvitations();
+  pendingDefaults=pendingDefaults.filter(item=>item.pairingId!==entry.pairingId);saveDefaults();renderInvitations();
+}
+function renderInvitations(){
+  pendingInvitations=pendingInvitations.filter(entry=>entry.expiresAt>Date.now()&&!state.pairings.some(pair=>pair.id===entry.pairingId));
+  invitationCopies=invitationCopies.filter(copy=>pendingInvitations.some(entry=>entry.pairingId===copy.pairingId));saveInvitations();
+  $('pending-invitations').hidden=!pendingInvitations.length;
+  preserveList($('invitation-list'),pendingInvitations.map(entry=>el('article',{class:'pending-invitation','data-key':entry.pairingId},
+    el('div',{class:'app-title'},el('h3',{},entry.name),el('small',{},entry.origin),el('small',{},`Account ID: ${entry.appUser}`),el('small',{'data-expires':entry.expiresAt},countdown(entry.expiresAt)),entry.invitation?null:el('small',{},'Copy is available only in the tab that created this invitation.')),
+    el('div',{class:'actions'},entry.invitation?button('Copy again',async()=>{
+      try{await navigator.clipboard.writeText(entry.invitation);notify('Invitation copied.','success');}catch{showInvitation(entry);$('copy-invite').click();}
+    }):null,button('Cancel',()=>cancelInvitation(entry),'danger')))));
+  updateCountdowns();
+}
+function updateCountdowns(){
+  for(const node of document.querySelectorAll('[data-expires]'))node.textContent=countdown(Number(node.dataset.expires));
+  if(currentInvitation){
+    const used=state?.pairings.some(pair=>pair.id===currentInvitation.pairingId);
+    const pending=pendingInvitations.some(entry=>entry.pairingId===currentInvitation.pairingId);
+    const expired=currentInvitation.expiresAt<=Date.now();
+    $('invite-countdown').textContent=used?'Invitation used.':expired?'Expired':!pending?'Invitation cancelled.':countdown(currentInvitation.expiresAt);
+    $('copy-invite').disabled=!!used||expired||!pending;
+    if($('copy-invite').disabled){delete currentInvitation.invitation;invitation=undefined;$('invite-manual-copy')?.remove();$('invite-token').textContent='';}
+  }
+}
+setInterval(()=>{if(csrf&&state){updateCountdowns();if(pendingInvitations.some(entry=>entry.expiresAt<=Date.now()))renderInvitations();}},1000);
+function notificationAvailable(){return 'Notification' in window;}
+function renderNotificationSetting(){
+  const available=notificationAvailable(),permission=available?Notification.permission:'unsupported';
+  $('desktop-notifications').setAttribute('aria-checked',String(notificationsEnabled && permission==='granted'));
+  $('desktop-notifications').disabled=!available;
+  $('notification-help').textContent=!available?'Desktop notifications are unavailable in this browser. Keep this panel open to review requests.':permission==='denied'?'Your browser has blocked notifications. Allow them for this site in the browser’s site settings, then turn this switch on.':'Get an alert when an app needs your approval and this tab is in the background.';
+}
+async function enableNotifications(){
+  if(!notificationAvailable()){renderNotificationSetting();return;}
+  const permission=Notification.permission==='default'?await Notification.requestPermission():Notification.permission;
+  notificationsEnabled=permission==='granted';writeLocal(panelStorage.local,notificationPreference,notificationsEnabled);
+  renderNotificationSetting();renderAttention();
+  if(permission==='default')notify('Notifications were not enabled. You can try again in Settings.','info');
+  if(permission==='denied')notify('Notifications are blocked. Allow them in your browser’s site settings, then turn them on in Settings.','info');
+}
+$('desktop-notifications').onclick=action(async()=>{
+  if(notificationsEnabled && notificationAvailable() && Notification.permission==='granted'){notificationsEnabled=false;writeLocal(panelStorage.local,notificationPreference,false);renderAttention();}
+  else await enableNotifications();
+});
+$('enable-notifications').onclick=action(enableNotifications);
+$('dismiss-notification-hint').onclick=()=>{notificationHintDismissed=true;$('notification-hint').hidden=true;};
+function renderAttention(){
+  const connections=visibleConnectionRequests().filter(item=>!item.submitted&&!item.error&&!item.expired);
+  const waiting=[...connections.map(item=>({key:`connection:${item.id}`,id:item.id,app:item.name||'New app',body:'Wants to connect to WebDeviceCable.',view:'apps'})),
+    ...state.jobs.filter(job=>job.status==='awaiting_approval').map(job=>({key:`job:${job.id}`,id:job.id,app:state.pairings.find(pair=>pair.id===job.pairingId)?.name||'App',body:job.request.kind==='connection-test'?'Wants to run a connection test.':job.actionTitle?`Wants to run ${job.actionTitle}.`:'Wants approval to run an AI request.',view:'activity'})),
+    ...(state.permissions??[]).map(request=>({key:`access:${request.id}`,id:request.id,app:state.pairings.find(pair=>pair.id===request.pairingId)?.name||'App',body:request.kind==='files'?'Wants to send and receive files.':request.kind==='file-write'?`Wants to edit ${request.name}.`:'Wants access to a folder.',view:'activity'}))];
+  document.title=waiting.length?`(${waiting.length}) WebDeviceCable`:'WebDeviceCable';
+  if(!waiting.length)notificationHintDismissed=false;
+  const enabled=notificationsEnabled && notificationAvailable() && Notification.permission==='granted';
+  $('notification-hint').hidden=!waiting.length||enabled||notificationHintDismissed;
+  renderNotificationSetting();
+  const keys=new Set(waiting.map(item=>item.key));
+  for(const [key,alert]of desktopAlerts)if(!keys.has(key)){alert.close();desktopAlerts.delete(key);}
+  if(!enabled)return;
+  for(const item of waiting){
+    if(notifiedRequests.has(item.key))continue;
+    // Wait for connection inspection so the notification names the actual app.
+    if(item.key.startsWith('connection:')&&!connections.find(request=>request.id===item.id)?.name)continue;
+    notifiedRequests.add(item.key);writeLocal(panelStorage.session,`wdc-notified:${localDevice}`,[...notifiedRequests].slice(-512));
+    if(!document.hidden && document.hasFocus())continue;
+    try{
+      const alert=new Notification(item.app,{body:item.body,tag:`wdc:${state.deviceId}:${item.key}`});desktopAlerts.set(item.key,alert);
+      alert.onclick=()=>{window.focus();location.hash=item.view;route();alert.close();const dialog=[...document.querySelectorAll('dialog[open]')].at(-1);if(dialog)dismissDialog(dialog);else{const card=[...document.querySelectorAll('[data-key]')].find(node=>node.dataset.key===item.id);card?.scrollIntoView({block:'center'});card?.focus({preventScroll:true});}};
+    }catch{ /* Some browsers expose notifications but cannot display them. */ }
+  }
+}
+window.addEventListener('focus',()=>{if(csrf&&state)renderAttention();});
+window.addEventListener('storage',event=>{
+  if(event.key===notificationPreference){notificationsEnabled=event.newValue==='true';if(csrf&&state)renderAttention();}
+  if(event.key===`wdc-defaults:${localDevice}`){pendingDefaults=readLocal(panelStorage.local,event.key,[]);void refresh(true).catch(()=>{});}
+});
+function confirmAutomatic(pair){return confirmAction(`Run requests automatically · ${pair.name}?`,'This app’s requests will run within its allowed access without asking each time. You can turn this off in Access.','Run requests automatically');}
+async function alwaysAllowRequest(pair,job){
+  if(!await confirmAutomatic(pair))return;
+  await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({automatic:true,expectedPermissionsRevision:pair.permissionsRevision??0,permissionSaveId:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','')})});
+  await api(`/jobs/${job.id}/decision`,{method:'POST',body:JSON.stringify({approve:true})});
+}
+
 let noticeTimer;
 const labels = { awaiting_approval:'Needs approval', queued:'Queued', running:'Running', completed:'Done', cancelled:'Cancelled', timed_out:'Timed out', blocked:'Unavailable', interrupted:'Interrupted', failed:'Failed' };
 function el(tag, attrs = {}, ...children) {
@@ -27,14 +179,16 @@ for (const placeholder of document.querySelectorAll('[data-icon]')) placeholder.
 document.querySelector('.skip-link').onclick = event => { event.preventDefault(); $('main-content').focus(); };
 function selectWrap(select) { return el('span', {class:'select-wrap'}, select, icon('chevron')); }
 for (const select of document.querySelectorAll('select')) select.replaceWith(selectWrap(select.cloneNode(true)));
+for (const cancel of document.querySelectorAll('[data-cancel-dialog]')) cancel.onclick = () => $(cancel.dataset.cancelDialog).click();
 function disclosure(text, attrs = {}) { return el('summary', attrs, text, icon('chevron', 'chevron')); }
-function clearErrors() { $('notice').hidden = true; for (const error of document.querySelectorAll('.form-error')) error.remove(); }
+function clearErrors() { $('notice').hidden = true; for (const error of document.querySelectorAll('.form-error, .form-notice')) error.remove(); }
 function notify(error, kind = 'error') {
   clearTimeout(noticeTimer);
   const message = error instanceof Error ? error.message : String(error), dialog = [...document.querySelectorAll('dialog[open]')].at(-1);
-  if (dialog && kind === 'error') {
-    let target = dialog.querySelector('.form-error');
+  if (dialog) {
+    let target = dialog.querySelector('.form-error, .form-notice');
     if (!target) { target = el('p', {class:'form-error',role:'alert'}); const panel = dialog.querySelector('form:not([hidden]), #invite-result:not([hidden])') ?? dialog; (panel.querySelector('.dialog-actions') ?? dialog.querySelector('.dialog-actions')).before(target); }
+    target.className=kind==='error'?'form-error':'form-notice';target.dataset.kind=kind;target.setAttribute('role',kind==='error'?'alert':'status');
     target.textContent = message; return;
   }
   $('notice-text').textContent = message; $('notice').dataset.kind = kind; $('notice').setAttribute('role', kind === 'error' ? 'alert' : 'status'); $('notice').hidden = false;
@@ -52,6 +206,7 @@ function action(fn) { return async event => {
   try { clearErrors(); await fn(event); await refresh(true); } catch (error) { notify(error); }
   finally {
     target?.removeAttribute('aria-busy'); spinner.remove(); if (control) control.disabled = false;
+    if(control?.id==='copy-invite')updateCountdowns();
     const dialog=document.querySelector('dialog[open]');
     if(document.activeElement===document.body && dialog && focusControl?.isConnected && dialog.contains(focusControl) && focusControl.getClientRects().length)focusControl.focus({preventScroll:true});
     if (document.activeElement === document.body && !document.querySelector('dialog[open]')) {
@@ -63,7 +218,7 @@ function action(fn) { return async event => {
 }; }
 async function controlFetch(path, init = {}) {
   const response = await fetch('/api' + path, { ...init, credentials:'omit', headers: { 'Content-Type':'application/json', 'X-Bridge-CSRF':csrf, 'X-Bridge-Session':controlSession, ...init.headers } });
-  if (!response.ok) { const data=await response.json(); if (response.status === 401) lock(); const error=new Error(data.error?.message ?? 'Can’t reach the local runner.');error.status=response.status;error.code=data.error?.code;throw error; }
+  if (!response.ok) { const data=await response.json(); if (response.status === 401) lock(); const error=new Error(data.error?.code==='preferences_changed'?'Programs and models changed in another panel. Close and reopen Programs and models to review them.':data.error?.message ?? 'Can’t reach the local runner.');error.status=response.status;error.code=data.error?.code;throw error; }
   return response;
 }
 async function api(path, init = {}) { return (await controlFetch(path,init)).json(); }
@@ -112,7 +267,7 @@ function jobArtifact(job, artifact, card, history) {
   else queueMicrotask(load);
   return container;
 }
-function lock() {releaseImagePreviews();connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
+function lock() {routingReturn=undefined;for(const alert of desktopAlerts.values())alert.close();desktopAlerts.clear();document.title='WebDeviceCable';pendingInvitations=[];invitationCopies=[];$('invite-manual-copy')?.remove();$('invite-token').textContent='';currentInvitation=undefined;invitation=undefined;if(localDevice)try{panelStorage.session?.removeItem(`wdc-invitations:${localDevice}`);}catch{} localDevice='';notifiedRequests.clear();releaseImagePreviews();connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
 let currentView;
 function route() {
   const view = ['apps','activity','commands','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'apps';
@@ -128,10 +283,10 @@ function keyedControl(key, actionName) {
   return [...(row?.querySelectorAll('[data-action]') ?? [])].find(node => node.dataset.action === actionName);
 }
 for (const [id, returnTo] of [
-  ['connect-dialog', () => $($('connect-app').hidden ? 'connect-first' : 'connect-app')],
+  ['connect-dialog', () => $('connect-app')],
   ['command-dialog', () => editingCommand ? keyedControl(editingCommand.id, 'Edit') : $($('add-command').hidden ? 'add-first-command' : 'add-command')],
-  ['command-access-dialog', () => keyedControl(accessPairID, 'Configure')],
-  ['routing-dialog', () => keyedControl(routingPairID, 'Configure')]
+  ['command-access-dialog', () => keyedControl(accessPairID, 'Access')],
+  ['routing-dialog', () => keyedControl(routingPairID, 'Programs and models')]
 ]) $(id).addEventListener('close', () => requestAnimationFrame(() => {
   if (!document.querySelector('dialog[open]') && (document.activeElement === document.body || document.activeElement === $('main-content') || !document.activeElement?.getClientRects().length)) { const target=returnTo(); (target?.getClientRects().length ? target : $('main-content')).focus({preventScroll:true}); }
 }));
@@ -194,13 +349,14 @@ function appRow(pair) {
   const overrides = Object.values(pair.routing?.groups ?? {}), target = pair.routing?.default;
   const pending = state.jobs.filter(job => job.pairingId === pair.id && job.status === 'awaiting_approval').length+(state.permissions??[]).filter(request=>request.pairingId===pair.id).length;
   const working = state.jobs.some(job => job.pairingId === pair.id && ['queued','running'].includes(job.status));
-  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : 'Connected';
+  const setupNeeded=!target && !overrides.length;
+  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : setupNeeded ? 'Setup needed' : 'Connected';
   const grants = Object.keys(pair.actions ?? {}).length;
   const granted = state.commands.filter(command=>pair.actions?.[command.id]===command.hash).length;
  const folderCount=pair.folders?.length??0;
   const choice = el('div',{class:`connection-choice${!target && !overrides.length ? ' unconfigured' : ''}`},
     el('span',{class:'choice-label'},'Default program'),
-    el('button',{type:'button',class:'connection-program','data-action':'Configure','aria-label':`Program settings for ${pair.name}`,onclick:() => openRouting(pair)},
+    el('button',{type:'button',class:`connection-program${setupNeeded?' attention':''}`,'data-action':'Programs and models','aria-label':`Programs and models for ${pair.name}`,onclick:() => openRouting(pair)},
       el('span',{class:'choice-value'},target?.provider ? providerMark(target.provider,true) : icon(target?.action ? 'terminal' : 'bridge'),target ? targetLabel(target) : overrides.length ? 'Set by group' : 'Choose a program'),icon('chevron','chevron')));
   if(overrides.length) choice.append(el('span',{class:'choice-note'},`${overrides.length} custom group${overrides.length===1?'':'s'}`));
   if(target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution)) choice.append(el('span',{class:'choice-note attention'},'Unavailable for this app'));
@@ -208,26 +364,22 @@ function appRow(pair) {
   const menu = el('details',{class:'app-menu'},el('summary',{class:'icon-button','aria-label':`More options for ${pair.name}`,'data-action':'More options',title:'More options'},icon('more')));
   const menuAction = (label, fn, extra='') => button(label,async () => {menu.open=false;await fn();},extra);
   const items = el('div',{class:'action-menu'},
-    menuAction('Program settings',() => openRouting(pair)),
     menuAction('Connection details',() => openConnectionDetails(pair)),
     menuAction('Edit app',() => openAppAppearance(pair)),
     menuAction(pair.paused ? 'Resume requests' : 'Pause requests',() => api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({paused:!pair.paused})})),
-    state.programs?.some(item=>item.type==='custom') ? menuAction('Custom AI program access',()=>openProgramAccess(pair)) : null,
-    state.commands.length || grants ? menuAction('Command access',() => openCommandAccess(pair)) : null,
-    menuAction('Folder access',() => openPermissions(pair)),
     menuAction('Disconnect',async () => {if(await confirmAction(`Disconnect ${pair.name}?`,'Its active requests will be cancelled. Connecting again requires a new invitation.','Disconnect',true))await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({revoke:true})});},'danger'));
   menu.append(items);
   menu.addEventListener('toggle',() => {if(menu.open && menu.isConnected)for(const other of document.querySelectorAll('.app-menu[open]'))if(other!==menu)other.open=false;});
   const permissions = el('div',{class:'connection-choice'},el('span',{class:'choice-label'},'App access'),
-    el('button',{type:'button',class:'connection-program','data-action':'Permissions','aria-label':`Permissions for ${pair.name}`,onclick:() => openAppPermissions(pair)},el('span',{class:'choice-value'},icon('shield'),'Permissions'),icon('chevron','chevron')),
+    el('button',{type:'button',class:'connection-program','data-action':'Access','aria-label':`Access for ${pair.name}`,onclick:() => openAppPermissions(pair)},el('span',{class:'choice-value'},icon('shield'),'Access'),icon('chevron','chevron')),
     el('span',{class:'choice-note'},`${pair.automatic?'Runs automatically':'Asks each time'} · ${pair.files?'Files allowed':'Files off'}`));
   const access = el('div',{class:'connection-meta'});
   if (folderCount) access.append(button(`${folderCount} shared folder${folderCount===1?'':'s'}`,() => openPermissions(pair),'text-button'));
-  if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openCommandAccess(pair),'text-button'));
+  if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openAppPermissions(pair),'text-button'));
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('strong',{},pair.name),el('small',{},pair.origin))),
-      el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account'},` · Account ID: ${pair.appUser}`)))),
+      el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending||setupNeeded?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
     el('div',{class:'connection-settings'},choice,permissions),
     access.children.length ? access : null);
 }
@@ -245,8 +397,8 @@ function jobCard(job, history = false) {
   const meta = [pair?.name !== name ? pair?.name ?? 'App' : null, clientName,group !== name ? group : null,job.turn ? `Message ${job.turn}` : null,...(history ? [] : [jobTime(job)])].filter(Boolean).join(' · ');
   const node = el(history?'details':'article',{class:history?'history-row':`job-card${job.status==='awaiting_approval'?' approval-card':''}`,'data-key':job.id,tabindex:'-1'});
   const content = history ? el('div',{class:'history-content'}) : node;
-  if(history) node.append(el('summary',{},el('span',{class:`history-symbol status-${job.status}`},icon(job.status==='completed'?'check':job.status==='cancelled'?'close':'inbox')),el('div',{class:'history-title'},el('strong',{},name),el('small',{},meta)),el('span',{class:`job-status status-${job.status}`},labels[job.status]),el('time',{datetime:job.createdAt,title:new Date(job.createdAt).toLocaleString()},jobTime(job)),icon('chevron','chevron')),content);
-  else node.append(el('div',{class:'job-header'},el('div',{},el('div',{class:'job-name'},name),el('div',{class:'job-meta'},meta)),el('span',{class:`job-status status-${job.status}`},labels[job.status])));
+  if(history) node.append(el('summary',{},el('span',{class:`history-symbol status-${job.status}`},icon(job.status==='completed'?'check':job.status==='cancelled'?'close':'inbox')),el('div',{class:'history-title'},el('h3',{},name),el('small',{},meta)),el('span',{class:`job-status status-${job.status}`},labels[job.status]),el('time',{datetime:job.createdAt,title:new Date(job.createdAt).toLocaleString()},jobTime(job)),icon('chevron','chevron')),content);
+  else node.append(el('div',{class:'job-header'},el('div',{},el('h3',{class:'job-name'},name),el('div',{class:'job-meta'},meta)),el('span',{class:`job-status status-${job.status}`},labels[job.status])));
   if (job.request.prompt) content.append(el('pre', {class:'job-prompt'}, job.request.prompt));
   if (command) {
     if (job.request.arguments && Object.keys(job.request.arguments).length) content.append(el('pre', {class:'command-preview'}, Object.entries(job.request.arguments).map(([key,value]) => `${key}: ${value}`).join('\n')));
@@ -274,7 +426,7 @@ function jobCard(job, history = false) {
   if (job.plan?.reasoning) details.push(['Requested reasoning',job.plan.reasoning]);
   if (details.length || job.error?.raw) content.append(el('details',{class:'job-details'},disclosure('Details'),el('dl',{},...details.flatMap(([label,value]) => [el('dt',{},label),el('dd',{},value)])),job.error?.raw ? el('pre',{class:'command-preview diagnostic'},job.error.raw) : null));
   if(command && job.status==='awaiting_approval') content.append(el('p',{class:'permission-caption'},icon('shield'),'Uses your account’s file and network access.'));
-  if (job.status === 'awaiting_approval') content.append(el('div', {class:'actions'}, button('Approve', () => api(`/jobs/${job.id}/decision`, {method:'POST',body:JSON.stringify({approve:true})}), 'primary'), button('Decline', () => api(`/jobs/${job.id}/decision`, {method:'POST',body:JSON.stringify({approve:false})}))));
+  if (job.status === 'awaiting_approval') content.append(el('div', {class:'actions'}, button('Decline', () => api(`/jobs/${job.id}/decision`, {method:'POST',body:JSON.stringify({approve:false})})), pair && !pair.automatic ? button('Run requests automatically',()=>alwaysAllowRequest(pair,job),'allow-automatically') : null, button('Approve', () => api(`/jobs/${job.id}/decision`, {method:'POST',body:JSON.stringify({approve:true})}), 'primary')));
   else if (['queued','running'].includes(job.status)) content.append(el('div', {class:'actions'}, button('Cancel', () => api(`/jobs/${job.id}/cancel`, {method:'POST'}))));
   if(history && !content.children.length)content.append(el('p',{class:'job-detail'},job.detail || labels[job.status]));
   return node;
@@ -287,8 +439,13 @@ function render() {
   const approvals = state.jobs.filter(j => j.status === 'awaiting_approval');
   const pendingCount=approvals.length+(state.permissions?.length??0);$('approval-count').textContent=pendingCount;$('approval-count').hidden=!pendingCount;
   $('runner-state').textContent = state.enabled ? 'Device ready' : 'Requests paused'; $('runner-state').dataset.status = state.enabled ? 'ready' : 'paused'; $('toggle-runner').setAttribute('aria-checked',String(state.enabled));
-  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length || !connectionRequestCount;
-  $('apps-empty').hidden = !!apps.length || !!connectionRequestCount; $('connect-app').hidden = !apps.length;
+  $('app-list-count').textContent = apps.length || ''; $('apps-section-heading').hidden = !apps.length;
+  $('apps-empty').hidden = !!apps.length || !!connectionRequestCount;
+  document.querySelector('.local-clients').hidden=!$('apps-empty').hidden;
+  $('onboarding-programs').replaceChildren(...state.providers.map(nativeChip));
+  $('onboarding-settings').hidden=state.providers.some(program=>program.execution);
+  renderInvitations();renderAttention();
+  if($('connect-dialog').open && !$('invite-form').hidden && !invitationProgramChosen)fillDefaultPrograms($('invite-default-program'));
   $('native-list').replaceChildren(...state.providers.map(nativeChip));
   preserveList($('app-list'),apps.map(appRow));
   const byTime=(a,b)=>b.createdAt.localeCompare(a.createdAt);
@@ -301,16 +458,16 @@ function render() {
   preserveList($('history-jobs'),history.map(job=>jobCard(job,true)));
   $('requests-empty').hidden=!!state.jobs.length || !!state.permissions?.length || Object.values(state.conversations??{}).some(item=>item.status==='open');
   $('clear-history').hidden=!history.length;
+  renderHistorySettings();
   renderCommands(); renderSessions(); renderUpdates();
   for (const control of document.querySelectorAll('[data-sharing]')) control.setAttribute('aria-checked',String(state.sharing?.[control.dataset.sharing] ?? control.dataset.sharing !== 'rawErrors'));
   const openProviders = new Set([...$('provider-list').querySelectorAll('details[open]')].map(node => node.dataset.provider));
   preserveList($('provider-list'),state.providers.map(p=>{
     const program=state.programs?.find(item=>item.id===p.id) ?? {id:p.id,name:p.name,type:p.id};
     const native=state.native?.find(item=>item.id===p.id);
-    return el('article',{class:'provider-item','data-key':p.id,tabindex:'-1'},clientRow(p,native),
+    return el('article',{class:'provider-item settings-card','data-key':p.id,tabindex:'-1'},clientRow(p,native),
       el('p',{class:'program-summary'},`${({codex:'Codex',claude:'Claude Code',custom:'Custom WDC interface'})[program.type] ?? program.type} · ${program.executable || 'Automatically detected'}${program.profileDir ? ' · '+program.profileDir : ' · Default profile'}`),
-      el('div',{class:'actions'},button('Check connection',()=>api(`/programs/${p.id}/check`,{method:'POST'})),button('Edit',()=>openAIProgram(program)),
-        button('Remove',()=>removeAIProgram(program),'danger')),
+      el('div',{class:'actions'},button('Check connection',()=>api(`/programs/${p.id}/check`,{method:'POST'})),button('Edit',()=>openAIProgram(program))),
       el('details',{class:'provider-details','data-provider':p.id,...(openProviders.has(p.id)?{open:''}:{})},disclosure(p.execution?'Connection details':'Availability details'),
         el('div',{class:'detail-body'},el('p',{},native?.detail || p.reason),el('p',{},`Version: ${native?.version || 'Not reported'} · Account: ${native?.account || 'Not reported'}`),
           program.type==='custom'?el('p',{},`Text and streaming${native?.sessions?', continuing conversations':''}. ${native?.files?'Accepts supplied files when the connection allows files.':'This harness does not declare file support.'} Structured output, image generation and app tools are unavailable. Runs with OS account permissions.`):null,
@@ -335,10 +492,10 @@ function refresh(force=false) {
   if(!csrf)return Promise.resolve();
   if(refreshWork)return force?refreshWork.then(()=>refresh()):refreshWork;
   refreshWork=(async()=>{
-    const session=controlSession;const result=await api('/state');if(session!==controlSession || !csrf)return;const next=applyConnectionSnapshot(result);
+    const session=controlSession;const [result,invites]=await Promise.all([api('/state'),api('/invitations')]);if(session!==controlSession || !csrf)return;const next=applyConnectionSnapshot(result);next.invitations=invites.invitations;
     next.pairings=next.pairings.map(pair=>({...pair,reportedName:pair.name,name:pair.displayName||pair.name})).sort((a,b)=>a.id.localeCompare(b.id));
     if(next.securityReset && !securityNoticeShown){securityNoticeShown=true;notify('Security updated. Reconnect your apps.');}
-    const serialized=JSON.stringify(next);state=next;syncIncomingRegistration();
+    state=next;await applyPendingDefaults();if(session!==controlSession || !csrf)return;syncInvitations(next.invitations);const serialized=JSON.stringify(next);syncIncomingRegistration();
     for(const [id,item]of connectionLoads)if(item.submitted && next.relayConnections?.some(binding=>binding.connectionId===item.info.connectionId))connectionLoads.delete(id);
     if($('runner-state').dataset.status==='offline'){$('runner-state').textContent=next.enabled?'Device ready':'Requests paused';$('runner-state').dataset.status=next.enabled?'ready':'paused';}
     const expired=[...connectionLoads.values()].some(item=>!item.expired&&!item.submitted&&item.expiresAt<Date.now());
@@ -372,25 +529,26 @@ function watchConnections() {
 }
 
 function openConnect() {
-  clearErrors(); $('invite-manual-copy')?.remove(); $('invite-copy-hint').textContent='Paste it into your app. Expires in 5 minutes.';
-  $('invite-form').reset(); for(const detail of $('invite-form').querySelectorAll('details'))detail.open=false;
-  $('connect-start').hidden=false; $('invite-form').hidden=true; $('invite-result').hidden=true; $('connect-title').textContent='Connect an app';
+  clearErrors(); $('invite-manual-copy')?.remove();$('copy-invite').disabled=false;
+  invitationProgramChosen=false;$('invite-form').reset();fillDefaultPrograms($('invite-default-program')); for(const detail of $('invite-form').querySelectorAll('details'))detail.open=false;
+  $('connect-start').hidden=false; $('invite-form').hidden=true; $('invite-result').hidden=true; $('connect-title').textContent='Add connection';
   $('invite-commands-section').hidden=!state.commands.length; commandPicker($('invite-commands'),{},$('invite-command-consent')); $('connect-dialog').showModal();
 }
-$('connect-app').onclick=openConnect; $('connect-first').onclick=openConnect;
+$('invite-default-program').onchange=()=>{invitationProgramChosen=true;};
+$('connect-app').onclick=openConnect;
 let reviewedRelay, configuringRelay, processingLaunch=false, relayReviewGeneration=0;
 function relayInput() { const data=new FormData($('relay-form'));return {url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()}; }
 function showRelayReview(info) {
   reviewedRelay=info;
-  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),el('small',{},info.origin))),el('span',{},`Account: ${info.appUser}`),connectionReview(info,`relay:${info.connectionId}`),
+  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),el('small',{},info.origin))),el('span',{},`Account ID: ${info.appUser}`),connectionReview(info,`relay:${info.connectionId}`),
     el('small',{},'This server can request work while the website is closed. Your local approvals and permissions still apply.'));
-  $('relay-review').hidden=false; $('relay-submit').textContent='Approve and choose models'; $('relay-decline').hidden=false;
+  $('relay-review').hidden=false; $('relay-submit').textContent='Approve connection'; $('relay-decline').hidden=false;
 }
 function openRelay() {
   clearErrors(); relayReviewGeneration++;reviewedRelay=undefined; $('relay-form').reset(); $('relay-review').replaceChildren(); $('relay-review').hidden=true;
   $('relay-submit').textContent='Review connection'; $('relay-decline').hidden=true; $('relay-manual').open=true; $('relay-dialog').showModal();
 }
-$('connect-server').onclick=openRelay;
+$('connect-server').onclick=()=>{$('connect-dialog').close();openRelay();};
 $('close-relay').onclick=()=>$('relay-dialog').close();
 $('relay-form').oninput=event=>{if(!['url','code'].includes(event.target.name))return;relayReviewGeneration++;reviewedRelay=undefined;$('relay-submit').textContent='Review connection';$('relay-review').hidden=true;$('relay-decline').hidden=true;};
 $('relay-decline').onclick=action(async()=>{
@@ -407,8 +565,9 @@ $('relay-form').onsubmit=action(async()=>{
   }
   await pendingLogo(reviewDrafts.get(`relay:${reviewedRelay.connectionId}`));
   const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...input,expected:reviewedRelay,...reviewDecision(`relay:${reviewedRelay.connectionId}`)})});
+  rememberDefault({relayUrl:input.url,connectionId:result.connectionId},reviewDrafts.get(`relay:${reviewedRelay.connectionId}`)?.provider);
   configuringRelay={relayUrl:input.url,connectionId:result.connectionId}; $('relay-dialog').close();
-  notify('Approved. Waiting for the website to finish connecting; program settings will open automatically.','success');
+  notify('Approved. Waiting for the website to finish connecting; Programs and models will open automatically.','success');
 });
 async function handleLaunches() {
   if(processingLaunch)return;processingLaunch=true;
@@ -433,23 +592,26 @@ async function handleLaunches() {
     }
   } catch(error){notify(error);} finally {processingLaunch=false;}
 }
-$('show-invitation-form').onclick=()=>{$('connect-start').hidden=true;$('invite-form').hidden=false;$('connect-title').textContent='Create an invitation';$('invite-form').elements.name.focus();};
-$('back-connect').onclick=()=>{$('invite-form').hidden=true;$('connect-start').hidden=false;$('connect-title').textContent='Connect an app';$('show-invitation-form').focus();};
+$('show-invitation-form').onclick=()=>{$('connect-start').hidden=true;$('invite-form').hidden=false;$('connect-title').textContent='Create invitation';$('invite-form').elements.name.focus();};
+$('back-connect').onclick=()=>{$('invite-form').hidden=true;$('connect-start').hidden=false;$('connect-title').textContent='Add connection';$('show-invitation-form').focus();};
 $('close-connect').onclick=$('done-connect').onclick=$('done-connect-start').onclick=()=>$('connect-dialog').close();
 $('dismiss-notice').onclick = () => { $('notice').hidden = true; };
 $('invite-form').onsubmit = action(async event => {
   event.preventDefault(); const data = new FormData(event.target), origin = new URL(String(data.get('origin')).trim()).origin;
   const appId = String(data.get('appId')).trim() || new URL(origin).hostname;
   const grants = selectedCommands($('invite-commands'));
+  if(data.get('automatic')==='true' && !await confirmAutomatic({name:String(data.get('name'))}))return;
   const result = await api('/invitations', {method:'POST',body:JSON.stringify({name:data.get('name'),appId,origin,appUser:data.get('appUser'),automatic:data.get('automatic') === 'true',files:data.get('files')==='on',actions:grants,commandPermissionsAccepted:data.get('commandConsent') === 'on'})});
-  invitation = result.invitation; $('invite-token').textContent = `${invitation.slice(0,8)} ··· ${invitation.slice(-8)}`; $('invite-form').hidden = true; $('invite-result').hidden = false; $('connect-title').textContent = 'Invitation ready'; $('copy-invite').replaceChildren(icon('copy'), 'Copy'); $('copy-invite').focus();
+  const entry={pairingId:result.pairing.id,name:String(data.get('name')),origin,appUser:String(data.get('appUser')),invitation:result.invitation,expiresAt:new Date(result.expiresAt).getTime()};
+  pendingInvitations.push(entry);invitationCopies.push(entry);saveInvitations();rememberDefault({pairingId:entry.pairingId,expiresAt:entry.expiresAt},String(data.get('defaultProgram')));showInvitation(entry);
 });
 $('copy-invite').onclick = action(async () => {
+  updateCountdowns();if(!invitation || $('copy-invite').disabled)return;
   try { await navigator.clipboard.writeText(invitation); $('copy-invite').replaceChildren(icon('check'), 'Copied'); }
   catch {
     let field = $('invite-manual-copy');
     if (!field) { field = el('textarea', {id:'invite-manual-copy',readonly:'',rows:'3','aria-label':'Invitation',spellcheck:'false'}, invitation); $('invite-copy-hint').before(field); }
-    $('invite-copy-hint').textContent = 'Copy the selected invitation into your app. Expires in 5 minutes.'; field.focus(); field.select();
+    field.focus(); field.select();
   }
 });
 $('check-clients').onclick = action(() => api('/providers/check', {method:'POST'}));
@@ -485,7 +647,8 @@ let editingCommand, accessPairID, routingPairID, routingRevision, routingReturn,
 function renderCommands() {
   $('add-command').hidden = !state.allowWebCommandEditing || !state.commands.length;
   $('add-first-command').hidden = !state.allowWebCommandEditing;
-  $('commands-empty-hint').hidden = state.allowWebCommandEditing;
+  const steps=state.allowWebCommandEditing ? ['Add a command with its executable and arguments.'] : ['Open the configuration file below. Add a command under actions with its executable and arguments.','Restart WebDeviceCable.'];
+  $('commands-empty-hint').replaceChildren(...[...steps,'Open a connection’s Access to allow the command.','Choose it in Programs and models, then request it from your app.'].map(step=>el('li',{},step)));
   $('commands-empty').hidden = !!state.commands.length;
   $('config-path').textContent = state.configPath;
   $('command-editor-hint').textContent = state.allowWebCommandEditing ? 'Web editing enabled by config.yaml.' : 'Web editing is locked. Set bridge.allowWebCommandEditing to true in this file and restart to enable it.';
@@ -569,9 +732,10 @@ $('command-form').onsubmit = action(async event => {
   await api(editingCommand ? `/commands/${editingCommand.id}` : '/commands', {method:editingCommand ? 'PUT' : 'POST',body:JSON.stringify(command)});
   $('command-dialog').close();
 });
+$('keep-request-history').onclick = action(toggleRequestHistory);
 $('toggle-runner').onclick = action(() => api('/runner', {method:'PATCH',body:JSON.stringify({enabled:!state.enabled})}));
 $('clear-history').onclick = action(async () => { if (await confirmAction('Clear request history?', 'Finished requests and their output will be removed. Active requests will stay.', 'Clear history', true)) await api('/history', {method:'DELETE'}); });
-$('sign-out').onclick = action(async () => { await api('/session', {method:'DELETE'}); csrf = ''; lock(); });
+$('sign-out').onclick = action(async () => { if(!await confirmAction('Lock this panel?','To reopen, choose the WebDeviceCable menu-bar or system-tray icon, then Open, or launch WebDeviceCable from your applications menu.','Lock panel'))return; await api('/session', {method:'DELETE'}); csrf = ''; lock(); });
 window.addEventListener('hashchange', () => {if(new URLSearchParams(location.hash.slice(1)).has('key'))void boot();else route();});
 window.addEventListener('focus',()=>{void refresh().catch(()=>{});});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refresh().catch(()=>{});});
@@ -586,7 +750,7 @@ async function boot() {
     else session=await api('/session');
     connectionSnapshot=undefined;csrf=session.csrf; controlSession=session.session; storeControlSession();
     $('locked').hidden = true; $('shell').hidden = false; document.querySelector('.skip-link').hidden = false; route(); await refresh(true); watchConnections(); initPairingRequest();
-    refreshTimer=setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'Runner offline'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
+    refreshTimer=setInterval(() => { void refresh().catch(() => { $('runner-state').textContent = 'WebDeviceCable is not running'; $('runner-state').dataset.status = 'offline'; }); }, 1500);
   } catch { lock(); } finally {booting=false;}
 }
 void boot();
@@ -600,6 +764,7 @@ function openAIProgram(program){
   form.elements.namedItem('arguments').value=(program?.arguments ?? []).join('\n');
   form.elements.namedItem('type').disabled=!!program && ['codex','claude'].includes(program.id);
   $('reset-ai-program').hidden=!program || !['codex','claude'].includes(program.id);
+  $('remove-ai-program').hidden=!program;
   updateProgramEditor();$('ai-program-dialog').showModal();
 }
 function updateProgramEditor(){
@@ -610,6 +775,7 @@ function updateProgramEditor(){
   form.elements.namedItem('executable').required=custom;
   form.elements.namedItem('executable').placeholder=custom?'Path to a WDC-compatible harness':'Automatic detection';
 }
+$('remove-ai-program').onclick=action(async()=>{if(await removeAIProgram(editingAIProgram))$('ai-program-dialog').close();});
 $('add-ai-program').onclick=()=>openAIProgram();
 $('close-ai-program').onclick=()=>$('ai-program-dialog').close();
 $('ai-program-form').elements.namedItem('type').onchange=updateProgramEditor;
@@ -628,23 +794,19 @@ $('ai-program-form').onsubmit=action(async()=>{
 });
 async function removeAIProgram(program){
   const uses=await api(`/programs/${program.id}/uses`);
-  const detail=uses.length?uses.map(use=>`${use.name}: ${use.selections.join(', ')}`).join('; ')+'. These selections will stay explicitly unavailable until you reassign them in Program settings.':'No saved connection selections use this program.';
+  const detail=uses.length?uses.map(use=>`${use.name}: ${use.selections.join(', ')}`).join('; ')+'. These selections will stay explicitly unavailable until you reassign them in Programs and models.':'No saved connection selections use this program.';
   if(!await confirmAction(`Remove ${program.name}?`,detail+' Affected requests and conversations will end.',uses.length?'Remove and leave unavailable':'Remove program',true))return;
-  await api(`/programs/${program.id}?leaveUnavailable=true`,{method:'DELETE'});
+  await api(`/programs/${program.id}?leaveUnavailable=true`,{method:'DELETE'});return true;
 }
 function openProgramAccess(pair){
   programAccessPairID=pair.id;$('program-access-form').reset();
   $('program-access-context').textContent=`${pair.name} · Choose custom AI programs this connection may execute. Codex and Claude native integrations do not need command grants.`;
-  $('program-access-list').replaceChildren(...(state.programs ?? []).filter(program=>program.type==='custom').map(program=>el('label',{class:'program-grant'},
+  $('program-access-list').replaceChildren(...(state.programs ?? []).filter(program=>program.type==='custom').map(program=>el('label',{class:'program-grant check-line'},
     el('input',{type:'checkbox',value:program.id,...(pair.programGrants?.[program.id]===state.programHashes?.[program.id]?{checked:''}:{})}),
     el('span',{},el('strong',{},program.name),el('small',{},[program.executable,...program.arguments ?? []].join(' ')),el('small',{},program.profileDir || 'Default profile')))));
   $('program-access-dialog').showModal();
 }
 $('close-program-access').onclick=()=>$('program-access-dialog').close();
-$('routing-program-access').onclick=()=>{
-  routingReturn={pairID:routingPairID,revision:routingRevision,draft:readRoutingForm()};
-  $('routing-dialog').close();openProgramAccess(state.pairings.find(pair=>pair.id===routingPairID));
-};
 $('program-access-form').onsubmit=action(async()=>{
   const programs=Object.fromEntries([...$('program-access-list').querySelectorAll('input:checked')].map(input=>[input.value,state.programHashes[input.value]]));
   const accepted=$('program-access-form').elements.namedItem('consent').checked;
@@ -655,7 +817,7 @@ $('program-access-form').onsubmit=action(async()=>{
 function targetLabel(target) { return target?.action ? state.commands.find(command => command.id === target.action)?.title ?? 'Unavailable command' : target?.provider ? state.providers.find(program=>program.id===target.provider)?.name ?? 'Unavailable AI program' : 'Use default'; }
 function routeEditor(pair, group, current) {
   const selector = el('select', {'data-field':'target','aria-label':`Program for ${group?.name ?? 'default'}`},
-    el('option',{value:''},group ? 'Inherit program' : 'Choose a program'));
+    el('option',{value:''},group ? 'Same as app default' : 'Choose a program'));
   const providers = state.providersByPairing?.[pair.id] ?? state.providers;
   if (!group || group.kind === 'ai') for (const provider of providers) {
     const supported = group?.operation !== 'image' || provider.imageGeneration;
@@ -671,15 +833,15 @@ function routeEditor(pair, group, current) {
   const reasoning = el('select',{'data-field':'reasoning','aria-label':`Reasoning for ${group?.name ?? 'default'}`});
   model.dataset.value = optionValue('model','modelDefault'); reasoning.dataset.value = optionValue('reasoning','reasoningDefault');
   const note = el('small',{class:'route-selection'}), availability = el('p',{class:'route-note'});
-  const fields = el('div',{class:'route-fields'},el('label',{},'Program',selectWrap(selector)),
-    el('label',{},'Model',selectWrap(model)),el('label',{},'Reasoning',selectWrap(reasoning)));
-  const row = el('details',{class:`route-editor${group ? '' : ' default-route'}`,'data-group':group?.id ?? ''},
+  const routeField = (label,select) => el('label',{},label,selectWrap(select),el('small',{class:'field-hint route-selected','aria-hidden':'true'}));
+  const fields = el('div',{class:'route-fields'},routeField('Program',selector),routeField('Model',model),routeField('Reasoning',reasoning));
+  const row = el('details',{class:`route-editor${group ? '' : ' default-route'}`,'data-group':group?.id ?? '',...(group && group.kind!=='ai'?{'data-command-only':'true'}:{})},
     el('summary',{},el('span',{class:'route-label'},el('strong',{},group?.name ?? `Default for ${pair.name}`),note),icon('chevron','chevron')),
     fields,availability);
   if (!group) row.open = true;
   const reset = el('button',{type:'button',class:'text-button',onclick:() => {
     selector.value=''; model.dataset.value=''; reasoning.dataset.value=''; refreshRoutingLabels(pair);
-  }},'Reset to inherited settings');
+  }},'Use app default settings');
   if (group) row.append(reset);
   selector.onchange = () => {
     const next=selector.value.startsWith('provider:') ? selector.value.slice(9) : row.dataset.inheritedProvider;
@@ -693,6 +855,7 @@ function routeEditor(pair, group, current) {
 function readRoute(row) {
   const value = row.querySelector('[data-field=target]').value;
   if (value.startsWith('command:')) return {action:value.slice(8)};
+  if(row.dataset.commandOnly)return null;
   const result = {inheritOptions:true};
   if (value.startsWith('provider:')) result.provider=value.slice(9);
   for (const name of ['model','reasoning']) {
@@ -715,21 +878,21 @@ function refreshRoutingLabels(pair) {
   const rowByID=new Map(rows.map(row=>[row.dataset.group,row]));
   const targetFor=(id,depth=0)=>{
     if(depth>8)return {};
-    const group=pair.groups.find(item=>item.id===id),row=rowByID.get(id);
+    const group=(pair.groups??[]).find(item=>item.id===id),row=rowByID.get(id);
     const base=id ? targetFor(group?.parentId ?? '',depth+1) : {};
     return row ? applyRoute(base,readRoute(row)) : base;
   };
   const fill=(select, options, inherited, group)=>{
     const value=select.dataset.value ?? '';
-    select.replaceChildren(el('option',{value:''},group ? `Inherit · ${inherited || 'client default'}` : 'Client default'),
-      ...(group ? [el('option',{value:'@default'},'Native client default')] : []),
+    select.replaceChildren(el('option',{value:''},group ? `Same as ${group.parentId?'parent workflow':'app'} default (${inherited || "program’s default"})` : 'Program’s default'),
+      ...(group ? [el('option',{value:'@default'},'Program’s default')] : []),
       ...options.map(([value,label])=>el('option',{value},label)));
     // An old saved setting is kept visible; we never discard it on opening.
-    if(value && ![...select.options].some(option=>option.value===value))select.append(el('option',{value},value==='@default'?'Native client default':`${value} (not reported by client)`));
+    if(value && ![...select.options].some(option=>option.value===value))select.append(el('option',{value},value==='@default'?'Program’s default':`${value} (not reported by client)`));
     select.value=value;
   };
   for(const row of rows){
-    const id=row.dataset.group,group=pair.groups.find(item=>item.id===id),target=targetFor(id);
+    const id=row.dataset.group,group=(pair.groups??[]).find(item=>item.id===id),target=targetFor(id);
     const inherited=id?targetFor(group?.parentId ?? ''):{};
     row.dataset.provider=target.provider ?? '';row.dataset.inheritedProvider=inherited.provider ?? '';
     const native=state.native?.find(item=>item.id===target.provider),models=native?.models ?? [];
@@ -740,6 +903,9 @@ function refreshRoutingLabels(pair) {
     fill(reasoning,efforts.map(item=>[item.reasoningEffort,({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[item.reasoningEffort] ?? item.reasoningEffort]),inherited.reasoning,group);
     model.disabled=!!target.action || !target.provider || !!group && group.kind!=='ai';
     reasoning.disabled=model.disabled || !efforts.length && !reasoning.dataset.value;
+    const commandOnly=!!group && group.kind!=='ai';
+    model.closest('label').hidden=reasoning.closest('label').hidden=commandOnly || !!target.action;
+    if(group)row.querySelector('[data-field=target]').options[0].textContent=`Same as ${group.parentId?'parent workflow':'app'} default (${commandOnly?(inherited.action?targetLabel(inherited):'no command selected'):targetLabel(inherited)})`;
     const source=readRoute(row);
     const custom=source ? [source.provider || source.action ? 'Program' : '',source.model || source.modelDefault ? 'Model' : '',source.reasoning || source.reasoningDefault ? 'Reasoning' : ''].filter(Boolean) : [];
     const commandRequired=!!group && group.kind!=='ai' && !!target.provider;
@@ -747,9 +913,9 @@ function refreshRoutingLabels(pair) {
     const imageCompatible=provider?.integration==='codex' || target.provider==='codex';
     const incompatible=commandRequired || group?.operation==='image' && !imageCompatible;
     const invalidEffort=!!target.reasoning && efforts.length>0 && !efforts.some(item=>item.reasoningEffort===target.reasoning);
-    reasoning.setCustomValidity(invalidEffort ? 'Choose a reasoning level supported by this model, or the native client default.' : '');
-    const pieces=target.action ? [targetLabel(target)] : [targetLabel(target),target.model || 'Client default model',target.reasoning ? `${target.reasoning} reasoning` : 'Client default reasoning'];
-    row.querySelector('.route-selection').textContent=(target.provider || target.action ? pieces.join(' · ') : 'Choose a default program')+(incompatible ? commandRequired ? ' · Choose a command' : ' · Requires Codex' : id ? custom.length ? ` · ${custom.join(', ')} customized` : ' · Inherited' : '');
+    reasoning.setCustomValidity(invalidEffort ? 'Choose a reasoning level supported by this model, or the program’s default.' : '');
+    const pieces=commandOnly ? [target.action?targetLabel(target):'Choose an allowed command'] : target.action ? [targetLabel(target)] : [targetLabel(target),target.model || 'Program’s default model',target.reasoning ? `${target.reasoning} reasoning` : 'Program’s default reasoning'];
+    row.querySelector('.route-selection').textContent=(commandOnly || target.provider || target.action ? pieces.join(' · ') : 'Choose a default program')+(incompatible ? commandRequired ? '' : ' · Requires Codex' : id ? custom.length ? ` · ${custom.join(', ')} customized` : ' · Uses default settings' : '');
     row.querySelector('.route-selection').classList.toggle('needs-choice',incompatible || invalidEffort);
     for(const option of row.querySelector('[data-field=target]').options){
       if(!option.value.startsWith('provider:'))continue;
@@ -758,13 +924,15 @@ function refreshRoutingLabels(pair) {
       const supported=group?.operation!=='image' || available.imageGeneration;
       option.disabled=!supported;option.textContent=available.name+(!supported?' (images unavailable)':available.execution?'':' (unavailable)');
     }
-    row.querySelector('.route-note').textContent=target.provider && !provider ? 'This AI program was removed. Choose another program explicitly.' : commandRequired ? 'This workflow requires an allowed command. Choose one here or in its parent workflow.' : group?.operation==='image' && !imageCompatible ? 'This image stage requires Codex. Choose Codex here or in its workflow.' : group?.operation==='image' ? 'Model and reasoning configure the Codex turn. Its built-in image tool controls the image renderer.' : provider && !provider.execution ? provider.reason : target.provider && !efforts.length ? 'Reasoning options are not reported for this model; the native client default applies.' : '';
+    for(const select of row.querySelectorAll('.route-fields select')){
+      const selected=select.selectedOptions[0],hint=select.closest('label').querySelector('.route-selected');
+      hint.hidden=!group || selected?.value!=='';hint.textContent=selected?.textContent ?? '';
+    }
+    row.querySelector('.route-note').textContent=!commandOnly && target.provider && !provider ? 'This AI program was removed. Choose another program explicitly.' : commandRequired ? 'This workflow requires an allowed command. Choose one here or in its parent workflow.' : group?.operation==='image' && !imageCompatible ? 'This image stage requires Codex. Choose Codex here or in its workflow.' : group?.operation==='image' ? 'Model and reasoning configure the Codex turn. Its built-in image tool controls the image renderer.' : provider && !provider.execution ? provider.reason : target.provider && !efforts.length ? 'Reasoning options are not reported for this model; the program’s default applies.' : '';
   }
 }
 function providersForPair(pair) { return state.providersByPairing?.[pair.id] ?? state.providers; }
 function openRouting(pair) {
-  $('routing-program-access').hidden=!state.programs?.some(item=>item.type==='custom');
-  $('routing-command-access').hidden=!state.commands.length && !Object.keys(pair.actions??{}).length;
   clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair)]);
   $('routing-title').textContent=`Programs and models · ${pair.name}`;
   $('routing-context').textContent=`${pair.origin} · Choose a default AI program, then customize individual workflows if needed.`;
@@ -774,34 +942,38 @@ function openRouting(pair) {
     const children=append(group.id); if(children.length)row.append(el('div',{class:'workflow-stages'},...children));
     return row;
   });
-  $('routing-groups').replaceChildren(el('h3',{class:'route-heading'},'Choose by workflow'),...append());
+  $('routing-groups').replaceChildren(el('h3',{class:'route-heading'},'Choose by workflow'),el('p',{class:'muted'},'Use a different program or command for specific tasks in this app; other tasks use the app default.'),...append());
   refreshRoutingLabels(pair); $('routing-dialog').showModal();
 }
 $('close-routing').onclick = () => $('routing-dialog').close();
 function readRoutingForm() {
   // Retired groups remain available to already-owned work and its receipts.
   const pair=state.pairings.find(item=>item.id===routingPairID);
-  const groups=Object.fromEntries(Object.entries(pair?.routing?.groups ?? {}).filter(([id])=>pair.groups.find(group=>group.id===id)?.hidden));
+  const groups=Object.fromEntries(Object.entries(pair?.routing?.groups ?? {}).filter(([id])=>(pair.groups??[]).find(group=>group.id===id)?.hidden));
   for(const row of $('routing-groups').querySelectorAll('[data-group]')){const target=readRoute(row);if(target)groups[row.dataset.group]=target;}
   return {default:readRoute($('routing-default').firstElementChild),groups};
 }
-$('routing-command-access').onclick=()=>{
+$('routing-access').onclick=()=>{
   routingReturn={pairID:routingPairID,revision:routingRevision,draft:readRoutingForm()};
-  $('routing-dialog').close();openCommandAccess(state.pairings.find(pair=>pair.id===routingPairID));
+  $('routing-dialog').close();openAppPermissions(state.pairings.find(pair=>pair.id===routingPairID));
 };
-for(const accessDialog of ['command-access-dialog','program-access-dialog'])$(accessDialog).addEventListener('close',()=>{
+async function restoreRoutingAfterAccess(){
   if(!routingReturn)return;
-  if(!csrf){routingReturn=undefined;return;}
-  const {pairID,revision,draft}=routingReturn;routingReturn=undefined;
+  const pending=routingReturn;routingReturn=undefined;
+  if(!csrf)return;
+  try{await refresh(true);}catch{}
+  if(!csrf)return;
+  if(document.querySelector('dialog[open]')){routingReturn=pending;return;}
+  const {pairID,revision,draft}=pending;
   const pair=state.pairings.find(pair=>pair.id===pairID && !pair.revoked);if(!pair)return;
   const changed=(pair.routing?.revision??0)!==revision;
   openRouting(changed?pair:{...pair,routing:{...draft,revision}});
-  if(changed)notify('Preferences changed in another panel. Review the current choices.');
-});
+  if(changed)notify('Programs and models changed in another panel. Review the current choices.');
+}
 $('routing-form').onsubmit = action(async () => {
   const routing=readRoutingForm();
   const live = state.jobs.some(job => job.pairingId === routingPairID && !['completed','cancelled','timed_out','blocked','interrupted','failed'].includes(job.status)) || Object.values(state.conversations ?? {}).some(session => session.pairingId === routingPairID && session.status === 'open');
-  if (live && !await confirmAction('Change app preferences?','Active requests and sessions for this app will end.','Save preferences')) return;
+  if (live && !await confirmAction('Change Programs and models?','Active requests and sessions for this app will end.','Save Programs and models')) return;
   await api(`/pairings/${routingPairID}/routing`,{method:'PUT',body:JSON.stringify({expectedRevision:routingRevision,routing})}); $('routing-dialog').close();
 });
 for (const control of document.querySelectorAll('[data-sharing]')) control.onclick = action(async () => {
@@ -833,7 +1005,7 @@ function initPairingRequest() {
     if (event.source !== opener || event.data?.requestId !== requestId) return;
     if (event.data.type === 'wdc:pairing-failed' && incomingPairing?.origin === event.origin) { stop();clearTimeout(expires);notify('Connection could not finish. Try again from the website.');return; }
     if (event.data.type === 'wdc:pairing-connected' && incomingPairing?.origin === event.origin) {
-      stop();clearTimeout(expires);history.replaceState(null,'','#apps');notify('App connected','success');return;
+      stop();clearTimeout(expires);history.replaceState(null,'','#apps');notify('App connected.','success');return;
     }
     if (incomingPairing || event.data.type !== 'wdc:pairing-request' || !validWebsite(event.origin)) return;
     const {appId,name,appUser,logoURL,requestedPermissions} = event.data;
@@ -870,7 +1042,7 @@ function appMark(id) {
   return mark;
 }
 function reviewDraft(info,key) {
-  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:info.requestedPermissions?.automaticApprovals===true,files:info.requestedPermissions?.files===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false});
+  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:false,files:info.requestedPermissions?.files===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false,provider:firstReadyProgram()});
   return reviewDrafts.get(key);
 }
 function reviewMark(info,key) {
@@ -889,29 +1061,68 @@ function pendingLogo(draft) {return draft?.pending??(!draft?.edited?draft?.loadi
 function reviewDecision(key) {const draft=reviewDrafts.get(key);return {automatic:draft?.automatic??false,files:draft?.files??false,logoId:draft?.logoId??''};}
 function connectionReview(info,key) {
   const draft=reviewDraft(info,key),automatic=el('input',{type:'checkbox','aria-label':`Approve requests automatically for ${info.name}`,'data-action':'Automatic approvals'});automatic.checked=draft.automatic;
-  automatic.onchange=()=>{draft.automatic=automatic.checked;};
+  automatic.onchange=async()=>{if(automatic.checked){automatic.checked=false;automatic.checked=await confirmAutomatic(info);}draft.automatic=automatic.checked;};
   const files=el('input',{type:'checkbox','aria-label':`Allow files for ${info.name}`,'data-action':'File access'});files.checked=draft.files;files.onchange=()=>{draft.files=files.checked;};
-  return el('div',{class:'connection-review'},el('label',{class:'check-line'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run without asking for approval each time.'))),el('label',{class:'check-line'},files,el('span',{},'Send and receive files',el('small',{},'This app can supply images and documents for its requests and receive files those requests produce.'))),el('small',{class:'muted'},'Computer folders: No access. Command access: Off.'));
+  if(!draft.providerChosen)draft.provider=firstReadyProgram();
+  const program=el('select',{'aria-label':`Default program for ${info.name}`,'data-action':'Default program'});fillDefaultPrograms(program,draft.provider);program.onchange=()=>{draft.provider=program.value;draft.providerChosen=true;};
+  return el('div',{class:'connection-review'},el('label',{},'Default program',selectWrap(program),el('small',{class:'field-hint'},'Custom programs need an access grant after connecting.')),el('label',{class:'check-line'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run without asking for approval each time.'))),el('label',{class:'check-line'},files,el('span',{},'Send and receive files',el('small',{},'This app can supply images and documents for its requests and receive files those requests produce.'))),el('small',{class:'muted'},'Computer folders: No access. Command access: Off.'));
+}
+
+function effectiveRequestHistory(pair,value=pair.requestHistory||'global') {
+  return value==='keep'||value==='global'&&state.keepRequestHistory!==false;
+}
+function renderHistorySettings() {
+  $('keep-request-history').setAttribute('aria-checked',String(state.keepRequestHistory!==false));
+  const off=state.pairings.filter(pair=>!pair.revoked&&!effectiveRequestHistory(pair));
+  const note=$('history-note');
+  note.hidden=state.keepRequestHistory!==false&&!off.length;
+  note.textContent=state.keepRequestHistory===false
+    ?'Request history is off globally. Connections set to keep history still save finished requests.'
+    :'Request history is off for some connections. Their finished requests disappear after completion.';
+  for(const select of document.querySelectorAll('[data-request-history]'))select.options[0].textContent=globalHistoryLabel();
+  for(const hint of document.querySelectorAll('[data-history-resolution]'))hint.textContent=globalHistoryResolution();
+}
+function globalHistoryResolution(){return `Global setting: ${state.keepRequestHistory===false?'Don’t keep':'Keep'}.`;}
+function globalHistoryLabel(){return `Use the global setting (${state.keepRequestHistory===false?'don’t keep':'keep'})`;}
+function requestHistoryChoice(pair) {
+  const select=el('select',{'aria-label':'Request history','data-request-history':'','data-permission-edit':''},
+    el('option',{value:'global'},globalHistoryLabel()),el('option',{value:'keep'},'Keep'),el('option',{value:'discard'},'Don’t keep'));
+  select.value=pair.requestHistory||'global';
+  return select;
+}
+function historyNeedsConfirmation(pair,value) {
+  return value!==(pair.requestHistory||'global')&&(value==='discard'||effectiveRequestHistory(pair)&&!effectiveRequestHistory(pair,value));
+}
+function confirmHistoryOff(name) {
+  return confirmAction(name?`Stop keeping history · ${name}?`:'Stop keeping request history?',
+    name?'This connection’s saved finished requests, output and files will be removed. Active requests and open session context stay available.':'Saved finished requests, output and files will be removed for connections using this setting. Connections set to Keep are unchanged. Active requests and open session context stay available.',
+    'Turn off and remove history',true);
+}
+async function toggleRequestHistory() {
+  const keep=state.keepRequestHistory===false;
+  if(!keep&&!await confirmHistoryOff())return;
+  await api('/history',{method:'PATCH',body:JSON.stringify({keep,confirmDiscard:!keep})});
 }
 
 function openAppPermissions(pair,initialView='overview') {
   clearErrors();
-  const dialog=makeDialog('permissions-dialog',`Permissions · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
+  const dialog=makeDialog('permissions-dialog',`Access · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
   dialog.dataset.key=pair.id;
-  dialog.querySelector('[aria-label="Close"]').dataset.returnAction='Permissions';
+  dialog.querySelector('[aria-label="Close"]').dataset.returnAction='Access';
+  const requestHistory=requestHistoryChoice(pair),originalHistory=pair.requestHistory||'global';
   const folders=(pair.folders??[]).map(folder=>({...folder}));
   const folderNavigation={path:''};
   const folderKey=()=>JSON.stringify(folders.map(({id,path,write,automatic})=>({id,path,write:!!write,automatic:!!automatic})));
   const originalAutomatic=!!pair.automatic,originalFiles=!!pair.files,originalFolders=folderKey();
   automatic.checked=originalAutomatic;files.checked=originalFiles;
-  let saving=false,confirming=false,saveState='draft',submission;
+  let saving=false,confirming=false,suspended=false,saveState='draft',submission;
   const expectedRevision=pair.permissionsRevision??0;
-  const dirty=()=>automatic.checked!==originalAutomatic||files.checked!==originalFiles||folderKey()!==originalFolders;
-  const heading=dialog.querySelector('.dialog-heading'),back=el('button',{type:'button',class:'icon-button permission-back',hidden:'','aria-label':'Back to Permissions'},icon('arrow-left'));
+  const dirty=()=>requestHistory.value!==originalHistory||automatic.checked!==originalAutomatic||files.checked!==originalFiles||folderKey()!==originalFolders;
+  const heading=dialog.querySelector('.dialog-heading'),back=el('button',{type:'button',class:'icon-button permission-back',hidden:'','aria-label':'Back to Access'},icon('arrow-left'));
   heading.prepend(back);
   const setView=(title,view,goBack)=>{
     dialog.dataset.view=view;dialog.setAttribute('aria-label',`${title} · ${pair.name}`);heading.querySelector('h2').textContent=`${title} · ${pair.name}`;
-    back.hidden=!goBack;back.setAttribute('aria-label',view==='choose'?'Back to Folder access':'Back to Permissions');back.onclick=()=>goBack?.();dialog.permissionBack=goBack;
+    back.hidden=!goBack;back.setAttribute('aria-label',view==='choose'?'Back to Folder access':'Back to Access');back.onclick=()=>goBack?.();dialog.permissionBack=goBack;
   };
   dialog.permissionView=setView;
   dialog.requestDismiss=async()=>{
@@ -943,21 +1154,25 @@ function openAppPermissions(pair,initialView='overview') {
   const beforeUnload=event=>{if(dirty()||saving){event.preventDefault();event.returnValue='';}};
   const closeDraft=()=>{window.removeEventListener('beforeunload',beforeUnload);dialog.close();};
   window.addEventListener('beforeunload',beforeUnload);
-  dialog.addEventListener('close',()=>window.removeEventListener('beforeunload',beforeUnload),{once:true});
+  dialog.addEventListener('close',()=>{
+    if(suspended)return;
+    window.removeEventListener('beforeunload',beforeUnload);
+    if(dialog===$('permissions-dialog'))void restoreRoutingAfterAccess();
+  });
   const warning=el('p',{class:'permission-revocation-note',hidden:''},'Turning file access off stops this app’s active file requests and conversations. Files already shared stay shared.');
   const unsaved=el('span',{class:'folder-unsaved',role:'status',hidden:''},'Unsaved changes');
   const folderSummary=el('small');
   const readSaved=()=>api(`/pairings/${pair.id}`,{signal:AbortSignal.timeout(5000)}).then(current=>({...current,reportedName:current.name,name:current.displayName||current.name}));
   const matchesDraft=current=>{
     const actual=current.folders??[],wanted=submission.desired.folders;
-    return !!current.automatic===submission.desired.automatic&&!!current.files===submission.desired.files&&
+    return (current.requestHistory||'global')===submission.desired.requestHistory&&!!current.automatic===submission.desired.automatic&&!!current.files===submission.desired.files&&
       current.paused===pair.paused&&current.revoked===pair.revoked&&actual.length===wanted.length&&
       wanted.every((folder,index)=>actual[index].path===folder.path&&(!folder.id||actual[index].id===folder.id)&&!!actual[index].write===!!folder.write&&!!actual[index].automatic===!!folder.automatic);
   };
   const saved=async()=>{
-    closeDraft();notify('Permissions saved.','success');
-    try{await refresh(true);}catch{notify('Permissions saved. Refresh WDC to update the connection card.','info');}
-    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,'Permissions')?.focus({preventScroll:true});
+    closeDraft();notify('Access saved.','success');
+    try{await refresh(true);}catch{notify('Access saved. Refresh WDC to update the connection card.','info');}
+    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,'Access')?.focus({preventScroll:true});
   };
   const reconcile=async()=>{
     try {
@@ -984,12 +1199,14 @@ function openAppPermissions(pair,initialView='overview') {
     if(saving||saveState==='conflict'||!dirty())return;
     if(!submission){
       const changes={expectedPermissionsRevision:expectedRevision,permissionSaveId:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','')};
+      if(requestHistory.value!==originalHistory){changes.requestHistory=requestHistory.value;if(historyNeedsConfirmation(pair,requestHistory.value))changes.confirmDiscard=true;}
       if(automatic.checked!==originalAutomatic)changes.automatic=automatic.checked;
       if(files.checked!==originalFiles)changes.files=files.checked;
       if(folderKey()!==originalFolders)changes.folders=folders.map(folder=>({...folder}));
-      submission={payload:changes,desired:{automatic:automatic.checked,files:files.checked,folders:folders.map(folder=>({...folder}))}};
+      submission={payload:changes,desired:{requestHistory:requestHistory.value,automatic:automatic.checked,files:files.checked,folders:folders.map(folder=>({...folder}))}};
     }
-    void perform(async()=>{
+    return perform(async()=>{
+      if(submission.payload.confirmDiscard&&!submission.confirmed){if(!await confirmHistoryOff(pair.name)){submission=undefined;return;}submission.confirmed=true;}
       try{
         const result=await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify(submission.payload),signal:AbortSignal.timeout(10000)});
         if(!dialog.open)return;
@@ -1011,8 +1228,8 @@ function openAppPermissions(pair,initialView='overview') {
     closeDraft();openAppPermissions(current);
   },reload);
   const recovery=el('div',{class:'permission-recovery',role:'alert',hidden:''},recoveryText,el('div',{class:'actions'},check,reload));
-  save.dataset.returnAction='Permissions';
-  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction='Permissions';
+  save.dataset.returnAction='Access';
+  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction='Access';
   const footer=el('div',{class:'permission-footer'},recovery,el('div',{class:'dialog-actions'},unsaved,cancel,save));
   const changed=()=>{
     save.disabled=saving||!dirty()||saveState==='conflict';unsaved.hidden=!dirty();warning.hidden=!originalFiles||files.checked;
@@ -1024,10 +1241,12 @@ function openAppPermissions(pair,initialView='overview') {
     folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'} selected`:'Choose folders this app can read or edit.';
   };
   automatic.dataset.permissionEdit=files.dataset.permissionEdit='';
-  automatic.onchange=files.onchange=changed;
+  requestHistory.onchange=()=>{submission=undefined;changed();};
+  files.onchange=changed;
+  automatic.onchange=async()=>{if(automatic.checked){automatic.checked=false;automatic.checked=await confirmAutomatic(pair);}changed();};
   const clearView=()=>{clearErrors();for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions, :scope > .permission-footer'))panel.remove();};
   const showOverview=()=>{
-    clearView();setView('Permissions','overview');dialog.append(overview,footer);changed();folderAccess.focus({preventScroll:true});
+    clearView();setView('Access','overview');dialog.append(overview,footer);changed();folderAccess.focus({preventScroll:true});
   };
   const showFolders=()=>{
     renderFolderAccess(dialog,pair,folders,footer,changed,showOverview,clearView,folderNavigation);
@@ -1036,7 +1255,28 @@ function openAppPermissions(pair,initialView='overview') {
   const folderAccess=el('button',{type:'button',class:'connection-program permission-folder-access','aria-label':'Folder access',onclick:showFolders},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},icon('folder'),'Folder access'),folderSummary),icon('chevron','chevron'));
   const overview=el('div',{class:'dialog-body app-permissions-body'},
     el('label',{class:'check-line permission-option'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run this app’s requests within its allowed access without asking each time.'))),
-    el('label',{class:'check-line permission-option'},files,el('span',{},'Send and receive files',el('small',{},'Share images and documents with the AI, and receive files it creates. This does not grant access to folders on your computer.'))),warning,folderAccess);
+    el('label',{class:'check-line permission-option'},files,el('span',{},'Send and receive files',el('small',{},'Share images and documents with the AI, and receive files it creates. This does not grant access to folders on your computer.'))),warning,
+    el('label',{class:'permission-option permission-history'},'Request history',selectWrap(requestHistory),el('small',{class:'field-hint','data-history-resolution':''},globalHistoryResolution())),folderAccess);
+  const openAccessEditor=(editor,id)=>{
+    suspended=true;dialog.close();
+    const child=$(id),returnButton=el('button',{type:'button',class:'icon-button permission-back','aria-label':'Back to Access',onclick:()=>child.close()},icon('arrow-left'));
+    child.querySelector('.dialog-heading').prepend(returnButton);
+    child.addEventListener('close',async()=>{
+      returnButton.remove();
+      suspended=false;
+      if(!csrf){window.removeEventListener('beforeunload',beforeUnload);return;}
+      try{await refresh(true);}catch{}
+      if(!csrf){window.removeEventListener('beforeunload',beforeUnload);return;}
+      const current=state.pairings.find(item=>item.id===pair.id&&!item.revoked);if(!current){window.removeEventListener('beforeunload',beforeUnload);return;}
+      if(!dirty()){window.removeEventListener('beforeunload',beforeUnload);openAppPermissions(current);return;}
+      if((current.permissionsRevision??0)!==expectedRevision)saveState='conflict';
+      window.addEventListener('beforeunload',beforeUnload);showOverview();dialog.showModal();changed();
+    },{once:true});
+    editor(pair);
+  };
+  const accessRow=(title,description,editor,id)=>el('button',{type:'button',class:'connection-program permission-folder-access','data-permission-edit':'','aria-label':title,onclick:()=>openAccessEditor(editor,id)},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},title),el('small',{},description)),icon('chevron','chevron'));
+  if(state.commands.length || Object.keys(pair.actions??{}).length)overview.append(accessRow('Command access','Choose the commands this app may run.',openCommandAccess,'command-access-dialog'));
+  if(state.programs?.some(program=>program.type==='custom') || Object.keys(pair.programGrants??{}).length)overview.append(accessRow('Custom AI program access','Choose custom programs that may run with your account permissions.',openProgramAccess,'program-access-dialog'));
   if(initialView==='folders')showFolders();else showOverview();
   dialog.showModal();
 }
@@ -1146,10 +1386,9 @@ function renderConnectionRequests() {
   const requests=visibleConnectionRequests();connectionRequestCount=requests.length;
   $('connection-requests').hidden=!requests.length;
   $('connection-request-count').textContent=requests.length;$('connection-request-count').hidden=!requests.length;
-  document.title=requests.length?`(${requests.length}) WebDeviceCable`:'WebDeviceCable';
   const previous=new Map(connectionViews);
   const rows=requests.map(request=>{
-    const signature=JSON.stringify(request),cached=connectionViews.get(request.id);
+    const signature=JSON.stringify([request,state.providers]),cached=connectionViews.get(request.id);
     if(cached?.signature===signature)return cached.node;
     const ready=!request.loading&&!request.error&&!request.submitted && !!request.name;
     const title=request.name??'New connection';
@@ -1162,7 +1401,7 @@ function renderConnectionRequests() {
       if(request.error){card.append(el('div',{class:'connection-request-actions'},button('Dismiss',()=>dismissConnection(request)),request.expired?null:button('Try again',()=>request.input?inspectConnection(connectionLoads.get(request.id)):request.retry())));}
       return card;
     }
-    const details=el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},el('dt',{},'Account'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId)));
+    const details=el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},el('dt',{},'Account ID'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId)));
     card.append(connectionReview(request,request.id));
     if(request.input)card.append(el('p',{class:'connection-server-note'},'This app can send requests even when its website is closed.'));
     card.append(el('div',{class:'connection-request-footer'},details,el('div',{class:'actions'},button('Decline',()=>declineConnection(request)),button('Connect',()=>approveConnection(request),'primary'))));
@@ -1195,9 +1434,10 @@ async function declineConnection(request) {
 }
 async function approveConnection(request) {
   await pendingLogo(reviewDrafts.get(request.id));
-  if(!request.input){await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true,...reviewDecision(request.id)})});return;}
+  if(!request.input){await api(`/pairing-requests/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve:true,...reviewDecision(request.id)})});rememberDefault({requestId:request.id,expiresAt:new Date(request.expiresAt).getTime()},reviewDrafts.get(request.id)?.provider);return;}
   const item=connectionLoads.get(request.id);
   const result=await api('/relay/connect',{method:'POST',body:JSON.stringify({...item.input,expected:item.info,...reviewDecision(item.id)})});
+  rememberDefault({relayUrl:item.input.url,connectionId:result.connectionId},reviewDrafts.get(item.id)?.provider);
   item.submitted=true;configuringRelay={relayUrl:item.input.url,connectionId:result.connectionId};render();
 }
 
@@ -1305,7 +1545,7 @@ function renderPermissionRequests(){
   preserveList($('permission-list'),permissions.map(request=>{
     const pair=state.pairings.find(item=>item.id===request.pairingId),title=request.kind==='file-write'?`Edit ${request.name}`:request.kind==='files'?'Send and receive files':'Folder access requested';
     const card=el('article',{class:'job-card approval-card','data-key':request.id},el('div',{class:'job-header'},el('div',{},el('strong',{},title),el('small',{class:'job-meta'},pair?.name??'App')),icon('shield')));
-    if(request.kind==='files')card.append(el('p',{},'Allow this app to supply images and documents for its requests and receive files those requests produce. This permission does not grant access to your computer’s folders.'),el('small',{},'Saved for this connection. You can turn it off in Permissions.'));
+    if(request.kind==='files')card.append(el('p',{},'Allow this app to supply images and documents for its requests and receive files those requests produce. This permission does not grant access to your computer’s folders.'),el('small',{},'Saved for this connection. You can turn it off in Access.'));
     if(request.kind==='file-write')card.append(el('details',{},disclosure('Review changes'),el('div',{class:'write-preview'},el('div',{},el('h4',{},'Current'),el('pre',{},request.before??'')),el('div',{},el('h4',{},'Proposed'),el('pre',{},request.after??'')))));
     const decide=approve=>api(`/permissions/${request.id}/decision`,{method:'POST',body:JSON.stringify({approve})});
     card.append(el('div',{class:'actions'},request.kind==='access'?button('Choose folders',()=>openPermissions(pair),'primary'):button(request.kind==='files'?'Allow files':'Approve',()=>decide(true),'primary'),button('Decline',()=>decide(false))));return card;

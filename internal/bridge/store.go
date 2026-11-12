@@ -17,6 +17,8 @@ import (
 )
 
 type App struct {
+	deliveries         map[string]*resultDelivery
+	routingFailureAt   map[string]time.Time
 	connectionRevision uint64
 	connectionChanged  chan struct{}
 	connectionWaiters  int
@@ -102,7 +104,7 @@ func Open(dir string) (*App, error) {
 		return nil, errors.New("unsupported state format; refusing to overwrite it")
 	}
 	for _, p := range a.state.Pairings {
-		if p == nil {
+		if p == nil || !validRequestHistory(p.RequestHistory) {
 			return nil, errors.New("invalid pairing state; preserved for recovery")
 		}
 	}
@@ -153,9 +155,22 @@ func Open(dir string) (*App, error) {
 	}
 	// No automatic replay after a crash: every outstanding request lost its originating tab lease.
 	for _, j := range a.state.Jobs {
+		if !keepRequestHistory(&a.state, a.state.Pairings[j.PairingID]) {
+			j.OmitHistory = true
+		}
 		if !terminal(j.Status) {
 			finish(j, "interrupted", "runner_restarted", "Runner restarted. Submit a new request explicitly; this job will not be replayed.", a.now())
 		}
+	}
+	discardFinished(&a.state, func(j *Job) bool { return j.OmitHistory })
+	cleanHistoryConversations(&a.state)
+	for id, c := range a.state.Conversations {
+		if c.OmitHistory {
+			delete(a.state.Conversations, id)
+		}
+	}
+	if e = a.pruneArtifacts(&a.state); e != nil {
+		return nil, e
 	}
 	if e = os.RemoveAll(filepath.Join(abs, "runs")); e != nil {
 		return nil, e
@@ -220,7 +235,20 @@ func (a *App) Close() error {
 	return a.lock.Close()
 }
 func (a *App) save(s *State) error {
-	b, e := jsonData(s)
+	disk := *s
+	disk.Conversations = map[string]*Conversation{}
+	for id, c := range s.Conversations {
+		if c.Status == "open" || !c.OmitHistory {
+			disk.Conversations[id] = c
+		}
+	}
+	disk.Jobs = []*Job{}
+	for _, j := range s.Jobs {
+		if !terminal(j.Status) || !j.OmitHistory {
+			disk.Jobs = append(disk.Jobs, j)
+		}
+	}
+	b, e := jsonData(&disk)
 	if e != nil {
 		return e
 	}
@@ -258,6 +286,7 @@ func (a *App) update(fn func(*State) error) error {
 			j.Request.Tools = nil
 		}
 	}
+	a.prepareHistory(&next)
 	// Bound retained history as output limits grow; replay receipts remain durable.
 	total := 0
 	for _, j := range next.Jobs {
@@ -267,7 +296,7 @@ func (a *App) update(fn func(*State) error) error {
 	for total > 20<<20 {
 		oldest := -1
 		for i, j := range next.Jobs {
-			if terminal(j.Status) && (oldest < 0 || j.CreatedAt.Before(next.Jobs[oldest].CreatedAt)) {
+			if terminal(j.Status) && !j.OmitHistory && (oldest < 0 || j.CreatedAt.Before(next.Jobs[oldest].CreatedAt)) {
 				oldest = i
 			}
 		}
@@ -284,14 +313,20 @@ func (a *App) update(fn func(*State) error) error {
 		return e
 	}
 	if bytes.Equal(b, after) {
-		return nil
+		return a.pruneArtifacts(&next)
 	}
 	next.Revision++
 	if e := a.save(&next); e != nil {
 		return e
 	}
+	cleanupErr := a.prepareDeliveries(&next)
 	previousJobs := a.state.Jobs
 	a.state = next
+	for id := range a.deliveries {
+		if findJob(&next, id) == nil {
+			delete(a.deliveries, id)
+		}
+	}
 	for _, job := range previousJobs {
 		if terminal(job.Status) && findJob(&next, job.ID) == nil && validStorageID(job.ID) {
 			_ = os.RemoveAll(filepath.Join(a.dir, "artifacts", job.ID))
@@ -309,12 +344,17 @@ func (a *App) update(fn func(*State) error) error {
 			run.cancel()
 		}
 	}
-	return nil
+	return cleanupErr
 }
 func (a *App) tick() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
+	for id, at := range a.routingFailureAt {
+		if now.Sub(at) >= time.Minute {
+			delete(a.routingFailureAt, id)
+		}
+	}
 	for id, input := range a.inputs {
 		lease, ok := a.leases[input.LeaseID]
 		p := a.state.Pairings[input.PairingID]
@@ -443,7 +483,7 @@ func (a *App) tick() error {
 			if !ended {
 				active++
 				liveSessions[id] = true
-				if c := s.Conversations[id]; c != nil {
+				if c := s.Conversations[id]; c != nil && c.Plan != nil {
 					counts[c.Plan.Action]++
 				}
 			}

@@ -1,14 +1,15 @@
 // Development-only integrated app. Serve only these bundled example/SDK files.
 import http from 'node:http';
+import {exampleEndpoint} from './isolation.js';
 import { readFile } from 'node:fs/promises';
 const port = Number(process.env.BRIDGE_EXAMPLE_PORT ?? 47322);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid BRIDGE_EXAMPLE_PORT');
+if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 47321) throw new Error('Invalid BRIDGE_EXAMPLE_PORT');
 const host = `127.0.0.1:${port}`;
-const bridgeURL = new URL(process.env.BRIDGE_URL ?? 'http://127.0.0.1:47321');
-if (bridgeURL.protocol !== 'http:' || bridgeURL.hostname !== '127.0.0.1' || bridgeURL.username || bridgeURL.password || bridgeURL.search || bridgeURL.hash || bridgeURL.pathname !== '/') throw new Error('BRIDGE_URL must be a loopback HTTP origin');
+const bridgeURL = new URL(exampleEndpoint(process.env.BRIDGE_URL));
 const files = new Map([
   ['/', [new URL('./app.html', import.meta.url), 'text/html']],
   ['/sdk.js', [new URL('../internal/bridge/web/index.js', import.meta.url), 'text/javascript']],
+  ['/isolation.js', [new URL('./isolation.js', import.meta.url), 'text/javascript']],
   ['/storage.js', [new URL('../internal/bridge/web/storage.js', import.meta.url), 'text/javascript']],
   ['/secure.js', [new URL('../internal/bridge/web/secure.js', import.meta.url), 'text/javascript']],
   ['/app.js', [new URL('./app.js', import.meta.url), 'text/javascript']],

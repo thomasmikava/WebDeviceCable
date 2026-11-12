@@ -1,14 +1,14 @@
+import {testDirectory, testPort, testRuntime} from './test-instance.mjs';
 import { existsSync } from 'node:fs';
 // Real runner + WebCrypto SDK + development-only Node helper commands. No AI.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { BridgeClient } from '../internal/bridge/web/index.js';
 
-const root = resolve('.cache/tmp'); await mkdir(root,{recursive:true});
-const dir = await mkdtemp(root+'/command-e2e-'), origin = 'http://127.0.0.1:47322';
+const dir = await testDirectory('command-e2e'), origin = 'http://127.0.0.1:47322';
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
 const actions = [
   {id:'greet',title:'Say hello',exec:[process.execPath,'-e',"console.log('first');setTimeout(()=>console.log('input:'+process.argv[1]),350);setTimeout(()=>console.log('last'),800)",'{{ .Arguments.message }}'],arguments:[{name:'message',type:'very_dangerous_raw_string',default:'Hello'}],timeout:5},
@@ -17,13 +17,13 @@ const actions = [
 ];
 const config = enabled => JSON.stringify({bridge:{allowWebCommandEditing:enabled,disableNative:true},actions},null,2);
 await writeFile(dir+'/config.yaml',config(false),{mode:0o600});
-let child, base, sessionID, csrf, port = '0'; const clients = [];
+let child, base, sessionID, csrf, port = testPort(); const clients = [];
 async function boot() {
   base = undefined;
   child = spawn(resolve(process.env.WDC_BINARY ?? (existsSync(process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') ? (process.platform==='win32'?'dist/WebDeviceCable.exe':'dist/WebDeviceCable') : (process.platform==='win32'?'dist/webdevicecable.exe':'dist/webdevicecable'))),['serve','--data-dir',dir,'--port',port],{stdio:'pipe'});
   let errors = ''; child.stderr.on('data',data=>{errors+=data});
   for(let i=0;i<100;i++){
-    try {const info=JSON.parse(await readFile(dir+'/runner.json','utf8'));if(info.pid===child.pid){base=info.url;break}}catch{}
+    try {base=await testRuntime(dir,child);break}catch{}
     if(child.exitCode!==null)break;await delay(50);
   }
   assert.ok(base,errors || 'runner startup timed out');port=new URL(base).port;

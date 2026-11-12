@@ -194,7 +194,8 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		if info != in.Expected {
 			return fail(409, "relay_identity_changed", "Review the relay project and account again.")
 		}
-		automatic := info.RequestedPermissions.AutomaticApprovals
+		// An app suggestion is not owner consent.
+		automatic := false
 		if in.Automatic != nil {
 			automatic = *in.Automatic
 		}
@@ -359,6 +360,7 @@ func (a *App) relayLoop(ctx context.Context, mux http.Handler, endpoint, appOrig
 }
 
 type relayWriter struct {
+	delivered        []func()
 	ctx              context.Context
 	client           *http.Client
 	binding          RelayBinding
@@ -390,4 +392,11 @@ func (w *relayWriter) send(body string, end bool) error {
 	w.sequence++
 	return w.err
 }
-func (w *relayWriter) finish() { _ = w.send("", true) }
+func (w *relayWriter) finish() {
+	if w.send("", true) == nil {
+		for _, delivered := range w.delivered {
+			delivered()
+		}
+	}
+	w.delivered = nil
+}

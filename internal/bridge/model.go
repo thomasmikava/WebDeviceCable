@@ -49,6 +49,7 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
+	RequestHistory      string             `json:"requestHistory,omitempty"`
 	PermissionsRevision uint64             `json:"permissionsRevision,omitempty"`
 	PermissionSaveID    string             `json:"permissionSaveId,omitempty"`
 	PermissionSaveHash  string             `json:"permissionSaveHash,omitempty"`
@@ -102,6 +103,7 @@ type JobRequest struct {
 	Contexts       []string          `json:"contexts,omitempty"`
 }
 type Job struct {
+	OmitHistory     bool                  `json:"omitHistory,omitempty"`
 	ToolOperations  []ToolOperationRecord `json:"toolOperations,omitempty"`
 	UsesFiles       bool                  `json:"usesFiles,omitempty"`
 	InputNames      []string              `json:"inputNames,omitempty"`
@@ -141,19 +143,20 @@ type Receipt struct {
 	Hash        string `json:"hash"`
 }
 type State struct {
-	Programs      map[string]AIProgram     `json:"programs"`
-	IdentityKey   string                   `json:"identityKey,omitempty"`
-	SecurityReset bool                     `json:"securityReset,omitempty"`
-	Version       int                      `json:"version"`
-	DeviceID      string                   `json:"deviceId"`
-	Enabled       bool                     `json:"enabled"`
-	Revision      uint64                   `json:"revision"`
-	Pairings      map[string]*Pairing      `json:"pairings"`
-	Invitations   map[string]*Invitation   `json:"invitations"`
-	Jobs          []*Job                   `json:"jobs"`
-	Receipts      map[string]Receipt       `json:"receipts,omitempty"`
-	Sharing       *Sharing                 `json:"sharing,omitempty"`
-	Conversations map[string]*Conversation `json:"conversations"`
+	KeepRequestHistory *bool                    `json:"keepRequestHistory,omitempty"`
+	Programs           map[string]AIProgram     `json:"programs"`
+	IdentityKey        string                   `json:"identityKey,omitempty"`
+	SecurityReset      bool                     `json:"securityReset,omitempty"`
+	Version            int                      `json:"version"`
+	DeviceID           string                   `json:"deviceId"`
+	Enabled            bool                     `json:"enabled"`
+	Revision           uint64                   `json:"revision"`
+	Pairings           map[string]*Pairing      `json:"pairings"`
+	Invitations        map[string]*Invitation   `json:"invitations"`
+	Jobs               []*Job                   `json:"jobs"`
+	Receipts           map[string]Receipt       `json:"receipts,omitempty"`
+	Sharing            *Sharing                 `json:"sharing,omitempty"`
+	Conversations      map[string]*Conversation `json:"conversations"`
 }
 type Lease struct {
 	PairingID string
@@ -203,6 +206,7 @@ func finish(j *Job, status, code, detail string, now time.Time) {
 }
 func publicJob(j *Job) Job {
 	c := *j
+	c.OmitHistory = false
 	c.RequestHash = ""
 	c.Request.Tools = nil
 	c.ActionHash = ""
@@ -226,14 +230,15 @@ func publicPairing(p *Pairing) Pairing {
 // routing and account discovery must not conflict with an owner's open form.
 func permissionFingerprint(p *Pairing) string {
 	data, _ := jsonData(struct {
-		Automatic bool              `json:"automatic"`
-		Files     bool              `json:"files"`
-		Paused    bool              `json:"paused"`
-		Revoked   bool              `json:"revoked"`
-		Folders   []FolderGrant     `json:"folders,omitempty"`
-		Actions   map[string]string `json:"actions,omitempty"`
-		Programs  map[string]string `json:"programs,omitempty"`
-	}{p.Automatic, p.Files, p.Paused, p.Revoked, p.Folders, p.Actions, p.ProgramGrants})
+		RequestHistory string            `json:"requestHistory"`
+		Automatic      bool              `json:"automatic"`
+		Files          bool              `json:"files"`
+		Paused         bool              `json:"paused"`
+		Revoked        bool              `json:"revoked"`
+		Folders        []FolderGrant     `json:"folders,omitempty"`
+		Actions        map[string]string `json:"actions,omitempty"`
+		Programs       map[string]string `json:"programs,omitempty"`
+	}{p.RequestHistory, p.Automatic, p.Files, p.Paused, p.Revoked, p.Folders, p.Actions, p.ProgramGrants})
 	return digest(string(data))
 }
 

@@ -22,7 +22,7 @@ await RelayClient.enroll({
 });
 ```
 
-Suggestions appear on the authenticated desktop connection review. `automaticApprovals: true` checks **Approve requests automatically** initially. The user can uncheck it before Connect, or check it when the application did not request it. Omitting the permission retains **Ask each time**. Approval creates a restricted pairing with the reviewed policy; it grants no folders, commands or custom programs. Existing permissions and workflow routing continue to apply. The app remains responsible for authorization and confirmation within its own tool handlers.
+Suggestions appear on the authenticated desktop connection review. `automaticApprovals` never preselects or grants automatic approvals. **Run requests automatically** starts off; enabling it requires an explicit owner choice and a confirmation explaining future requests. Omitting the owner’s automatic decision retains **Ask each time**, regardless of app suggestions. Approval creates a restricted pairing with the reviewed policy; it grants no folders, commands or custom programs. Existing permissions and workflow routing continue to apply. The app remains responsible for authorization and confirmation within its own tool handlers.
 
 The signed installed-app rendezvous binds suggestions to the initial request; the popup fallback carries the same fields from its verified opener origin. Relay enrollment stores suggestions with its expiring ticket. Desktop relay approval re-inspects and compares the entire displayed identity and suggestions. Changed terms require another review. No suggestions change an existing pairing or bypass local approval.
 
