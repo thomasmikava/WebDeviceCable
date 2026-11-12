@@ -497,7 +497,7 @@ func (a *App) editAction(id string, replacement *Action) error {
 	}
 	a.actions = next
 	for conversationID, runtime := range a.conversations {
-		if c := a.state.Conversations[conversationID]; c != nil && c.Plan.Action == id {
+		if c := a.state.Conversations[conversationID]; c != nil && c.Plan != nil && c.Plan.Action == id {
 			runtime.cancel()
 		}
 	}
@@ -509,7 +509,7 @@ func (a *App) editAction(id string, replacement *Action) error {
 	}
 	return a.update(func(s *State) error {
 		for _, c := range s.Conversations {
-			if c.Plan.Action == id && c.Status == "open" {
+			if c.Status == "open" && c.Plan != nil && c.Plan.Action == id {
 				c.Status = "closed"
 				c.Code = "command_changed"
 				c.UpdatedAt = a.now()

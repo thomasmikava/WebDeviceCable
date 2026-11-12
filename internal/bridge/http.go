@@ -21,7 +21,9 @@ import (
 	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
-//go:embed web/*
+// Only runtime assets belong in the binary; tests and development files stay outside web.
+//
+//go:embed web/*.html web/*.js web/*.css web/*.svg web/*.png
 var assets embed.FS
 
 type apiError struct {
@@ -75,9 +77,12 @@ func equal(a, b string) bool {
 	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// Handler accepts only the exact loopback Host on which this instance is listening.
+// Handler serves only the exact loopback Host on which this instance is listening.
+// Safe localhost navigation redirects to that canonical Host without serving data.
 func (a *App) Handler(host string, shutdown func()) http.Handler {
 	origin := "http://" + host
+	listenIP, port, _ := net.SplitHostPort(host)
+	localhost := "localhost:" + port
 	mux := http.NewServeMux()
 	wrap := func(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +128,9 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 				w.Header().Set("Retry-After", "3")
 				return fail(503, "bridge_updating", "WebDeviceCable is updating. Reconnect in a moment.")
 			}
-			return fn(w, r, p)
+			err := fn(w, r, p)
+			a.recordRoutingFailure(p, err)
+			return err
 		})
 	}
 	a.launchRoutes(mux, wrap, control, origin)
@@ -132,6 +139,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	a.commandRoutes(mux, control)
 	a.programRoutes(mux, control)
 	a.pairingRequestRoutes(mux, control, origin)
+	a.invitationRoutes(mux, control)
 	a.connectionEventRoutes(mux, control)
 	a.logoRoutes(mux, control)
 	a.preferenceRoutes(mux, paired, control)
@@ -204,11 +212,14 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		}
 		jobs := []Job{}
 		for _, j := range a.state.Jobs {
+			if terminal(j.Status) && j.OmitHistory {
+				continue
+			}
 			copy := publicJob(j)
 			copy.Plan = j.Plan
 			jobs = append(jobs, copy)
 		}
-		writeJSON(w, 200, map[string]any{"connectionRevision": a.connectionRevision, "updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.publicConversations(), "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
+		writeJSON(w, 200, map[string]any{"keepRequestHistory": globalRequestHistory(&a.state), "connectionRevision": a.connectionRevision, "updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.publicConversations(), "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/providers/check", control(func(w http.ResponseWriter, r *http.Request) error {
@@ -238,6 +249,8 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("PATCH /api/pairings/{id}", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
+			RequestHistory              *string            `json:"requestHistory,omitempty"`
+			ConfirmDiscard              bool               `json:"confirmDiscard,omitempty"`
 			ExpectedPermissionsRevision *uint64            `json:"expectedPermissionsRevision,omitempty"`
 			PermissionSaveID            string             `json:"permissionSaveId,omitempty"`
 			DisplayName                 *string            `json:"displayName"`
@@ -275,6 +288,16 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		if in.ExpectedPermissionsRevision != nil && *in.ExpectedPermissionsRevision != pairing.PermissionsRevision {
 			return fail(409, "permissions_changed", "Permissions changed. Reload the saved settings before applying this draft.")
 		}
+		if in.RequestHistory != nil {
+			if !validRequestHistory(*in.RequestHistory) {
+				return fail(400, "invalid_history", "Choose use the global setting, keep or don't keep.")
+			}
+			next := *pairing
+			next.RequestHistory = *in.RequestHistory
+			if (keepRequestHistory(&a.state, pairing) && !keepRequestHistory(&a.state, &next) || pairing.RequestHistory != "discard" && next.RequestHistory == "discard") && !in.ConfirmDiscard {
+				return fail(400, "history_confirmation_required", "Confirm removal of this connection’s finished request history.")
+			}
+		}
 		if in.DisplayName != nil {
 			name := strings.TrimSpace(*in.DisplayName)
 			if len(name) > 100 || !utf8.ValidString(name) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
@@ -307,6 +330,12 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		}
 		if e := a.update(func(s *State) error {
 			p := s.Pairings[id]
+			if in.RequestHistory != nil && p.RequestHistory != *in.RequestHistory {
+				p.RequestHistory = *in.RequestHistory
+				if !keepRequestHistory(s, p) {
+					a.discardStoredHistory(s, func(j *Job) bool { return j.PairingID == id })
+				}
+			}
 			if p.Revoked {
 				return fail(409, "revoked", "Create a new pairing after revocation.")
 			}
@@ -437,7 +466,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		if e := a.update(func(s *State) error {
 			keep := []*Job{}
 			for _, j := range s.Jobs {
-				if !terminal(j.Status) {
+				if !terminal(j.Status) || j.OmitHistory {
 					keep = append(keep, j)
 				}
 			}
@@ -546,6 +575,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 				return fail(410, "history_deleted", "This request was consumed and its history was cleared.")
 			}
 			writeJSON(w, 200, map[string]any{"job": a.remoteJob(job)})
+			a.collectResult(w, job)
 		} else {
 			writeJSON(w, 200, map[string]any{"job": nil})
 		}
@@ -627,6 +657,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			status = 200
 		}
 		writeJSON(w, status, a.remoteJob(job))
+		a.collectResult(w, job)
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/jobs/{id}", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -635,6 +666,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			return fail(404, "not_found", "Job not found.")
 		}
 		writeJSON(w, 200, a.remoteJob(j))
+		a.collectResult(w, j)
 		return nil
 	}))
 	mux.HandleFunc("POST /v2/jobs/{id}/cancel", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -668,12 +700,22 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		remote, _, e := net.SplitHostPort(r.RemoteAddr)
+		loopback := e == nil && net.ParseIP(remote).IsLoopback()
 		if r.Host != host {
+			if listenIP == "127.0.0.1" && port != "" && r.Host == localhost && loopback &&
+				(r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api") {
+				location := origin + r.URL.EscapedPath()
+				if r.URL.ForceQuery || r.URL.RawQuery != "" {
+					location += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, location, http.StatusTemporaryRedirect)
+				return
+			}
 			writeError(w, fail(403, "host_denied", "Invalid local host."))
 			return
 		}
-		remote, _, e := net.SplitHostPort(r.RemoteAddr)
-		if e != nil || !net.ParseIP(remote).IsLoopback() {
+		if !loopback {
 			writeError(w, fail(403, "loopback_required", "Loopback requests only."))
 			return
 		}
@@ -753,7 +795,7 @@ func findJob(s *State, id string) *Job {
 }
 func (a *App) cancelJob(w http.ResponseWriter, id, pairID string) error {
 	j := findJob(&a.state, id)
-	if j == nil || pairID != "" && j.PairingID != pairID {
+	if j == nil || pairID != "" && j.PairingID != pairID || pairID == "" && terminal(j.Status) && j.OmitHistory {
 		return fail(404, "not_found", "Job not found.")
 	}
 	if !terminal(j.Status) {
@@ -764,7 +806,9 @@ func (a *App) cancelJob(w http.ResponseWriter, id, pairID string) error {
 			return e
 		}
 	}
-	writeJSON(w, 200, a.remoteJob(findJob(&a.state, id)))
+	result := findJob(&a.state, id)
+	writeJSON(w, 200, a.remoteJob(result))
+	a.collectResult(w, result)
 	return nil
 }
 func (a *App) streamJob(w http.ResponseWriter, r *http.Request) {
@@ -789,6 +833,7 @@ func (a *App) streamJob(w http.ResponseWriter, r *http.Request) {
 				e = fail(404, "not_found", "Job not found.")
 			} else {
 				job = a.remoteJob(j)
+				a.collectResult(w, j)
 			}
 		}
 		a.mu.Unlock()

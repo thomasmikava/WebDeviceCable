@@ -1,6 +1,8 @@
 import { BridgeClient, ConnectionStore } from './sdk.js';
+import {exampleEndpoint, assertExampleConnection} from './isolation.js';
 const $ = id => document.getElementById(id); let client, current, chat, chatProvider, commands = [];
 const origin = location.origin;
+const baseURL = exampleEndpoint(document.querySelector('meta[name=bridge-url]')?.content);
 const account = {appId:'writer.example',appUser:'alice'};
 const store = new ConnectionStore(account);
 let saved, busy = false;
@@ -12,7 +14,7 @@ function setBusy(value) {
 }
 // Restore the pairing only. Each tab opens its own lease and chat context.
 $('connect').disabled=true;
-void store.load().then(connection => { saved=connection; if(saved) $('connect').textContent='Reconnect to WebDeviceCable'; }).catch(errorMessage).finally(()=>{$('connect').disabled=false;});
+void store.load().then(connection => { if(connection)assertExampleConnection(connection,baseURL);saved=connection; if(saved) $('connect').textContent='Reconnect to WebDeviceCable'; }).catch(errorMessage).finally(()=>{$('connect').hidden=!saved;$('connect').disabled=false;});
 async function submit(request) {
   if(busy) return; setBusy(true); $('error').textContent = '';
   try {
@@ -27,7 +29,7 @@ async function submit(request) {
 $('pair').onsubmit = async event => {
   event.preventDefault();
   try {
-    const result = await BridgeClient.pair({invitation:$('invitation').value.trim(),appId:'writer.example',appUser:'alice',origin});
+    const result = await BridgeClient.pair({baseURL,invitation:$('invitation').value.trim(),appId:'writer.example',appUser:'alice',origin});
     await connected(result);
   } catch(error) { $('error').textContent = error.message; }
 };
@@ -47,8 +49,9 @@ $('command-select').onchange = renderInputs;
 $('command-request').onsubmit = event => { event.preventDefault(); void submit({kind:'command',action:$('command-select').value,arguments:Object.fromEntries(new FormData(event.target))}); };
 
 async function connected(result) {
+  assertExampleConnection(result.connection,baseURL);
   if(client) await client.close();
-  client = new BridgeClient({connection:result.connection,account,origin,groups:[{id:'ai',name:'AI',kind:'ai',children:[{id:'chat',name:'Chat',kind:'ai'},{id:'courses',name:'Course creation',kind:'ai'}]},{id:'export',name:'Export'}]});
+  client = new BridgeClient({baseURL,connection:result.connection,account,origin,groups:[{id:'ai',name:'AI',kind:'ai',children:[{id:'chat',name:'Chat',kind:'ai'},{id:'courses',name:'Course creation',kind:'ai'}]},{id:'export',name:'Export'}]});
   await client.connect();
   saved=result.connection;
   await store.save(saved).catch(errorMessage);
@@ -65,13 +68,12 @@ async function connected(result) {
 $('connect').onclick = async () => {
   $('error').textContent = ''; $('connect').disabled = true;
   try {
-    // Do not await storage before opening the pairing popup: browsers require a click.
-    const pending = saved ? Promise.resolve({connection:saved}) : BridgeClient.requestPairing({...account,name:'Writer',baseURL:document.querySelector('meta[name=bridge-url]')?.content});
-    await connected(await pending);
+    if(!saved)throw new Error('Create an invitation in your isolated development panel.');
+    await connected({connection:saved});
   }
   catch(error){$('error').textContent=error.message;}
   finally{$('connect').disabled=false;}
 };
 
 $('new-chat').onclick=async()=>{try{await chat?.close();chat=undefined;$('output').textContent='Ready.';}catch(error){errorMessage(error);}};
-$('disconnect').onclick=async()=>{try{await client?.close();}catch(error){errorMessage(error);}finally{await store.clear().catch(errorMessage);saved=undefined;chat=undefined;client=undefined;$('connected').hidden=true;$('connect').hidden=false;$('manual').hidden=false;$('pair').hidden=false;$('connect').textContent='Connect to WebDeviceCable';$('status').textContent='Not connected';}};
+$('disconnect').onclick=async()=>{try{await client?.close();}catch(error){errorMessage(error);}finally{await store.clear().catch(errorMessage);saved=undefined;chat=undefined;client=undefined;$('connected').hidden=true;$('connect').hidden=true;$('manual').hidden=false;$('pair').hidden=false;$('connect').textContent='Connect to WebDeviceCable';$('status').textContent='Not connected';}};

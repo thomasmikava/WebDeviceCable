@@ -25,7 +25,7 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		return nil, false, err
 	}
 	if consumed {
-		if in.ConversationID != "" && a.state.Conversations[in.ConversationID] == nil {
+		if c := a.state.Conversations[in.ConversationID]; in.ConversationID != "" && (c == nil || c.OmitHistory && c.Status != "open") {
 			in.ToolSetHash = receipt.ToolSetHash
 			hash = requestHash(in)
 		}
@@ -94,7 +94,7 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 	if plan.Kind == "image-edit" && !imageInput {
 		return nil, false, fail(400, "image_required", "Image editing needs a supplied PNG, JPEG, WebP or GIF.")
 	}
-	job := &Job{ID: secret(), PairingID: p.ID, Request: in, RequestHash: hash, LeaseID: lease, Status: "awaiting_approval", Billing: "none", Revision: 1, CreatedAt: a.now(), Plan: plan, ActionHash: plan.ActionHash, ActionTitle: title}
+	job := &Job{OmitHistory: !keepRequestHistory(&a.state, p), ID: secret(), PairingID: p.ID, Request: in, RequestHash: hash, LeaseID: lease, Status: "awaiting_approval", Billing: "none", Revision: 1, CreatedAt: a.now(), Plan: plan, ActionHash: plan.ActionHash, ActionTitle: title}
 	for _, id := range in.Inputs {
 		if input := a.inputs[id]; input != nil {
 			job.InputNames = append(job.InputNames, input.Name)
@@ -109,17 +109,8 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 				return err
 			}
 		}
-		if len(s.Jobs) >= maxJobs {
-			oldest := -1
-			for i, previous := range s.Jobs {
-				if terminal(previous.Status) && (oldest < 0 || previous.CreatedAt.Before(s.Jobs[oldest].CreatedAt)) {
-					oldest = i
-				}
-			}
-			if oldest < 0 {
-				return fail(429, "job_limit", "Too many active requests. Wait for a request to finish.")
-			}
-			s.Jobs = append(s.Jobs[:oldest], s.Jobs[oldest+1:]...)
+		if err := makeJobRoom(s); err != nil {
+			return err
 		}
 		// Reserve first. A failed job-state save consumes the key rather than
 		// risking execution again after a crash or ambiguous submission.

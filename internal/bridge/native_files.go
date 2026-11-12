@@ -217,26 +217,37 @@ func (a *App) nativeFileRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if e != nil || offset < 0 || offset > artifact.Size {
 			return fail(400, "invalid_offset", "Supply a valid artifact offset.")
 		}
-		f, e := openLocalFile(a.artifactPath(j.ID, artifact.ID), 8<<20)
-		if e != nil {
-			return fail(410, "artifact_missing", "The output file is no longer available.")
-		}
-		defer f.Close()
-		info, e := f.Stat()
-		if e != nil || info.Size() != int64(artifact.Size) {
-			return fail(410, "artifact_missing", "The output file is incomplete.")
+		var reader io.ReaderAt
+		if delivery := a.deliveries[j.ID]; delivery != nil && delivery.ephemeral {
+			data, ok := delivery.artifacts[artifact.ID]
+			if !ok {
+				return fail(410, "artifact_missing", "The output file is no longer available.")
+			}
+			reader = bytes.NewReader(data)
+		} else {
+			f, err := openLocalFile(a.artifactPath(j.ID, artifact.ID), 8<<20)
+			if err != nil {
+				return fail(410, "artifact_missing", "The output file is no longer available.")
+			}
+			defer f.Close()
+			info, err := f.Stat()
+			if err != nil || info.Size() != int64(artifact.Size) {
+				return fail(410, "artifact_missing", "The output file is incomplete.")
+			}
+			reader = f
 		}
 		part := make([]byte, min(fileChunk, artifact.Size-offset))
-		n, e := f.ReadAt(part, int64(offset))
+		n, e := reader.ReadAt(part, int64(offset))
 		if (e != nil && e != io.EOF) || n != len(part) {
 			return fail(410, "artifact_missing", "The output file is incomplete.")
 		}
+		a.collectArtifact(w, j, artifact.ID, offset, len(part))
 		writeJSON(w, 200, map[string]any{"id": artifact.ID, "offset": offset, "data": base64.StdEncoding.EncodeToString(part), "complete": offset+len(part) == artifact.Size})
 		return nil
 	}))
 	mux.HandleFunc("GET /api/jobs/{id}/artifacts/{artifact}", control(func(w http.ResponseWriter, r *http.Request) error {
 		j := findJob(&a.state, r.PathValue("id"))
-		if j == nil {
+		if j == nil || terminal(j.Status) && j.OmitHistory {
 			return fail(404, "not_found", "Artifact not found.")
 		}
 		artifact, e := findArtifact(j, r.PathValue("artifact"))
@@ -285,7 +296,7 @@ func (a *App) saveNativeImage(jobID, encoded string) (Artifact, error) {
 	if p == nil || !p.Files {
 		return Artifact{}, filePermissionDenied()
 	}
-	used := int64(0)
+	used := a.deliveryArtifactBytes()
 	root := filepath.Join(a.dir, "artifacts")
 	_ = filepath.WalkDir(root, func(_ string, item os.DirEntry, err error) error {
 		if err == nil && !item.IsDir() {

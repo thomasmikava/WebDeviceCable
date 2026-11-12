@@ -8,6 +8,7 @@ import (
 )
 
 type Conversation struct {
+	OmitHistory bool           `json:"omitHistory,omitempty"`
 	UsesFiles   bool           `json:"usesFiles,omitempty"`
 	Tools       []AppTool      `json:"tools,omitempty"`
 	ToolSetHash string         `json:"toolSetHash"`
@@ -27,6 +28,7 @@ type Conversation struct {
 
 func remoteConversation(c *Conversation) Conversation {
 	copy := *c
+	copy.OmitHistory = false
 	copy.Plan = nil
 	copy.Tools = nil
 	copy.LeaseID = ""
@@ -117,7 +119,7 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 		if plan.Kind == "command" && a.actions[plan.Action].Session == nil {
 			return fail(400, "sessions_unsupported", "This command does not support continuing sessions. Enable its JSONL session interface in configuration.")
 		}
-		c := &Conversation{Tools: tools, ToolSetHash: toolHash, Mode: in.Mode, ID: secret(), PairingID: p.ID, LeaseID: lease, Group: in.Group, Plan: plan, Status: "open", CreatedAt: a.now(), UpdatedAt: a.now()}
+		c := &Conversation{OmitHistory: !keepRequestHistory(&a.state, p), Tools: tools, ToolSetHash: toolHash, Mode: in.Mode, ID: secret(), PairingID: p.ID, LeaseID: lease, Group: in.Group, Plan: plan, Status: "open", CreatedAt: a.now(), UpdatedAt: a.now()}
 		if err := a.update(func(s *State) error {
 			if err := admitDefinitions(s, tools); err != nil {
 				return err
@@ -179,6 +181,7 @@ func (a *App) conversationRoutes(mux *http.ServeMux, paired func(func(http.Respo
 			status = 200
 		}
 		writeJSON(w, status, a.remoteJob(job))
+		a.collectResult(w, job)
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/conversations/{id}", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -277,6 +280,9 @@ func (a *App) reconcileConversations(s *State, now time.Time) {
 func (a *App) publicConversations() map[string]Conversation {
 	out := map[string]Conversation{}
 	for id, c := range a.state.Conversations {
+		if c.OmitHistory && c.Status != "open" {
+			continue
+		}
 		out[id] = remoteConversation(c)
 	}
 	return out

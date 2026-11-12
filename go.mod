@@ -1,6 +1,6 @@
 module github.com/thomasmikava/WebDeviceCable
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/extrame/xls v0.0.1

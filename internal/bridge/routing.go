@@ -191,7 +191,7 @@ func (a *App) resolvePlan(p *Pairing, request JobRequest) (*ExecutionPlan, error
 	if request.Group != "" || request.Kind == "action" && target.Provider == "" && target.Action == "" {
 		target = routingTarget(p, request.Group)
 		if target.Provider == "" && target.Action == "" {
-			return nil, fail(409, "routing_required", "Choose this app’s default in Connections, then Routing.")
+			return nil, fail(409, "routing_required", "Choose a default program for this app in WebDeviceCable, under Connections.")
 		}
 	}
 	if request.Kind == "connection-test" {
@@ -346,6 +346,7 @@ func (a *App) remoteJob(j *Job) Job {
 }
 func (a *App) remotePairing(p *Pairing) Pairing {
 	c := publicPairing(p)
+	c.RequestHistory = ""
 	c.PermissionsRevision = 0
 	c.PermissionSaveID = ""
 	c.DisplayName = ""

@@ -61,6 +61,7 @@ func (a *App) createInvitation(in invitationInput, origin string) (map[string]an
 	}); e != nil {
 		return nil, e
 	}
+	a.notifyConnections()
 	return map[string]any{"invitation": a.invitationBundle(token, origin, p, expires), "expiresAt": expires, "pairing": publicPairing(&p)}, nil
 }
 
@@ -169,7 +170,8 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 			return fail(409, "pairing_decided", "This connection request was already answered.")
 		}
 		if request.Status == "pending" && in.Approve {
-			automatic := request.RequestedPermissions.AutomaticApprovals
+			// An app suggestion is not owner consent. Only an explicit decision enables this.
+			automatic := false
 			if in.Automatic != nil {
 				automatic = *in.Automatic
 			}

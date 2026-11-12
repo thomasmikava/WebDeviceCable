@@ -175,6 +175,33 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		writeJSON(w, 200, a.state.Pairings[p.ID].Routing)
 		return nil
 	}))
+	mux.HandleFunc("PATCH /api/history", control(func(w http.ResponseWriter, r *http.Request) error {
+		var in struct {
+			Keep           *bool `json:"keep"`
+			ConfirmDiscard bool  `json:"confirmDiscard"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		if in.Keep == nil {
+			return fail(400, "invalid_history", "Choose whether to keep request history.")
+		}
+		if globalRequestHistory(&a.state) && !*in.Keep && !in.ConfirmDiscard {
+			return fail(400, "history_confirmation_required", "Confirm removal of finished requests that use the global history setting.")
+		}
+		if err := a.update(func(s *State) error {
+			changed := globalRequestHistory(s) != *in.Keep
+			s.KeepRequestHistory = in.Keep
+			if changed && !*in.Keep {
+				a.discardStoredHistory(s, func(j *Job) bool { return !keepRequestHistory(s, s.Pairings[j.PairingID]) })
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		writeJSON(w, 200, map[string]bool{"keepRequestHistory": globalRequestHistory(&a.state)})
+		return nil
+	}))
 	mux.HandleFunc("PATCH /api/sharing", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
 			Names     *bool `json:"names"`

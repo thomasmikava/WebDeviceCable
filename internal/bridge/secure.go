@@ -427,13 +427,32 @@ func (a *App) secureCall(w http.ResponseWriter, r *http.Request, mux http.Handle
 		return sw.finish()
 	}
 	mux.ServeHTTP(sw, inner)
-	return sw.finish()
+	if err := sw.finish(); err != nil {
+		return err
+	}
+	complete := func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for _, delivered := range sw.delivered {
+			delivered()
+		}
+	}
+	// Relay exchanges also need their existing transport end marker accepted.
+	// Writing a signed body alone is not yet a complete relay HTTP response.
+	if relay, ok := w.(*relayWriter); ok {
+		relay.delivered = append(relay.delivered, complete)
+	} else {
+		complete()
+	}
+
+	return nil
 }
 
 // secureWriter preserves native HTTP handlers while authenticating every emitted
 // snapshot before a consumer sees it. Stream chunks are signed independently;
 // a hash chain and authenticated end frame detect removal/reordering/truncation.
 type secureWriter struct {
+	delivered   []func()
 	target      http.ResponseWriter
 	header      http.Header
 	status      int

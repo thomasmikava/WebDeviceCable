@@ -103,3 +103,44 @@ Verification uses a local fixture app and folders under `.local/folder-ui-qa`. I
 - Permission saves include the draft's permission revision. A change in another window or a separate permission review rejects the entire stale save. **Saved settings changed** freezes edits and offers **Reload saved permissions**, with confirmation before replacing the draft. A stale folder list cannot restore revoked access.
 - Each save has a durable, payload-bound receipt. A lost response triggers a read to confirm the outcome, without repeating the write. If confirmation is unavailable, **Save not confirmed** offers **Check saved permissions** or an explicit **Retry save** with the original ID and payload. Frozen drafts use **Keep draft** in confirmations. Closing explains that applied changes remain saved; it never claims an uncertain save can be discarded.
 - Recovery messages and controls stay visible above the shared footer while content scrolls. Browser checks used disposable state at desktop, 390 px and 320 px, including lost responses, malformed acknowledgements, unavailable reads, a request lost before delivery, a later revocation, explicit reload and idempotent retry. Full Go race tests and all 91 SDK tests passed, alongside SDK type and generated-output checks. No provider inference was needed.
+
+
+## 12 November 2026: connection setup, attention and access
+
+- Approval cards and invitations offer a ready default program. It is saved through the existing routing API when the exact pairing appears; retries and reloads preserve the choice without overwriting newer routes. Unconfigured cards show **Setup needed**.
+- First-run onboarding shows live programs and three connection steps. **Add connection** explains app, invitation and server routes. **Programs and models**, workflow defaults, command-only fields, sharing helpers and command setup use plain wording.
+- Tab counts include connections, approvals and access requests. Optional desktop notifications handle browser permission, deduplication and navigation. **Always allow** confirms automatic approvals before saving and approving the current request.
+- **Access** gathers automation, files, folders, commands and custom programs. Editors return to the hub, preserving consent and drafts. Returning to Programs and models preserves unsaved choices or reviews a newer revision. Cards include account IDs; the menu keeps four connection actions.
+- Invitations created in a tab survive refresh, with copy actions and live countdowns. **API limitation:** no invitation listing/revocation endpoint exists. Cancel explains that removing this tab’s copy cannot invalidate a copied invitation. Custom programs require an explicit Access grant after pairing.
+- Notices remain visible inside dialogs. Locking confirms and explains reopening; removal lives in Edit; narrow heading actions align below titles.
+
+Verification used disposable `.local/ux-web` state on port 47431 and the sample app on 47432. Chrome/Chrome Beta covered desktop, 390 px and 320 px, real approval/manual pairing, saved defaults, invitation use, draft round trips, connection tests and locking, without horizontal overflow. Browser notification permission worked; OS banner delivery was not visually confirmed. The sample’s native-connect route briefly opened the installed panel; it was closed without approval. No AI inference was used. Preview servers were stopped.
+
+Passed at that stage: 16 UI lifecycle tests (now relocated to `scripts/panel.test.mjs`), Go vet, bridge tests, all HTTP end-to-end suites and 35 palette checks. Go checks use the repository temporary directory to avoid macOS temporary-path alias failures.
+
+## 12 November 2026: UX completion and isolation review
+
+- Replaced the tab-only pending invitation list with authenticated server metadata. Reloads and other tabs see pending manual invitations; **Cancel** confirms and revokes the verifier before clearing the local copy. Claims, expiry and revocation disable an open copy dialog. Claimed connections are never silently revoked by cancelling an invitation.
+- Added session-protected invitation list/revocation endpoints with CSRF checks; revocation requires exact Origin. Responses contain public pairing metadata and expiry, with no token or secret verifier. Server storage remains hash-only; **Copy again** stays available only in the creating tab's session storage. Existing restart invalidation is preserved.
+- Moved UI lifecycle tests outside embedded assets, added an explicit runtime-asset embedding filter, and added regressions proving test files are absent from the embedded filesystem and return 404. `scripts/check.sh` runs the relocated tests and development isolation checks.
+- Removed the sample's native-launch flow and required an explicit isolated endpoint for pairing and saved reconnection. HTTP/CLI suites reject the installed port, unsafe/nonempty data directories and stale runtime process IDs. Development instructions require an isolated fixture and never invoke an OS handler.
+- Reviewed the complete UX/server diff. Automatic approvals now start off even when an app requests them; the owner must explicitly choose and confirm. Server decisions with an omitted automatic flag remain off. Also guarded an Access-editor return against a panel lock during refresh and prevented a lock during deferred routing from publishing a stale render.
+
+Passed: `BRIDGE_GO="$PWD/.tools/go/bin/go" scripts/check.sh` (Go formatting, vet and full race suite; 27 panel/isolation tests; SDK types/build), `npm run test:e2e` (all three HTTP suites, including cross-panel invitation revocation), `npm run test:sdk` (91 tests), `npm run theme:check` (35 contrast checks), the guarded CLI lifecycle check and `git diff --check`. HTTP/CLI instances used only `--data-dir "$PWD/.local/ux-finish" --port 47461` with native providers disabled, and were stopped. New UI coverage uses the Node DOM stand-in; the earlier browser results above were not rerun. No installed application, native OS URL handler or real inference was used.
+
+## 12 November 2026: visual consistency audit fixes
+
+Resolved all 58 items in `.local/ui-audit.md` using shared type, spacing, radius, card, field-height and phone-target roles. Corrected action order, editor footer grouping, heading semantics/alignment, inheritance readability, danger hover, notice/toast treatment and the listed wording. The generated dark palette and existing focus, consent and close lifecycles remain intact.
+
+Real Chrome 157 covered 1280 / 768 / 390 / 320 × 900px, with manual invitation pairing to `examples/server.mjs`, connection tests, both counts, long names, all editors, folder keyboard rings, selected/hover states, notices and empty/locked screens. No page or dialog overflow; phone targets meet 44px. Evidence and per-item resolutions remain under `.local/ui-polish-evidence/`. The runner used only `.local/ui-polish-data` on 47471, with native providers disabled; the sample used 47472. No installed instance, native launcher or real AI inference was used. Both servers and Chrome were stopped.
+
+Passed: `BRIDGE_GO="$PWD/.tools/go/bin/go" scripts/check.sh` (SDK build output under `.local/`), all three `npm run test:e2e` suites on the required isolated directory/port, 27 UI/isolation tests, 91 SDK tests, 35 palette contrast checks, and `git diff --check`.
+
+
+## 12 November 2026: request history opt-out
+
+Added the default-on **Keep request history** switch and **Access → Request history** choices (global/keep/don’t keep). The Access draft uses its existing Save changes, revision checks and uncertain-save recovery. Turning history off confirms scoped deletion; the current global value stays readable below the selector at 320px. Requests explains global or connection opt-outs. Updated the panel’s privacy explanation and privacy/security/operations documentation.
+
+Delivery decision: the unchanged signed protocol has no app acknowledgement. Successful signed result writes collect opted-out output; file results wait for all artifact bytes. Failed writes remain retryable, with a fixed one-minute fallback. Terminal records/files leave durable storage immediately, replay receipts remain, and live session context stays available.
+
+Chrome Beta reviewed Settings, global confirmation, the Requests empty state, Access’s three choices, staging and saving an override at 320 × 900px, with no visible horizontal overflow. Only the disposable `.local/history-optout` runner on port 47481 was used, with native providers disabled; the fixture browser window and runner were closed. No inference or installed/dev-instance access was used. Validation includes Go/race lifecycle regressions, panel/isolation tests, all three encrypted HTTP suites (including unchanged SDK stream/lookup/retry opt-out checks), 91 SDK tests and 35 palette checks.

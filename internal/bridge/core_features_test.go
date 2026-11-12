@@ -399,8 +399,8 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 	}
 	object(t, f.req("POST", "/api/pairing-requests/"+requestID+"/decision", f.origin, "", "", map[string]bool{"approve": true}, true), 200)
 	for _, inv := range f.a.state.Invitations {
-		if !inv.Pairing.Automatic {
-			t.Fatal("reviewed automatic approval was not granted")
+		if inv.Pairing.Automatic {
+			t.Fatal("app suggestion granted automatic approval without an explicit owner choice")
 		}
 		if inv.Pairing.ClientPublicKey != publicKey(key) {
 			t.Fatal("invitation not bound to requesting key")
