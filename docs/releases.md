@@ -6,7 +6,7 @@ The browser and backend libraries have a separate [npm release procedure](npm.md
 
 ## Preview builds
 
-Use Python 3.12+, Go 1.25+, Node.js and npm. macOS packaging needs Xcode command-line tools. Building Windows installers also needs NSIS 3 (`makensis`); release verification reads their embedded manifests with 7-Zip. On macOS install both with `brew install makensis sevenzip`; on Windows use `choco install nsis 7zip --yes`; on Debian/Ubuntu use `apt-get install nsis p7zip-full`. `WDC_MAKENSIS` and `WDC_7ZIP` can select explicit executable paths.
+Use Python 3.12+, Go 1.27.4+, Node.js and npm. macOS packaging needs Xcode command-line tools. Building Windows installers also needs NSIS 3 (`makensis`); release verification reads their embedded manifests with 7-Zip. On macOS install both with `brew install makensis sevenzip`; on Windows use `choco install nsis 7zip --yes`; on Debian/Ubuntu use `apt-get install nsis p7zip-full`. `WDC_MAKENSIS` and `WDC_7ZIP` can select explicit executable paths.
 
 ```sh
 npm ci --ignore-scripts

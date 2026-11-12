@@ -1,6 +1,6 @@
 # Contributing to WebDeviceCable
 
-Development requires Go 1.25+, Node.js 22+ and npm. Python 3.12+ is needed only for packaging; building macOS launchers also needs Xcode command-line tools. Packaged applications require none of these development tools.
+Development requires Go 1.27.4+, Node.js 22+ and npm. Python 3.12+ is needed only for packaging; building macOS launchers also needs Xcode command-line tools. Packaged applications require none of these development tools.
 
 ```sh
 npm ci --ignore-scripts
