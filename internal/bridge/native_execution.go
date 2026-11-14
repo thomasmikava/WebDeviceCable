@@ -74,9 +74,9 @@ func (a *App) bindNativeAccount(jobID, account string) error {
 	})
 }
 func (a *App) startNative(job *Job) {
-	remaining := time.Duration(job.Request.TimeoutSeconds)*time.Second - a.now().Sub(job.CreatedAt)
+	remaining := executionRemaining(job, a.now())
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
-	run := &commandRun{jobID: job.ID, limit: a.textLimit(), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
+	run := &commandRun{jobID: job.ID, limit: a.textLimit(a.state.Pairings[job.PairingID]), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
 	a.commands[job.ID] = run
 	inputs, err := a.selectedInputs(a.state.Pairings[job.PairingID], job.LeaseID, job.Request.Inputs)
 	prompt, promptError := a.executionPrompt(job)

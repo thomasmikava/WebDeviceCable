@@ -49,36 +49,40 @@ func Capabilities() []Capability {
 }
 
 type Pairing struct {
-	RequestHistory      string             `json:"requestHistory,omitempty"`
-	PermissionsRevision uint64             `json:"permissionsRevision,omitempty"`
-	PermissionSaveID    string             `json:"permissionSaveId,omitempty"`
-	PermissionSaveHash  string             `json:"permissionSaveHash,omitempty"`
-	DisplayName         string             `json:"displayName,omitempty"`
-	LogoID              string             `json:"logoId,omitempty"`
-	GroupsDeclared      bool               `json:"groupsDeclared,omitempty"`
-	Relay               *RelayBinding      `json:"relay,omitempty"`
-	Transport           string             `json:"transport,omitempty"`
-	Tools               map[string]AppTool `json:"tools,omitempty"`
-	Folders             []FolderGrant      `json:"folders,omitempty"`
-	ID                  string             `json:"id"`
-	AppID               string             `json:"appId"`
-	Name                string             `json:"name"`
-	Origin              string             `json:"origin"`
-	AppUser             string             `json:"appUser"`
-	DeviceID            string             `json:"deviceId"`
-	ClientPublicKey     string             `json:"clientPublicKey,omitempty"`
-	CredentialHash      string             `json:"credentialHash,omitempty"`
-	Automatic           bool               `json:"automatic"`
-	Files               bool               `json:"files"`
-	Paused              bool               `json:"paused"`
-	Revoked             bool               `json:"revoked"`
-	CreatedAt           time.Time          `json:"createdAt"`
-	Mode                string             `json:"mode"`
-	ProgramGrants       map[string]string  `json:"programGrants,omitempty"`
-	NativeAccounts      map[string]string  `json:"nativeAccounts,omitempty"`
-	Actions             map[string]string  `json:"actions,omitempty"`
-	Groups              []ActionGroup      `json:"groups,omitempty"`
-	Routing             Routing            `json:"routing,omitempty"`
+	Overrides           ConnectionOverrides `json:"overrides,omitempty,omitzero"`
+	HistorySeconds      int                 `json:"historySeconds,omitempty"`
+	LastRequestAt       *time.Time          `json:"lastRequestAt,omitempty"`
+	ExpiresAt           *time.Time          `json:"expiresAt,omitempty"`
+	RequestHistory      string              `json:"requestHistory,omitempty"`
+	PermissionsRevision uint64              `json:"permissionsRevision,omitempty"`
+	PermissionSaveID    string              `json:"permissionSaveId,omitempty"`
+	PermissionSaveHash  string              `json:"permissionSaveHash,omitempty"`
+	DisplayName         string              `json:"displayName,omitempty"`
+	LogoID              string              `json:"logoId,omitempty"`
+	GroupsDeclared      bool                `json:"groupsDeclared,omitempty"`
+	Relay               *RelayBinding       `json:"relay,omitempty"`
+	Transport           string              `json:"transport,omitempty"`
+	Tools               map[string]AppTool  `json:"tools,omitempty"`
+	Folders             []FolderGrant       `json:"folders,omitempty"`
+	ID                  string              `json:"id"`
+	AppID               string              `json:"appId"`
+	Name                string              `json:"name"`
+	Origin              string              `json:"origin"`
+	AppUser             string              `json:"appUser"`
+	DeviceID            string              `json:"deviceId"`
+	ClientPublicKey     string              `json:"clientPublicKey,omitempty"`
+	CredentialHash      string              `json:"credentialHash,omitempty"`
+	Automatic           bool                `json:"automatic"`
+	Files               bool                `json:"files"`
+	Paused              bool                `json:"paused"`
+	Revoked             bool                `json:"revoked"`
+	CreatedAt           time.Time           `json:"createdAt"`
+	Mode                string              `json:"mode"`
+	ProgramGrants       map[string]string   `json:"programGrants,omitempty"`
+	NativeAccounts      map[string]string   `json:"nativeAccounts,omitempty"`
+	Actions             map[string]string   `json:"actions,omitempty"`
+	Groups              []ActionGroup       `json:"groups,omitempty"`
+	Routing             Routing             `json:"routing,omitempty"`
 }
 type Invitation struct {
 	Pairing    Pairing   `json:"pairing"`
@@ -143,6 +147,8 @@ type Receipt struct {
 	Hash        string `json:"hash"`
 }
 type State struct {
+	OwnerSettings      *OwnerSettings           `json:"ownerSettings,omitempty"`
+	SettingsRevision   uint64                   `json:"settingsRevision,omitempty"`
 	KeepRequestHistory *bool                    `json:"keepRequestHistory,omitempty"`
 	Programs           map[string]AIProgram     `json:"programs"`
 	IdentityKey        string                   `json:"identityKey,omitempty"`
@@ -230,15 +236,17 @@ func publicPairing(p *Pairing) Pairing {
 // routing and account discovery must not conflict with an owner's open form.
 func permissionFingerprint(p *Pairing) string {
 	data, _ := jsonData(struct {
-		RequestHistory string            `json:"requestHistory"`
-		Automatic      bool              `json:"automatic"`
-		Files          bool              `json:"files"`
-		Paused         bool              `json:"paused"`
-		Revoked        bool              `json:"revoked"`
-		Folders        []FolderGrant     `json:"folders,omitempty"`
-		Actions        map[string]string `json:"actions,omitempty"`
-		Programs       map[string]string `json:"programs,omitempty"`
-	}{p.RequestHistory, p.Automatic, p.Files, p.Paused, p.Revoked, p.Folders, p.Actions, p.ProgramGrants})
+		RequestHistory string              `json:"requestHistory"`
+		HistorySeconds int                 `json:"historySeconds"`
+		Overrides      ConnectionOverrides `json:"overrides"`
+		Automatic      bool                `json:"automatic"`
+		Files          bool                `json:"files"`
+		Paused         bool                `json:"paused"`
+		Revoked        bool                `json:"revoked"`
+		Folders        []FolderGrant       `json:"folders,omitempty"`
+		Actions        map[string]string   `json:"actions,omitempty"`
+		Programs       map[string]string   `json:"programs,omitempty"`
+	}{p.RequestHistory, p.HistorySeconds, p.Overrides, p.Automatic, p.Files, p.Paused, p.Revoked, p.Folders, p.Actions, p.ProgramGrants})
 	return digest(string(data))
 }
 
@@ -321,11 +329,8 @@ func validateRequest(r *JobRequest) error {
 	if r.Mode != "restricted" && r.Mode != "app-tools" && r.Mode != "workspace" && !(r.Kind == "command" && r.Mode == "commands") {
 		return errors.New("unsupported security mode; only Restricted is implemented")
 	}
-	if r.TimeoutSeconds == 0 {
-		r.TimeoutSeconds = 120
-	}
-	if r.TimeoutSeconds < 1 || r.TimeoutSeconds > 600 {
-		return errors.New("timeoutSeconds must be 1–600")
+	if r.TimeoutSeconds < 0 || r.TimeoutSeconds > 3600 {
+		return errors.New("timeoutSeconds must be 1–3600 when supplied")
 	}
 	if r.Kind != "command" && r.Kind != "action" && (r.Action != "" || len(r.Arguments) > 0) {
 		return errors.New("action and arguments are only accepted for command jobs")

@@ -17,14 +17,15 @@ class Element {
   querySelectorAll(){return [];}
   before(node){this.parentElement.append(node);}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(node=>node!==this);}
+  setCustomValidity(value){this.validationMessage=value;}
   focus(){}
 }
 const storage=()=>{const data=new Map();return {getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,String(value)),removeItem:key=>data.delete(key)};};
-function panel(){
+function panel(options={}){
   const nodes=new Map(),alerts=[],get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
   const document={hidden:false,title:'',hasFocus:()=>true,body:new Element(),getElementById:get,querySelector:selector=>selector==='.skip-link'?get('skip'):null,querySelectorAll:()=>[],createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),createTextNode:text=>String(text),addEventListener(){}};
   class Notification {static permission='granted';constructor(title,options){this.title=title;this.options=options;alerts.push(this);}close(){this.closed=true;}}
-  const window={Notification,localStorage:storage(),sessionStorage:storage(),addEventListener(){},focus(){this.focused=true;},scrollTo(){}};
+  const window={Notification,localStorage:options.local??storage(),sessionStorage:storage(),addEventListener(){},focus(){this.focused=true;},scrollTo(){}};
   const context=vm.createContext({document,window,Notification,Node:Element,HTMLElement:Element,HTMLButtonElement:Element,HTMLSelectElement:Element,HTMLDialogElement:Element,localStorage:window.localStorage,sessionStorage:window.sessionStorage,URL,URLSearchParams,AbortSignal,crypto:globalThis.crypto,location:{hash:''},setInterval(){},setTimeout(){},clearInterval(){},clearTimeout(){},requestAnimationFrame:fn=>fn(),console});
   vm.runInContext(source,context);
   const run=code=>vm.runInContext(code,context);
@@ -129,35 +130,24 @@ test('an app requesting automatic approvals starts off and needs the owner choic
   p.run('confirmAutomatic=async()=>true;automatic.checked=true;');await p.run('automatic.onchange()');assert.equal(p.run('reviewDecision("request").automatic'),true);
 });
 
-test('history switch confirms before disabling, cancels without a write and enables without confirmation',async()=>{
-  const p=panel(),writes=[];let confirmations=0;
-  p.context.apiImpl=async(path,init)=>{writes.push({path,body:JSON.parse(init.body)});};
-  p.context.confirmImpl=async()=>{confirmations++;return false;};
-  p.run('api=apiImpl;confirmAction=confirmImpl;');await p.run('toggleRequestHistory()');
-  assert.equal(confirmations,1);assert.equal(writes.length,0);
-  p.context.confirmImpl=async()=>{confirmations++;return true;};p.run('confirmAction=confirmImpl;');await p.run('toggleRequestHistory()');
-  assert.deepEqual(writes[0],{path:'/history',body:{keep:false,confirmDiscard:true}});
-  p.run('state.keepRequestHistory=false;');await p.run('toggleRequestHistory()');
-  assert.equal(confirmations,2);assert.deepEqual(writes[1].body,{keep:true,confirmDiscard:false});
-});
 test('history choices resolve both overrides and show the current global value',()=>{
   const p=panel();p.run('const choices=requestHistoryChoice({});');
-  assert.deepEqual(Array.from(p.run('choices.options')).map(option=>option.value),['global','keep','discard']);
-  assert.match(p.run('choices.options[0].children.join("")'),/global setting \(keep\)/);
-  p.run('state.keepRequestHistory=false;');assert.match(p.run('globalHistoryLabel()'),/don’t keep/);
+  assert.deepEqual(Array.from(p.run('choices.options')).map(option=>option.value),['global','keep','for','discard']);
+  assert.match(p.run('choices.options[0].children.join("")'),/Same as global \(Keep until I clear it\)/);
+  p.run('state.keepRequestHistory=false;');assert.match(p.run('globalHistoryLabel()'),/Don’t keep/);
   for(const [global,choice,want] of [[false,'keep',true],[true,'discard',false],[false,'global',false],[true,'global',true]]){
     assert.equal(p.run(`state.keepRequestHistory=${global};effectiveRequestHistory({requestHistory:${JSON.stringify(choice)}})`),want);
   }
   p.run('state.keepRequestHistory=false;');
   assert.equal(p.run('historyNeedsConfirmation({requestHistory:"keep"},"global")'),true);
-  assert.equal(p.run('historyNeedsConfirmation({requestHistory:"global"},"discard")'),true);
+  assert.equal(p.run('historyNeedsConfirmation({requestHistory:"global"},"discard")'),false);
   assert.equal(p.run('historyNeedsConfirmation({requestHistory:"discard"},"keep")'),false);
 });
 test('Requests explains global and per-connection opt-outs and ignores revoked connections',()=>{
-  const p=panel();p.run('renderHistorySettings();');assert.equal(p.get('history-note').hidden,true);assert.equal(p.get('keep-request-history').attrs['aria-checked'],'true');
+  const p=panel();p.run('renderHistorySettings();');assert.equal(p.get('history-note').hidden,true);
   p.run('state.pairings=[{requestHistory:"discard"}];renderHistorySettings();');assert.equal(p.get('history-note').hidden,false);assert.match(p.get('history-note').textContent,/some connections/);
   p.run('state.pairings[0].revoked=true;renderHistorySettings();');assert.equal(p.get('history-note').hidden,true);
-  p.run('state.keepRequestHistory=false;state.pairings=[{requestHistory:"keep"}];renderHistorySettings();');assert.match(p.get('history-note').textContent,/off globally/);assert.equal(p.get('keep-request-history').attrs['aria-checked'],'false');
+  p.run('state.keepRequestHistory=false;state.pairings=[{requestHistory:"keep"}];renderHistorySettings();');assert.match(p.get('history-note').textContent,/off globally/);
 });
 
 function historyAccessPanel(){
@@ -181,4 +171,53 @@ test('Access saves a confirmed history override with its revision and immutable 
   p.context.apiImpl=async(path,init)=>{const body=JSON.parse(init.body);writes.push({path,body});return {permissionSaveId:body.permissionSaveId,requestHistory:'discard'};};
   p.run('api=apiImpl;confirmAction=async()=>true;');p.select.value='discard';p.select.onchange();await p.save.onclick();
   assert.equal(writes[0].path,'/pairings/pair');assert.equal(writes[0].body.requestHistory,'discard');assert.equal(writes[0].body.confirmDiscard,true);assert.equal(writes[0].body.expectedPermissionsRevision,3);assert.match(writes[0].body.permissionSaveId,/^[a-f0-9]{64}$/);assert.equal(writes[0].body.automatic,undefined);
+});
+
+test('shared quantity control restricts units, validates bounds and stores canonical values',()=>{
+  const p=panel();p.run('const q=quantityControl("Maximum request time",600,{seconds:1,minutes:60,hours:3600},1,3600);');
+  assert.deepEqual(Array.from(p.run('q.unit.options')).map(o=>o.value),['seconds','minutes','hours']);
+  assert.equal(p.run('q.read()'),600);p.run('q.unit.value="hours";q.unit.onchange();');assert.equal(p.run('q.read()'),600);assert.equal(p.run('q.valid()'),true);
+  for(const unit of ['seconds','minutes','hours']){p.run(`q.unit.value=${JSON.stringify(unit)};q.unit.onchange();`);assert.equal(p.run('q.read()'),600);assert.equal(p.run('q.valid()'),true);}
+  p.run('q.number.value="2";q.number.oninput();');assert.equal(p.run('q.valid()'),false);assert.equal(p.run('q.number.attrs["aria-invalid"]'),'true');
+  p.run('q.number.value="0";q.number.oninput();');assert.equal(p.run('q.valid()'),false);
+  p.run('const size=quantityControl("Output size limit",1048576,sizeUnits,4096,2097152);');assert.deepEqual(Array.from(p.run('size.unit.options')).map(o=>o.value),['KB','MB']);assert.equal(p.run('size.read()'),1048576);
+  p.run('size.unit.value="KB";size.unit.onchange();');assert.equal(p.run('size.number.value'),'1024');assert.equal(p.run('size.read()'),1048576);
+  p.run('size.unit.value="MB";size.unit.onchange();size.number.value="0.5";size.number.oninput();');assert.equal(p.run('size.read()'),524288);assert.equal(p.run('size.valid()'),true);
+  p.run('size.number.value="3";size.number.oninput();');assert.equal(p.run('size.valid()'),false);
+});
+test('all connection limits default to global, support never and retain canonical overrides',()=>{
+ const p=panel();p.run('state.settings={maximumRequestSeconds:3600,outputBytes:8192,connectionExpirySeconds:86400};const max=overrideControl("Maximum request time","maximumRequestSeconds",{},3600,{seconds:1,minutes:60,hours:3600},1,3600,()=>{});const expiry=overrideControl("Connection expiry","connectionExpirySeconds",{overrides:{connectionExpirySeconds:0}},86400,{hours:3600,days:86400},3600,31536000,()=>{});');
+ assert.equal(p.run('max.read()'),undefined);assert.match(p.run('max.select.options[0].children.join("")'),/Same as global \(1 hour\)/);assert.equal(p.run('expiry.read()'),0);
+ p.run('max.select.value="custom";max.q.number.value="30";max.q.unit.value="minutes";max.select.onchange();');assert.equal(p.run('max.read()'),1800);assert.equal(p.run('max.valid()'),true);
+ assert.equal(p.run('hasConnectionOverrides({overrides:{connectionExpirySeconds:0}})'),true);assert.equal(p.run('hasConnectionOverrides({overrides:{}})'),false);
+});
+test('global routing preselects inheritance and resolves workflow then connection then global',()=>{
+ const p=panel();p.run('state.settings={default:{provider:"codex",model:"global",reasoning:"high"}};state.providers=[{id:"codex",name:"Codex"}];state.programs=[{id:"codex",type:"codex"}];fillDefaultPrograms($("global-picker"));');
+ assert.equal(p.get('global-picker').value,'');assert.match(p.get('global-picker').options[0].children.join(''),/Same as global \(Codex\)/);
+ p.run('const pair={routing:{default:{inheritOptions:true,model:"connection"},groups:{ai:{inheritOptions:true,reasoning:"low"}}},groups:[{id:"ai"}]};');assert.equal(p.run('connectionRoute(pair,"ai").model'),'connection');assert.equal(p.run('connectionRoute(pair,"ai").reasoning'),'low');assert.equal(p.run('connectionRoute({}).provider'),'codex');
+ assert.equal(p.run('reviewDraft({name:"App"},"global-default").provider'),'');
+});
+test('timed history uses seconds through days, confirms reductions, and preserves explicit keep',()=>{
+ const p=panel();p.run('state.settings={history:{mode:"for",seconds:86400}};const h=historyControl({requestHistory:"for",historySeconds:3600});');
+ assert.deepEqual(Array.from(p.run('h.quantity.unit.options')).map(o=>o.value),['seconds','minutes','hours','days']);assert.equal(p.run('h.read().seconds'),3600);
+ assert.equal(p.run('historyNeedsConfirmation({requestHistory:"global"},"for",3600)'),true);assert.equal(p.run('historyNeedsConfirmation({requestHistory:"for",historySeconds:3600},"global")'),false);assert.equal(p.run('connectionHistoryPolicy({requestHistory:"keep"}).mode'),'keep');
+ p.run('h.select.value="discard";h.select.onchange();');assert.equal(p.run('h.read().mode'),'discard');assert.equal(p.run('h.quantity.node.hidden'),true);
+});
+test('notification event choices, connection mute and failed notices use persistent browser preferences',()=>{
+ const p=panel();p.document.hidden=true;p.run('notificationsEnabled=true;notificationOptions.job=false;state.pairings=[{id:"muted",overrides:{muteNotifications:true}},{id:"live",name:"Writer"}];state.jobs=[{id:"approval",pairingId:"live",status:"awaiting_approval",request:{kind:"text"}},{id:"failure",pairingId:"muted",status:"failed"}];state.failedRequests=[{id:"hidden-failure",pairingId:"live"}];renderAttention();');
+ assert.equal(p.alerts.length,1);assert.equal(p.alerts[0].title,'Writer');assert.equal(p.alerts[0].options.silent,true);
+ p.run('renderNotificationOptions();');const all=node=>[node,...(node.children??[]).filter(n=>n instanceof Element).flatMap(all)],inputs=all(p.get('notification-options')).filter(n=>n.tagName==='INPUT');inputs[0].checked=false;inputs[0].onchange();assert.equal(JSON.parse(p.window.localStorage.getItem('wdc-notification-options')).connection,false);const reloaded=panel({local:p.window.localStorage});assert.equal(reloaded.run('notificationOptions.connection'),false);
+});
+test('login switch follows platform capability and never invokes an OS API in the panel',()=>{
+ const p=panel();p.run('state.login={supported:false,enabled:false,reason:"Development install"};renderLoginSetting();');assert.equal(p.get('login-setting').hidden,false);assert.equal(p.get('start-at-login').disabled,true);assert.equal(p.get('login-help').textContent,'Development install');p.run('state.login={supported:true,enabled:true};renderLoginSetting();');assert.equal(p.get('login-setting').hidden,false);assert.equal(p.get('start-at-login').disabled,false);assert.equal(p.get('start-at-login').attrs['aria-checked'],'true');
+});
+test('global settings retain saved model choices and an edited draft across polled state',()=>{
+ const p=panel();p.run('state.settings={maximumRequestSeconds:3600,default:{provider:"codex",model:"saved-model",reasoning:"high"},history:{mode:"keep"}};state.providers=[{id:"codex",name:"Codex"}];state.native=[];renderOwnerSettings();');
+ const all=node=>[node,...(node.children??[]).filter(n=>n instanceof Element).flatMap(all)],nodes=all(p.get('owner-settings'));
+ assert.equal(nodes.find(n=>n.attrs['aria-label']==='Global default model').value,'saved-model');assert.equal(nodes.find(n=>n.attrs['aria-label']==='Global default reasoning').value,'high');
+ const time=nodes.find(n=>n.attrs['aria-label']==='Maximum request time');time.value='30';time.oninput();const form=p.get('owner-settings').children[0];p.run('state.settingsRevision=5;renderOwnerSettings();');assert.equal(p.get('owner-settings').children[0],form);
+});
+test('old failed history does not produce fresh notifications when a panel opens',()=>{
+ const p=panel();p.document.hidden=true;p.run('notificationsEnabled=true;state.jobs=[{id:"old",status:"failed",pairingId:"pair",finishedAt:"2020-01-01T00:00:00Z"}];renderAttention();');assert.equal(p.alerts.length,0);
+ p.run('state.failedRequests=[{id:"new",pairingId:"pair"}];notificationOptions.failed=false;renderAttention();');assert.equal(p.alerts.length,0);
 });

@@ -311,7 +311,7 @@ func TestProviderAndModeGates(t *testing.T) {
 	if findJob(&f.a.state, id).Code != "native_client_unavailable" {
 		t.Fatal("images not gated")
 	}
-	for _, extra := range []map[string]any{{"mode": "workspace"}, {"mode": "app-tools"}, {"kind": "image-generate", "provider": "claude", "prompt": "hi"}, {"tools": []string{"shell"}}, {"apiKey": "secret"}, {"timeoutSeconds": 601}} {
+	for _, extra := range []map[string]any{{"mode": "workspace"}, {"mode": "app-tools"}, {"kind": "image-generate", "provider": "claude", "prompt": "hi"}, {"tools": []string{"shell"}}, {"apiKey": "secret"}, {"timeoutSeconds": 3601}} {
 		in := map[string]any{"idempotencyKey": "invalid-key", "kind": "connection-test"}
 		for k, v := range extra {
 			in[k] = v
@@ -331,8 +331,14 @@ func TestTimeoutPauseRevokeAndRestart(t *testing.T) {
 	lease := f.lease(t, origin, token)
 	id := f.job(t, origin, token, lease, "timeout-key", map[string]any{"timeoutSeconds": 1})
 	f.advance(t, 2*time.Second)
-	if findJob(&f.a.state, id).Status != "timed_out" {
-		t.Fatal("approval timeout missing")
+	if findJob(&f.a.state, id).Status != "awaiting_approval" {
+		t.Fatal("execution clock ran during approval")
+	}
+	f.now = f.now.Add(approvalWaitLimit)
+	f.a.leases[lease] = Lease{PairingID: pairID, ExpiresAt: f.now.Add(LeaseTTL)}
+	f.tick(t)
+	if findJob(&f.a.state, id).Code != "approval_expired" {
+		t.Fatal("approval wait bound missing")
 	}
 	id = f.job(t, origin, token, lease, "pause-request", nil)
 	object(t, f.req("PATCH", "/api/pairings/"+pairID, f.origin, "", "", map[string]bool{"paused": true}, true), 200)

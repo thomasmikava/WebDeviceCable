@@ -13,10 +13,14 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/thomasmikava/WebDeviceCable/internal/desktop"
 	"github.com/thomasmikava/WebDeviceCable/internal/updates"
 )
 
 type App struct {
+	failureNotices     map[string]FailureNotice
+	loginItem          desktop.LoginItem
+	loginReason        string
 	deliveries         map[string]*resultDelivery
 	routingFailureAt   map[string]time.Time
 	connectionRevision uint64
@@ -104,7 +108,7 @@ func Open(dir string) (*App, error) {
 		return nil, errors.New("unsupported state format; refusing to overwrite it")
 	}
 	for _, p := range a.state.Pairings {
-		if p == nil || !validRequestHistory(p.RequestHistory) {
+		if p == nil || !validRequestHistory(p.RequestHistory) || !validOverrides(p.Overrides) || p.RequestHistory == "for" && !validHistoryPolicy(HistoryPolicy{Mode: "for", Seconds: p.HistorySeconds}) {
 			return nil, errors.New("invalid pairing state; preserved for recovery")
 		}
 	}
@@ -117,6 +121,16 @@ func Open(dir string) (*App, error) {
 		if c == nil {
 			return nil, errors.New("invalid conversation state; preserved for recovery")
 		}
+	}
+	if a.state.OwnerSettings == nil {
+		o := ownerSettings(&a.state)
+		h := historyPolicy(&a.state, nil)
+		o.History = &h
+		a.state.OwnerSettings = &o
+	}
+	o := a.state.OwnerSettings
+	if o.MaximumRequestSeconds < 1 || o.MaximumRequestSeconds > 3600 || !validConnectionExpiry(o.ConnectionExpirySeconds) || o.OutputBytes != 0 && (o.OutputBytes < 4096 || o.OutputBytes > 2<<20) || o.History == nil || !validHistoryPolicy(*o.History) {
+		return nil, errors.New("invalid owner settings; preserved for recovery")
 	}
 	var identityErr error
 	a.identity, identityErr = loadIdentity(abs)
@@ -163,6 +177,8 @@ func Open(dir string) (*App, error) {
 		}
 	}
 	discardFinished(&a.state, func(j *Job) bool { return j.OmitHistory })
+	a.prepareHistory(&a.state)
+	a.expireConnections(&a.state, a.now())
 	cleanHistoryConversations(&a.state)
 	for id, c := range a.state.Conversations {
 		if c.OmitHistory {
@@ -197,6 +213,7 @@ func Open(dir string) (*App, error) {
 			return nil, errors.New("invalid control key")
 		}
 	}
+	a.loginItem, a.loginReason = desktop.DetectLoginItem(abs)
 	success = true
 	return a, nil
 }
@@ -286,6 +303,12 @@ func (a *App) update(fn func(*State) error) error {
 			j.Request.Tools = nil
 		}
 	}
+	for _, j := range next.Jobs {
+		if p := next.Pairings[j.PairingID]; p != nil && j.FinishedAt != nil && (p.LastRequestAt == nil || p.LastRequestAt.Before(*j.FinishedAt)) {
+			at := *j.FinishedAt
+			p.LastRequestAt = &at
+		}
+	}
 	a.prepareHistory(&next)
 	// Bound retained history as output limits grow; replay receipts remain durable.
 	total := 0
@@ -321,6 +344,17 @@ func (a *App) update(fn func(*State) error) error {
 	}
 	cleanupErr := a.prepareDeliveries(&next)
 	previousJobs := a.state.Jobs
+	for _, j := range next.Jobs {
+		if terminal(j.Status) && j.Status != "completed" && j.Status != "cancelled" {
+			old := findJob(&a.state, j.ID)
+			if old == nil || !terminal(old.Status) {
+				if a.failureNotices == nil {
+					a.failureNotices = map[string]FailureNotice{}
+				}
+				a.failureNotices[j.ID] = FailureNotice{ID: j.ID, PairingID: j.PairingID, ExpiresAt: a.now().Add(time.Minute)}
+			}
+		}
+	}
 	a.state = next
 	for id := range a.deliveries {
 		if findJob(&next, id) == nil {
@@ -350,6 +384,11 @@ func (a *App) tick() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
+	for id, event := range a.failureNotices {
+		if !now.Before(event.ExpiresAt) {
+			delete(a.failureNotices, id)
+		}
+	}
 	for id, at := range a.routingFailureAt {
 		if now.Sub(at) >= time.Minute {
 			delete(a.routingFailureAt, id)
@@ -368,6 +407,7 @@ func (a *App) tick() error {
 		}
 	}
 	e := a.update(func(s *State) error {
+		a.expireConnections(s, now)
 		a.reconcileConversations(s, now)
 		for _, j := range s.Jobs {
 			if terminal(j.Status) {
@@ -382,8 +422,10 @@ func (a *App) tick() error {
 				finish(j, "cancelled", "tab_disconnected", "The requesting app tab stopped its lease. No other tab's jobs are affected.", now)
 			case p == nil || p.Revoked:
 				finish(j, "cancelled", "app_revoked", "Application access was revoked.", now)
-			case now.Sub(j.CreatedAt) >= time.Duration(j.Request.TimeoutSeconds)*time.Second:
-				finish(j, "timed_out", "deadline_exceeded", "The request deadline includes time awaiting approval.", now)
+			case j.StartedAt == nil && now.Sub(j.CreatedAt) >= approvalWaitLimit:
+				finish(j, "timed_out", "approval_expired", "Approval or queue waiting exceeded 10 minutes.", now)
+			case j.StartedAt != nil && executionRemaining(j, now) <= 0:
+				finish(j, "timed_out", "deadline_exceeded", "The request timed out.", now)
 			case !s.Enabled || p.Paused:
 				if j.Status == "running" {
 					finish(j, "cancelled", "paused", "Execution paused by the user.", now)

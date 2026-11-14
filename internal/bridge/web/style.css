@@ -669,3 +669,27 @@ details.route-editor > .route-note, details.route-editor > .text-button { margin
 
 .permission-history { display: grid; gap: 8px; color: var(--text); }
 .permission-history .select-wrap { max-width: 100%; }
+
+/* Owner defaults and Access overrides share bounded fields at phone widths. */
+.owner-settings-card { margin-top:var(--space-4); }
+.owner-fields { display:grid; gap:var(--space-4); min-width:0; }
+.owner-fields label { margin:0; }
+.owner-fields .form-columns { gap:var(--space-4); }
+.owner-field { display:grid; gap:var(--space-2); min-width:0; }
+.owner-field > label { margin:0; font-size:var(--font-label); font-weight:450; color:var(--muted); }
+.quantity-control { min-width:0; }
+.quantity-fields { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:var(--space-2); }
+.quantity-fields input,.quantity-fields select,.owner-fields select { width:100%; min-width:0; }
+.owner-fields label,.owner-fields small { min-width:0; overflow-wrap:anywhere; }
+.owner-fields .field-hint.invalid { color:var(--danger); }
+.quantity-fields input[aria-invalid=true] { border-color:var(--danger); }
+.owner-fields .actions { margin-top:0; align-items:center; }
+.owner-fields .folder-unsaved { margin-right:auto; }
+#notification-options { margin-block:var(--space-2); }
+#notification-options .check-line { margin:0; padding-block:var(--space-3); }
+#notification-options .owner-fields { gap:var(--space-2); }
+.app-permissions-body > * { flex-shrink:0; }
+.connection-overrides > .owner-fields { margin-top:var(--space-4); }
+.connection-overrides > summary { color:var(--text); }
+.connection-meta > small { font-size:var(--font-meta); line-height:var(--leading-body); }
+@media (max-width:600px) { .owner-fields .form-columns { grid-template-columns:minmax(0,1fr); } }

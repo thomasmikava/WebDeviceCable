@@ -37,7 +37,7 @@ The supported action/argument fields retain the shapes documented by [OliveTin](
 | `arguments` | Up to 16 named inputs; `name`, `title`, `type`, `default`, `rejectNull`, `choices` supported. |
 | `choices` | Up to 32 `{value, title?}` entries. Values must match a configured choice; the type validator is bypassed when choices exist. |
 | `type` | `ascii`, `ascii_identifier`, `ascii_sentence`, `int`, `url`, `very_dangerous_raw_string`, `raw_string_multiline`. Default: `ascii`. |
-| `timeout` | Execution limit, default 3 seconds, range 1–600. A job's separate overall deadline includes approval/queue time. |
+| `timeout` | Execution limit, default 3 seconds, range 1–600. The effective owner request maximum also applies, starting when execution begins. Approval/queue waiting is separately bounded to 10 minutes. |
 | `maxConcurrent` | Per-command limit, default 1, range 1–4; runner-wide limit of 4 active jobs. Excess jobs wait in order where their command has capacity. |
 
 `ascii` allows letters/digits; `ascii_identifier` also allows `_`, `-`, `.`; `ascii_sentence` also allows spaces and commas. `int` accepts nonnegative decimal digits; `url` requires an HTTP(S) URL with a host. Raw types accept arbitrary UTF-8 except NUL. Empty inputs are allowed unless `rejectNull` is true; choices must always match. Each value is limited to 2 KiB, combined values/defaults to 4 KiB. Unknown submitted inputs are rejected.

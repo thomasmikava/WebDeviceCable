@@ -19,20 +19,10 @@ type resultDelivery struct {
 	offsets   map[string]int
 }
 
-func globalRequestHistory(s *State) bool { return s.KeepRequestHistory == nil || *s.KeepRequestHistory }
-func keepRequestHistory(s *State, p *Pairing) bool {
-	if p != nil {
-		switch p.RequestHistory {
-		case "keep":
-			return true
-		case "discard":
-			return false
-		}
-	}
-	return globalRequestHistory(s)
-}
+func globalRequestHistory(s *State) bool           { return historyPolicy(s, nil).Mode != "discard" }
+func keepRequestHistory(s *State, p *Pairing) bool { return historyPolicy(s, p).Mode != "discard" }
 func validRequestHistory(value string) bool {
-	return value == "" || value == "global" || value == "keep" || value == "discard"
+	return value == "" || value == "global" || value == "keep" || value == "discard" || value == "for"
 }
 func discardFinished(s *State, matches func(*Job) bool) {
 	jobs := s.Jobs[:0]
@@ -112,6 +102,7 @@ func (a *App) prepareHistory(s *State) {
 			j.OmitHistory = true
 		}
 	}
+	discardFinished(s, func(j *Job) bool { return !j.OmitHistory && historyExpired(s, j, a.now()) })
 	cleanHistoryConversations(s)
 	discardFinished(s, func(j *Job) bool {
 		return j.OmitHistory && (j.FinishedAt == nil || !a.now().Before(j.FinishedAt.Add(resultDeliveryTTL)))

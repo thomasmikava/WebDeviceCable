@@ -37,6 +37,20 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 				hash = receipt.Hash
 			}
 		}
+		if receipt.Hash != hash && in.TimeoutSeconds == 0 {
+			legacy := in
+			legacy.TimeoutSeconds = 120
+			if receipt.Hash == requestHash(legacy) {
+				hash = receipt.Hash
+			}
+			if receipt.ToolSetHash == "" && len(in.Tools) == 0 {
+				legacy.Tools = nil
+				legacy.ToolSetHash = ""
+				if receipt.Hash == requestHash(legacy) {
+					hash = receipt.Hash
+				}
+			}
+		}
 		if receipt.Hash != hash {
 			return nil, false, fail(409, "idempotency_conflict", "This key was already used for a different request.")
 		}
@@ -94,6 +108,9 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 	if plan.Kind == "image-edit" && !imageInput {
 		return nil, false, fail(400, "image_required", "Image editing needs a supplied PNG, JPEG, WebP or GIF.")
 	}
+	if maximum := a.maximumRequestSeconds(p); in.TimeoutSeconds == 0 || in.TimeoutSeconds > maximum {
+		in.TimeoutSeconds = maximum
+	}
 	job := &Job{OmitHistory: !keepRequestHistory(&a.state, p), ID: secret(), PairingID: p.ID, Request: in, RequestHash: hash, LeaseID: lease, Status: "awaiting_approval", Billing: "none", Revision: 1, CreatedAt: a.now(), Plan: plan, ActionHash: plan.ActionHash, ActionTitle: title}
 	for _, id := range in.Inputs {
 		if input := a.inputs[id]; input != nil {
@@ -120,6 +137,8 @@ func (a *App) createJob(p *Pairing, in JobRequest, lease string) (*Job, bool, er
 		if len(in.Inputs) > 0 || plan.Kind == "image-generate" || plan.Kind == "image-edit" || plan.Kind == "command" && a.actions[plan.Action].Files {
 			markFileScope(s, job)
 		}
+		at := a.now()
+		s.Pairings[p.ID].LastRequestAt = &at
 		s.Jobs = append(s.Jobs, job)
 		if c := s.Conversations[in.ConversationID]; c != nil {
 			c.LastJobID = job.ID

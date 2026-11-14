@@ -133,7 +133,9 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 			return fail(409, "preferences_changed", "These settings changed in another panel. Reopen Routing and review them.")
 		}
 		if in.Routing.Default != nil {
-			if err := a.validateTarget(p, *in.Routing.Default); err != nil {
+			preview := *p
+			preview.Routing = in.Routing
+			if err := a.validateTarget(p, routingTarget(&preview, "", ownerSettings(&a.state).Default)); err != nil {
 				return err
 			}
 		}
@@ -154,7 +156,7 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 			}
 			preview := *p
 			preview.Routing = in.Routing
-			if err := a.validateTarget(p, routingTarget(&preview, id)); err != nil {
+			if err := a.validateTarget(p, routingTarget(&preview, id, ownerSettings(&a.state).Default)); err != nil {
 				return err
 			}
 		}
@@ -192,6 +194,14 @@ func (a *App) preferenceRoutes(mux *http.ServeMux, paired func(func(http.Respons
 		if err := a.update(func(s *State) error {
 			changed := globalRequestHistory(s) != *in.Keep
 			s.KeepRequestHistory = in.Keep
+			o := ownerSettings(s)
+			mode := "keep"
+			if !*in.Keep {
+				mode = "discard"
+			}
+			o.History = &HistoryPolicy{Mode: mode}
+			s.OwnerSettings = &o
+			s.SettingsRevision++
 			if changed && !*in.Keep {
 				a.discardStoredHistory(s, func(j *Job) bool { return !keepRequestHistory(s, s.Pairings[j.PairingID]) })
 			}

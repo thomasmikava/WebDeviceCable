@@ -82,7 +82,7 @@ Lease expiry is 12 seconds without renewal; a 100 ms worker tick cancels that ta
 {"idempotencyKey":"a-unique-logical-request","kind":"connection-test","mode":"restricted","timeoutSeconds":120}
 ```
 
-`202` returns the full job. Defaults: Restricted mode, 120 seconds. Deadline range: 1–600 seconds, measured from creation including approval/queue time. Keys: 8–128 characters. Automatic consent applies only within paired scopes. A manual job remains `awaiting_approval` until the local control session approves it.
+`202` returns the full job. Defaults: Restricted mode and the effective owner maximum request time (initially 600 seconds). `timeoutSeconds` accepts 1–3600 seconds; omission uses the connection override or global maximum, and larger requests within the hard ceiling are capped to that maximum. Execution time starts at `startedAt`; approval and queue waiting have a separate, fixed 10-minute bound. Configured commands also retain their `config.yaml` execution timeout. Keys: 8–128 characters. Automatic consent applies only within paired scopes. A manual job remains `awaiting_approval` until the local control session approves it.
 
 Eligible local applications can submit native requests:
 

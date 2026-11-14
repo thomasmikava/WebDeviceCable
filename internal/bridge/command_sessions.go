@@ -89,12 +89,12 @@ func (r *commandRun) complete(err error, failure *Failure) {
 }
 func (a *App) startConversationTurn(job *Job) {
 	action := a.actions[jobAction(job)]
-	remaining := time.Duration(job.Request.TimeoutSeconds)*time.Second - a.now().Sub(job.CreatedAt)
+	remaining := executionRemaining(job, a.now())
 	if maximum := time.Duration(action.Timeout) * time.Second; remaining > maximum {
 		remaining = maximum
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
-	run := &commandRun{jobID: job.ID, limit: a.textLimit(), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
+	run := &commandRun{jobID: job.ID, limit: a.textLimit(a.state.Pairings[job.PairingID]), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
 	a.commands[job.ID] = run
 	inputs, err := a.selectedInputs(a.state.Pairings[job.PairingID], job.LeaseID, job.Request.Inputs)
 	prompt, promptError := a.executionPrompt(job)

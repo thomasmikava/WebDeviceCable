@@ -6,6 +6,7 @@ if (Test-Path (Join-Path $bridgeDestination 'WebDeviceCable.exe')) {
     & (Join-Path $bridgeDestination 'WebDeviceCable.exe') stop --if-running
     Start-Sleep -Milliseconds 1000
 }
+Remove-Item (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\WebDeviceCable.vbs') -Force -ErrorAction SilentlyContinue
 $bridgeShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'WebDeviceCable.lnk'
 Remove-Item $bridgeShortcut -Force -ErrorAction SilentlyContinue
 $bridgeProtocol = 'HKCU:\Software\Classes\webdevicecable'
