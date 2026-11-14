@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+{{> head}}
+</head>
+<body>
+{{> header}}
+  <main id="main">
+    <section class="hero wrap dev-hero">
+      <div class="hero-text">
+        <h1>Add WebDeviceCable to your website.</h1>
+        <p class="lead">Your users run AI requests on the Codex or Claude Code they already have, or on other programs they choose to allow. You need no provider API keys, and you pay nothing for their AI use.</p>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="ways">
+      <h2 id="ways">Two ways to connect</h2>
+      <p class="section-lead">Pick where your AI requests start. Most sites start with the web page.</p>
+      <div class="ways">
+        <article class="card option" id="browser" aria-labelledby="browser-title">
+          <p class="option-tag">Option 1 · No server needed</p>
+          <h3 id="browser-title">From your web page</h3>
+          <p class="option-what">Your page’s JavaScript talks straight to WebDeviceCable on the user’s computer.</p>
+          <div class="diagram" role="img" aria-label="Your web page sends a request to the user’s computer. The computer runs it and sends the answer back to your page.">
+            <span class="node b-page">Your web page</span>
+            <span class="link">
+              <span class="lane to-right"><span class="lane-label">request</span><span class="dot b-send"></span></span>
+              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer b-reply"></span></span>
+            </span>
+            <span class="node node-user b-pc">User’s computer</span>
+          </div>
+          <ul class="option-points">
+            <li>Nothing to host. Add one npm package to your front end.</li>
+            <li>Requests run while the user has your page open.</li>
+          </ul>
+          <code class="install-line">npm install @webdevicecable/sdk</code>
+          <p class="option-actions"><a class="button primary" href="{{repo_url}}/blob/main/docs/integrate.md">Web page guide</a><a href="#example-browser">See the example</a></p>
+        </article>
+        <article class="card option" id="server" aria-labelledby="server-title">
+          <p class="option-tag">Option 2 · You run a small server</p>
+          <h3 id="server-title">From your server</h3>
+          <p class="option-what">Your backend sends requests through a <strong>relay</strong>: a small server you host that passes encrypted messages between your backend and WebDeviceCable.</p>
+          <div class="diagram diagram-3" role="img" aria-label="The user’s computer asks your relay for work. Your server sends a request to the relay, and the relay hands it to the computer. The computer runs it and sends the answer to the relay, which passes it back to your server.">
+            <span class="node r-server">Your server</span>
+            <span class="link">
+              <span class="lane to-right"><span class="lane-label">request</span><span class="dot r-send"></span></span>
+              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer r-reply"></span></span>
+            </span>
+            <span class="node r-relay">Your relay</span>
+            <span class="link">
+              <span class="lane to-left"><span class="lane-label">asks for work</span><span class="dot dot-ask r-ask"></span></span>
+              <span class="lane to-right"><span class="lane-label">request</span><span class="dot r-deliver"></span></span>
+              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer r-return"></span></span>
+            </span>
+            <span class="node node-user r-pc">User’s computer</span>
+          </div>
+          <p class="diagram-note">The user’s computer reaches out to your relay to ask for work and to send back answers. The relay never connects to the user’s computer, so nothing there is opened to the internet.</p>
+          <ul class="option-points">
+            <li>Requests can run while your website is closed, for example from background jobs.</li>
+            <li>You run the relay yourself, with Docker.</li>
+          </ul>
+          <code class="install-line">npm install @webdevicecable/relay</code>
+          <p class="option-actions"><a class="button secondary" href="{{repo_url}}/blob/main/docs/relay.md">Server and relay guide</a><a href="#example-server">See the example</a></p>
+        </article>
+      </div>
+      <p class="section-lead">You can use both at once. Either way, each user approves your site in WebDeviceCable, chooses which program it may use, and can review every request. All requests are signed and encrypted.</p>
+    </section>
+
+    <section class="section wrap examples" aria-labelledby="example">
+      <h2 id="example">Examples</h2>
+      <div class="example" id="example-browser">
+        <h3>From your web page</h3>
+        <p class="section-lead">Call this when the user clicks your Connect button. WebDeviceCable asks them to approve your site, then runs the request on their computer.</p>
+        <pre class="code"><code>{{{sdk_example}}}</code></pre>
+      </div>
+      <div class="example" id="example-server">
+        <h3>From your server</h3>
+        <p class="section-lead">First, each user approves your site once with a link from your server. After that, your server can send requests through your relay whenever it needs to.</p>
+        <pre class="code"><code>{{{relay_example}}}</code></pre>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="docs">
+      <h2 id="docs">Documentation</h2>
+      <ul class="doc-links">
+        <li><a href="{{repo_url}}/blob/main/docs/integrate.md">Connect from a web page</a></li>
+        <li><a href="{{repo_url}}/blob/main/docs/relay.md">Connect from your server, and set up the relay with Docker</a></li>
+        <li><a href="{{repo_url}}/blob/main/docs/protocol.md">Protocol</a></li>
+        <li><a href="{{repo_url}}/blob/main/docs/security.md">Permissions and security</a></li>
+        <li><a href="{{repo_url}}/blob/main/docs/native-execution.md">Capabilities and limits</a></li>
+        <li><a href="{{repo_url}}/tree/main/examples">Example app</a></li>
+        <li>npm: <a href="https://www.npmjs.com/package/@webdevicecable/sdk">@webdevicecable/sdk</a> · <a href="https://www.npmjs.com/package/@webdevicecable/relay">@webdevicecable/relay</a></li>
+      </ul>
+    </section>
+
+    <section class="section wrap closing" aria-labelledby="users">
+      <h2 id="users">Your users install WebDeviceCable once.</h2>
+      <p class="section-lead">Send them to the home page. It picks the right download for their computer.</p>
+      <p><a class="button secondary large" href="{{home}}">Go to the download page</a></p>
+    </section>
+  </main>
+{{> footer}}
+</body>
+</html>

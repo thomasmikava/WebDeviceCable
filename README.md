@@ -4,7 +4,7 @@ Connect your apps to the Codex or Claude Code client installed on your computer,
 
 WDC runs on **macOS, Windows and Linux**. It supports streaming text, structured JSON, continuing conversations, files and app tools. Codex also supports image generation and editing. Provider subscription limits still apply.
 
-[Download WDC](https://github.com/thomasmikava/WebDeviceCable/releases) · [Installation instructions](INSTALL.md) · [Testing checklist](docs/testing.md)
+[Website](https://thomasmikava.github.io/WebDeviceCable/) · [Download WDC](https://github.com/thomasmikava/WebDeviceCable/releases) · [Installation instructions](INSTALL.md) · [Testing checklist](docs/testing.md)
 
 ## Run
 

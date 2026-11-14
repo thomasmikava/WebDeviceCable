@@ -13,3 +13,4 @@ printf 'WebDeviceCable removed. Your private settings and connection history are
 rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/webdevicecable.desktop"
 
 rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/webdevicecable.svg"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/webdevicecable.desktop"

@@ -11,7 +11,8 @@ bridge_go="${BRIDGE_GO:-go}"
 "$bridge_go" fmt ./...
 "$bridge_go" vet ./...
 "$bridge_go" test -race ./...
-node --test scripts/panel.test.mjs scripts/dev-isolation.test.mjs
+node --test scripts/panel.test.mjs scripts/dev-isolation.test.mjs scripts/site.test.mjs
+node --check site/site.js
 node --check internal/bridge/web/app.js
 node --check examples/app.js
 node --check examples/server.mjs

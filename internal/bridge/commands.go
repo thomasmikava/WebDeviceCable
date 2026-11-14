@@ -13,7 +13,13 @@ import (
 	"unicode"
 )
 
-func (a *App) textLimit() int {
+func (a *App) textLimit(pairings ...*Pairing) int {
+	if len(pairings) > 0 && pairings[0] != nil && pairings[0].Overrides.OutputBytes != nil {
+		return *pairings[0].Overrides.OutputBytes
+	}
+	if n := ownerSettings(&a.state).OutputBytes; n > 0 {
+		return n
+	}
 	if a.config.Bridge.MaxTextBytes > 0 {
 		return a.config.Bridge.MaxTextBytes
 	}
@@ -95,12 +101,12 @@ func (a *App) startCommand(j *Job) {
 	action := a.actions[jobAction(j)]
 	argv := action.argv(j.Request.Arguments)
 	inputs, inputError := a.selectedInputs(a.state.Pairings[j.PairingID], j.LeaseID, j.Request.Inputs)
-	remaining := time.Duration(j.Request.TimeoutSeconds)*time.Second - a.now().Sub(j.CreatedAt)
+	remaining := executionRemaining(j, a.now())
 	if limit := time.Duration(action.Timeout) * time.Second; remaining > limit {
 		remaining = limit
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
-	run := &commandRun{jobID: j.ID, limit: a.textLimit(), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
+	run := &commandRun{jobID: j.ID, limit: a.textLimit(a.state.Pairings[j.PairingID]), ctx: ctx, cancel: cancel, stopped: make(chan struct{})}
 	a.commands[j.ID] = run
 	dir := filepath.Join(a.dir, "runs", j.ID)
 	go func() {

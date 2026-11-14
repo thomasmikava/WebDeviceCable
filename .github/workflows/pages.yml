@@ -1,0 +1,57 @@
+name: Site
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - scripts/site-build.mjs
+      - scripts/site.test.mjs
+      - scripts/download-names.json
+      - scripts/testdata/site-release.json
+      - internal/bridge/web/theme.css
+      - internal/bridge/web/style.css
+      - internal/bridge/web/logo.svg
+      - internal/bridge/web/favicon.svg
+      - internal/bridge/web/icons.svg
+      - sdk/README.md
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: pages
+        uses: actions/configure-pages@v5
+      - run: node --test scripts/site.test.mjs
+      - name: Build against the latest release
+        run: node scripts/site-build.mjs --out dist/site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

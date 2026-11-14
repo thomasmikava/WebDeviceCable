@@ -119,8 +119,11 @@ func applyRoute(base, override ExecutionTarget) ExecutionTarget {
 	return base
 }
 
-func routingTarget(p *Pairing, group string) ExecutionTarget {
+func routingTarget(p *Pairing, group string, global ...*ExecutionTarget) ExecutionTarget {
 	target := ExecutionTarget{}
+	if len(global) > 0 && global[0] != nil {
+		target = *global[0]
+	}
 	if p.Routing.Default != nil {
 		target = applyRoute(target, *p.Routing.Default)
 	}
@@ -147,11 +150,8 @@ func routingTarget(p *Pairing, group string) ExecutionTarget {
 	return target
 }
 
-func routingConfigured(p *Pairing) bool {
-	if p.Routing.Default == nil {
-		return false
-	}
-	target := routingTarget(p, "")
+func routingConfigured(p *Pairing, global ...*ExecutionTarget) bool {
+	target := routingTarget(p, "", global...)
 	return target.Provider != "" || target.Action != ""
 }
 
@@ -189,7 +189,7 @@ func (a *App) resolvePlan(p *Pairing, request JobRequest) (*ExecutionPlan, error
 		return nil, fail(400, "unknown_group", "Register this action group before using it.")
 	}
 	if request.Group != "" || request.Kind == "action" && target.Provider == "" && target.Action == "" {
-		target = routingTarget(p, request.Group)
+		target = routingTarget(p, request.Group, ownerSettings(&a.state).Default)
 		if target.Provider == "" && target.Action == "" {
 			return nil, fail(409, "routing_required", "Choose a default program for this app in WebDeviceCable, under Connections.")
 		}
@@ -347,6 +347,10 @@ func (a *App) remoteJob(j *Job) Job {
 func (a *App) remotePairing(p *Pairing) Pairing {
 	c := publicPairing(p)
 	c.RequestHistory = ""
+	c.Overrides = ConnectionOverrides{}
+	c.HistorySeconds = 0
+	c.LastRequestAt = nil
+	c.ExpiresAt = nil
 	c.PermissionsRevision = 0
 	c.PermissionSaveID = ""
 	c.DisplayName = ""

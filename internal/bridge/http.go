@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/thomasmikava/WebDeviceCable/internal/desktop"
 	"github.com/thomasmikava/WebDeviceCable/internal/wirelimits"
 )
 
@@ -143,6 +144,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	a.connectionEventRoutes(mux, control)
 	a.logoRoutes(mux, control)
 	a.preferenceRoutes(mux, paired, control)
+	a.ownerSettingRoutes(mux, control)
 	a.conversationRoutes(mux, paired, control)
 	a.nativeFileRoutes(mux, paired, control)
 	a.relayRoutes(mux, control, origin)
@@ -204,7 +206,9 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		providersByPairing := map[string][]Capability{}
 		relayConnections := []map[string]string{}
 		for _, p := range a.state.Pairings {
-			pairs = append(pairs, publicPairing(p))
+			public := publicPairing(p)
+			public.ExpiresAt = a.pairingExpiresAt(&a.state, p)
+			pairs = append(pairs, public)
 			providersByPairing[p.ID] = a.capabilities(p)
 			if p.Relay != nil && !p.Revoked {
 				relayConnections = append(relayConnections, map[string]string{"relayUrl": p.Relay.URL, "connectionId": p.Relay.ConnectionID, "pairingId": p.ID})
@@ -219,7 +223,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 			copy.Plan = j.Plan
 			jobs = append(jobs, copy)
 		}
-		writeJSON(w, 200, map[string]any{"keepRequestHistory": globalRequestHistory(&a.state), "connectionRevision": a.connectionRevision, "updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.publicConversations(), "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking, "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
+		writeJSON(w, 200, map[string]any{"failedRequests": a.pendingFailureNotices(), "login": desktop.LoginItemStatus(a.loginItem, a.loginReason), "settings": ownerSettings(&a.state), "settingsRevision": a.state.SettingsRevision, "effectiveOutputBytes": a.textLimit(), "keepRequestHistory": globalRequestHistory(&a.state), "connectionRevision": a.connectionRevision, "updates": updateStatusJSON(a.updater), "providersByPairing": providersByPairing, "pairingRequests": a.pendingPairingRequests(), "launches": a.pendingLaunchIntents(), "relayConnections": relayConnections, "permissions": a.permissionList(), "sharing": a.state.Sharing, "conversations": a.publicConversations(), "deviceId": a.state.DeviceID, "securityReset": a.state.SecurityReset, "enabled": a.state.Enabled, "revision": a.state.Revision, "pairings": pairs, "jobs": jobs, "commands": a.actionList(), "configPath": filepath.Join(a.dir, "config.yaml"), "allowWebCommandEditing": a.config.Bridge.AllowWebCommandEditing, "programs": a.programList(), "programHashes": a.programHashes(), "providers": a.capabilities(nil), "native": a.native, "nativeChecking": a.nativeChecking || (!a.config.Bridge.DisableNative && a.nativeDone == nil), "leaseSeconds": int(LeaseTTL.Seconds()), "modes": []map[string]any{{"id": "restricted", "available": true}, {"id": "commands", "available": true}, {"id": "app-tools", "available": true}, {"id": "workspace", "available": true}}})
 		return nil
 	}))
 	mux.HandleFunc("POST /api/providers/check", control(func(w http.ResponseWriter, r *http.Request) error {
@@ -249,19 +253,21 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 	}))
 	mux.HandleFunc("PATCH /api/pairings/{id}", control(func(w http.ResponseWriter, r *http.Request) error {
 		var in struct {
-			RequestHistory              *string            `json:"requestHistory,omitempty"`
-			ConfirmDiscard              bool               `json:"confirmDiscard,omitempty"`
-			ExpectedPermissionsRevision *uint64            `json:"expectedPermissionsRevision,omitempty"`
-			PermissionSaveID            string             `json:"permissionSaveId,omitempty"`
-			DisplayName                 *string            `json:"displayName"`
-			Paused                      *bool              `json:"paused"`
-			LogoID                      *string            `json:"logoId"`
-			Automatic                   *bool              `json:"automatic"`
-			Files                       *bool              `json:"files"`
-			Folders                     *[]FolderGrant     `json:"folders"`
-			Revoke                      bool               `json:"revoke"`
-			Actions                     *map[string]string `json:"actions"`
-			CommandPermissionsAccepted  bool               `json:"commandPermissionsAccepted"`
+			Overrides                   *ConnectionOverrides `json:"overrides,omitempty"`
+			HistorySeconds              *int                 `json:"historySeconds,omitempty"`
+			RequestHistory              *string              `json:"requestHistory,omitempty"`
+			ConfirmDiscard              bool                 `json:"confirmDiscard,omitempty"`
+			ExpectedPermissionsRevision *uint64              `json:"expectedPermissionsRevision,omitempty"`
+			PermissionSaveID            string               `json:"permissionSaveId,omitempty"`
+			DisplayName                 *string              `json:"displayName"`
+			Paused                      *bool                `json:"paused"`
+			LogoID                      *string              `json:"logoId"`
+			Automatic                   *bool                `json:"automatic"`
+			Files                       *bool                `json:"files"`
+			Folders                     *[]FolderGrant       `json:"folders"`
+			Revoke                      bool                 `json:"revoke"`
+			Actions                     *map[string]string   `json:"actions"`
+			CommandPermissionsAccepted  bool                 `json:"commandPermissionsAccepted"`
 		}
 		if e := decode(w, r, &in); e != nil {
 			return e
@@ -288,15 +294,25 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		if in.ExpectedPermissionsRevision != nil && *in.ExpectedPermissionsRevision != pairing.PermissionsRevision {
 			return fail(409, "permissions_changed", "Permissions changed. Reload the saved settings before applying this draft.")
 		}
+		preview := *pairing
+		if in.Overrides != nil {
+			if !validOverrides(*in.Overrides) {
+				return fail(400, "invalid_overrides", "Check the request, output and expiry limits.")
+			}
+			preview.Overrides = *in.Overrides
+		}
+		if in.HistorySeconds != nil {
+			preview.HistorySeconds = *in.HistorySeconds
+		}
 		if in.RequestHistory != nil {
-			if !validRequestHistory(*in.RequestHistory) {
-				return fail(400, "invalid_history", "Choose use the global setting, keep or don't keep.")
-			}
-			next := *pairing
-			next.RequestHistory = *in.RequestHistory
-			if (keepRequestHistory(&a.state, pairing) && !keepRequestHistory(&a.state, &next) || pairing.RequestHistory != "discard" && next.RequestHistory == "discard") && !in.ConfirmDiscard {
-				return fail(400, "history_confirmation_required", "Confirm removal of this connection’s finished request history.")
-			}
+			preview.RequestHistory = *in.RequestHistory
+		}
+		if !validRequestHistory(preview.RequestHistory) || preview.RequestHistory == "for" && !validHistoryPolicy(HistoryPolicy{Mode: "for", Seconds: preview.HistorySeconds}) {
+			return fail(400, "invalid_history", "Choose a valid history retention period.")
+		}
+		reduced := retentionReduced(historyPolicy(&a.state, pairing), historyPolicy(&a.state, &preview))
+		if reduced && !in.ConfirmDiscard {
+			return fail(400, "history_confirmation_required", "Confirm removal of this connection’s finished requests outside the new retention period.")
 		}
 		if in.DisplayName != nil {
 			name := strings.TrimSpace(*in.DisplayName)
@@ -330,11 +346,11 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		}
 		if e := a.update(func(s *State) error {
 			p := s.Pairings[id]
-			if in.RequestHistory != nil && p.RequestHistory != *in.RequestHistory {
-				p.RequestHistory = *in.RequestHistory
-				if !keepRequestHistory(s, p) {
-					a.discardStoredHistory(s, func(j *Job) bool { return j.PairingID == id })
-				}
+			p.Overrides = preview.Overrides
+			p.RequestHistory = preview.RequestHistory
+			p.HistorySeconds = preview.HistorySeconds
+			if reduced {
+				a.discardStoredHistory(s, func(j *Job) bool { return j.PairingID == id && historyPolicy(s, p).Mode == "discard" })
 			}
 			if p.Revoked {
 				return fail(409, "revoked", "Create a new pairing after revocation.")
@@ -536,7 +552,7 @@ func (a *App) Handler(host string, shutdown func()) http.Handler {
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/capabilities", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
-		writeJSON(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities(), "protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p), "appToolPermissions": "application", "fileTransfer": true, "filePermissionsVersion": 1, "textContextVersion": 1, "toolResultFilesVersion": 1, "nativeFileInputsVersion": 1, "maxTextBytes": a.textLimit(), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
+		writeJSON(w, 200, map[string]any{"connectionReviewVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities(), "protocolVersion": 2, "routingVersion": 2, "routingConfigured": routingConfigured(p, ownerSettings(&a.state).Default), "appToolPermissions": "application", "fileTransfer": true, "filePermissionsVersion": 1, "textContextVersion": 1, "toolResultFilesVersion": 1, "nativeFileInputsVersion": 1, "maxTextBytes": a.textLimit(p), "pairing": a.remotePairing(p), "providers": a.remoteCapabilities(p), "actions": a.actionCapabilities(p), "connectionTest": true, "modes": []string{"restricted", "commands", "app-tools", "workspace"}, "leaseSeconds": int(pairingLeaseTTL(p).Seconds()), "remoteAccess": false})
 		return nil
 	}))
 	mux.HandleFunc("GET /v2/actions", paired(func(w http.ResponseWriter, r *http.Request, p *Pairing) error {
@@ -779,6 +795,9 @@ func (a *App) authenticate(r *http.Request) (*Pairing, error) {
 	p := a.state.Pairings[verified.PairingID]
 	if p == nil || p.Revoked || !equal(p.ClientPublicKey, verified.PublicKey) {
 		return nil, fail(401, "pairing_revoked", "Unknown, revoked or mismatched pairing key.")
+	}
+	if at := a.pairingExpiresAt(&a.state, p); at != nil && !a.now().Before(*at) {
+		return nil, fail(401, "pairing_revoked", "This idle connection expired. Connect again.")
 	}
 	if r.Header.Get("Origin") != p.Origin {
 		return nil, fail(403, "origin_mismatch", "Pairing origin mismatch.")

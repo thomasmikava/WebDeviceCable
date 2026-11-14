@@ -1,0 +1,19 @@
+# A release event runs at the release tag, and the github-pages environment
+# only accepts deploys from main, so this starts the site build on main.
+name: Site refresh on release
+on:
+  release:
+    types: [published, released, edited, deleted]
+permissions:
+  actions: write
+concurrency:
+  group: pages-on-release
+  cancel-in-progress: true
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}

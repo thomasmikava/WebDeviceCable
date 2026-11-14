@@ -16,6 +16,8 @@ const notificationPreference='wdc-desktop-notifications',panelStorage={local:nul
 try{panelStorage.local=window.localStorage;}catch{}
 try{panelStorage.session=window.sessionStorage;}catch{}
 let notificationsEnabled=false,notificationHintDismissed=false;
+const notificationOptionsKey='wdc-notification-options',defaultNotificationOptions={connection:true,job:true,access:true,failed:true,sound:false};
+let notificationOptions={...defaultNotificationOptions,...readLocal(panelStorage.local,notificationOptionsKey,{})},soundContext;
 const notifiedRequests=new Set(),desktopAlerts=new Map();
 try{notificationsEnabled=localStorage.getItem(notificationPreference)==='true';}catch{}
 function readLocal(storage,key,fallback){try{const value=JSON.parse(storage.getItem(key));return Array.isArray(fallback)&&!Array.isArray(value)?fallback:value??fallback;}catch{return fallback;}}
@@ -28,13 +30,22 @@ function loadDevicePreferences(){
 }
 function saveDefaults(){writeLocal(panelStorage.local,`wdc-defaults:${localDevice}`,pendingDefaults);}
 function saveInvitations(){writeLocal(panelStorage.session,`wdc-invitations:${localDevice}`,invitationCopies);}
+function globalProgram(){return state?.settings?.default?.provider;}
+function reasoningLabel(value){return ({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[value]??value;}
+function programResolution(value){
+  if(value)return '';
+  const target=state.settings?.default;
+  return target?.provider?`Global setting: ${targetLabel(target)} · ${target.model||'Program’s default model'} · ${target.reasoning?reasoningLabel(target.reasoning)+' reasoning':'Program’s default reasoning'}.`:'Choose a program in Programs and models after connecting.';
+}
+function initialConnectionProgram(){return globalProgram()?'':firstReadyProgram();}
 function firstReadyProgram(){return state?.providers.find(program=>program.execution && state.programs?.find(item=>item.id===program.id)?.type!=='custom')?.id??'';}
-function fillDefaultPrograms(select,selected=firstReadyProgram()){
-  select.replaceChildren(el('option',{value:''},'Choose after connecting'),...state.providers.map(program=>{
+function fillDefaultPrograms(select,selected=initialConnectionProgram()){
+  select.replaceChildren(el('option',{value:''},globalProgram()?`Same as global (${targetLabel(state.settings.default)})`:'Choose after connecting'),...state.providers.map(program=>{
     const custom=state.programs?.find(item=>item.id===program.id)?.type==='custom';
     const option=el('option',{value:program.id},`${program.name} · ${custom?'grant access after connecting':program.execution?'Ready':'Unavailable'}`);
     option.disabled=custom;return option;
   }));select.value=selected;
+  if(select.id==='invite-default-program')$('invite-program-help').textContent=programResolution(select.value);
 }
 function rememberDefault(identity,provider){
   if(!provider)return;
@@ -110,8 +121,11 @@ function renderNotificationSetting(){
   $('desktop-notifications').setAttribute('aria-checked',String(notificationsEnabled && permission==='granted'));
   $('desktop-notifications').disabled=!available;
   $('notification-help').textContent=!available?'Desktop notifications are unavailable in this browser. Keep this panel open to review requests.':permission==='denied'?'Your browser has blocked notifications. Allow them for this site in the browser’s site settings, then turn this switch on.':'Get an alert when an app needs your approval and this tab is in the background.';
+  for(const hint of document.querySelectorAll('[data-notification-resolution]'))hint.textContent=notificationResolution();
 }
+function notificationResolution(){return !notificationAvailable()?'Desktop notifications are unavailable in this browser.':Notification.permission==='denied'?'Desktop notifications are blocked in this browser.':notificationsEnabled&&Notification.permission==='granted'?'Browser notifications are on. Event choices and sound are set in Settings.':'Desktop notifications are off in this browser. Turn them on in Settings.';}
 async function enableNotifications(){
+  if(notificationOptions.sound)void prepareSound();
   if(!notificationAvailable()){renderNotificationSetting();return;}
   const permission=Notification.permission==='default'?await Notification.requestPermission():Notification.permission;
   notificationsEnabled=permission==='granted';writeLocal(panelStorage.local,notificationPreference,notificationsEnabled);
@@ -127,34 +141,57 @@ $('enable-notifications').onclick=action(enableNotifications);
 $('dismiss-notification-hint').onclick=()=>{notificationHintDismissed=true;$('notification-hint').hidden=true;};
 function renderAttention(){
   const connections=visibleConnectionRequests().filter(item=>!item.submitted&&!item.error&&!item.expired);
-  const waiting=[...connections.map(item=>({key:`connection:${item.id}`,id:item.id,app:item.name||'New app',body:'Wants to connect to WebDeviceCable.',view:'apps'})),
-    ...state.jobs.filter(job=>job.status==='awaiting_approval').map(job=>({key:`job:${job.id}`,id:job.id,app:state.pairings.find(pair=>pair.id===job.pairingId)?.name||'App',body:job.request.kind==='connection-test'?'Wants to run a connection test.':job.actionTitle?`Wants to run ${job.actionTitle}.`:'Wants approval to run an AI request.',view:'activity'})),
-    ...(state.permissions??[]).map(request=>({key:`access:${request.id}`,id:request.id,app:state.pairings.find(pair=>pair.id===request.pairingId)?.name||'App',body:request.kind==='files'?'Wants to send and receive files.':request.kind==='file-write'?`Wants to edit ${request.name}.`:'Wants access to a folder.',view:'activity'}))];
+  const waiting=[...connections.map(item=>({key:`connection:${item.id}`,event:'connection',pairingId:item.pairingId,id:item.id,app:item.name||'New app',body:'Wants to connect to WebDeviceCable.',view:'apps'})),
+    ...state.jobs.filter(job=>job.status==='awaiting_approval').map(job=>({key:`job:${job.id}`,event:'job',pairingId:job.pairingId,id:job.id,app:state.pairings.find(pair=>pair.id===job.pairingId)?.name||'App',body:job.request.kind==='connection-test'?'Wants to run a connection test.':job.actionTitle?`Wants to run ${job.actionTitle}.`:'Wants approval to run an AI request.',view:'activity'})),
+    ...(state.permissions??[]).map(request=>({key:`access:${request.id}`,event:'access',pairingId:request.pairingId,id:request.id,app:state.pairings.find(pair=>pair.id===request.pairingId)?.name||'App',body:request.kind==='files'?'Wants to send and receive files.':request.kind==='file-write'?`Wants to edit ${request.name}.`:'Wants access to a folder.',view:'activity'}))];
   document.title=waiting.length?`(${waiting.length}) WebDeviceCable`:'WebDeviceCable';
   if(!waiting.length)notificationHintDismissed=false;
   const enabled=notificationsEnabled && notificationAvailable() && Notification.permission==='granted';
   $('notification-hint').hidden=!waiting.length||enabled||notificationHintDismissed;
   renderNotificationSetting();
-  const keys=new Set(waiting.map(item=>item.key));
+  const failed=(state.failedRequests??[]).map(event=>{
+    const job=state.jobs.find(job=>job.id===event.id);return {key:`failed:${event.id}`,event:'failed',pairingId:event.pairingId,id:event.id,app:state.pairings.find(pair=>pair.id===event.pairingId)?.name||'App',body:job?.detail||'A request failed.',view:'activity'};
+  });
+  const alerts=[...waiting,...failed];
+  const keys=new Set(alerts.map(item=>item.key));
   for(const [key,alert]of desktopAlerts)if(!keys.has(key)){alert.close();desktopAlerts.delete(key);}
   if(!enabled)return;
-  for(const item of waiting){
+  for(const item of alerts){
+    if(notificationOptions[item.event]===false||state.pairings.find(pair=>pair.id===item.pairingId)?.overrides?.muteNotifications)continue;
     if(notifiedRequests.has(item.key))continue;
     // Wait for connection inspection so the notification names the actual app.
     if(item.key.startsWith('connection:')&&!connections.find(request=>request.id===item.id)?.name)continue;
     notifiedRequests.add(item.key);writeLocal(panelStorage.session,`wdc-notified:${localDevice}`,[...notifiedRequests].slice(-512));
     if(!document.hidden && document.hasFocus())continue;
     try{
-      const alert=new Notification(item.app,{body:item.body,tag:`wdc:${state.deviceId}:${item.key}`});desktopAlerts.set(item.key,alert);
+      const alert=new Notification(item.app,{body:item.body,silent:true,tag:`wdc:${state.deviceId}:${item.key}`});desktopAlerts.set(item.key,alert);if(notificationOptions.sound)void playNotificationSound();
       alert.onclick=()=>{window.focus();location.hash=item.view;route();alert.close();const dialog=[...document.querySelectorAll('dialog[open]')].at(-1);if(dialog)dismissDialog(dialog);else{const card=[...document.querySelectorAll('[data-key]')].find(node=>node.dataset.key===item.id);card?.scrollIntoView({block:'center'});card?.focus({preventScroll:true});}};
     }catch{ /* Some browsers expose notifications but cannot display them. */ }
   }
 }
 window.addEventListener('focus',()=>{if(csrf&&state)renderAttention();});
 window.addEventListener('storage',event=>{
+  if(event.key===notificationOptionsKey){notificationOptions={...defaultNotificationOptions,...readLocal(panelStorage.local,notificationOptionsKey,{})};$('notification-options').replaceChildren();if(csrf&&state)renderNotificationOptions();}
   if(event.key===notificationPreference){notificationsEnabled=event.newValue==='true';if(csrf&&state)renderAttention();}
   if(event.key===`wdc-defaults:${localDevice}`){pendingDefaults=readLocal(panelStorage.local,event.key,[]);void refresh(true).catch(()=>{});}
 });
+async function prepareSound(){try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;soundContext??=new Audio();if(soundContext.state==='suspended')await soundContext.resume();}catch{}}
+async function playNotificationSound(){
+  await prepareSound();if(!soundContext||soundContext.state!=='running')return;
+  const osc=soundContext.createOscillator(),gain=soundContext.createGain(),now=soundContext.currentTime;
+  osc.type='sine';osc.frequency.setValueAtTime(660,now);osc.frequency.setValueAtTime(880,now+0.10);
+  gain.gain.setValueAtTime(0,now);gain.gain.linearRampToValueAtTime(0.08,now+0.015);gain.gain.exponentialRampToValueAtTime(0.001,now+0.25);
+  osc.connect(gain);gain.connect(soundContext.destination);osc.start(now);osc.stop(now+0.27);osc.onended=()=>{osc.disconnect();gain.disconnect();};
+}
+function renderNotificationOptions(){
+  const host=$('notification-options');if(host.children.length)return;
+  const rows=Object.entries({connection:'New connections',job:'Requests needing approval',access:'File and folder access requests',failed:'Failed requests'}).map(([key,label])=>{
+    const input=el('input',{type:'checkbox','aria-label':label});input.checked=notificationOptions[key]!==false;input.onchange=()=>{notificationOptions[key]=input.checked;writeLocal(panelStorage.local,notificationOptionsKey,notificationOptions);};return el('label',{class:'check-line'},input,el('span',{},label));
+  });
+  const sound=el('select',{'aria-label':'Notification sound'},el('option',{value:'off'},'No sound'),el('option',{value:'chime'},'Chime'));sound.value=notificationOptions.sound?'chime':'off';
+  sound.onchange=()=>{notificationOptions.sound=sound.value==='chime';writeLocal(panelStorage.local,notificationOptionsKey,notificationOptions);if(notificationOptions.sound)void playNotificationSound();};
+  host.replaceChildren(el('details',{class:'advanced'},disclosure('Notification events and sound'),el('div',{class:'owner-fields'},el('small',{class:'field-hint'},'Changes save immediately in this browser. Alerts appear while the panel is open in the background and notifications are allowed.'),...rows,el('label',{},'Sound',selectWrap(sound)))));
+}
 function confirmAutomatic(pair){return confirmAction(`Run requests automatically · ${pair.name}?`,'This app’s requests will run within its allowed access without asking each time. You can turn this off in Access.','Run requests automatically');}
 async function alwaysAllowRequest(pair,job){
   if(!await confirmAutomatic(pair))return;
@@ -267,7 +304,7 @@ function jobArtifact(job, artifact, card, history) {
   else queueMicrotask(load);
   return container;
 }
-function lock() {routingReturn=undefined;for(const alert of desktopAlerts.values())alert.close();desktopAlerts.clear();document.title='WebDeviceCable';pendingInvitations=[];invitationCopies=[];$('invite-manual-copy')?.remove();$('invite-token').textContent='';currentInvitation=undefined;invitation=undefined;if(localDevice)try{panelStorage.session?.removeItem(`wdc-invitations:${localDevice}`);}catch{} localDevice='';notifiedRequests.clear();releaseImagePreviews();connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
+function lock() {ownerSettingsDraft=undefined;routingReturn=undefined;for(const alert of desktopAlerts.values())alert.close();desktopAlerts.clear();document.title='WebDeviceCable';pendingInvitations=[];invitationCopies=[];$('invite-manual-copy')?.remove();$('invite-token').textContent='';currentInvitation=undefined;invitation=undefined;if(localDevice)try{panelStorage.session?.removeItem(`wdc-invitations:${localDevice}`);}catch{} localDevice='';notifiedRequests.clear();releaseImagePreviews();connectionWatch?.abort();connectionWatch=undefined;connectionSnapshot=undefined;connectionLoads.clear();connectionViews.clear();for(const pending of logoBlobs.values())void pending.then(url=>{if(url)URL.revokeObjectURL(url);});logoBlobs.clear();reviewDrafts.clear();forgetControlSession(); csrf = ''; for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close(); document.querySelector('.skip-link').hidden = true; $('shell').hidden = true; $('locked').hidden = false; }
 let currentView;
 function route() {
   const view = ['apps','activity','commands','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'apps';
@@ -345,22 +382,48 @@ function nativeChip(provider) {
     requestAnimationFrame(()=>{route();const detail=$('provider-list').querySelector(`[data-provider=${provider.id}]`);if(detail){detail.open=true;detail.closest('.provider-item').scrollIntoView({block:'start'});detail.querySelector('summary').focus({preventScroll:true});}});
   }},providerMark(provider.id,true),el('span',{},provider.name),el('span',{class:`client-status ${native?.execution ? 'ready' : ''}`},nativeLabel(native)),icon('arrow-right'));
 }
+function connectionRoute(pair,group=''){
+  let target=applyRoute(state.settings?.default??{},pair.routing?.default);
+  const chain=[];for(let id=group;id&&chain.length<8;id=(pair.groups??[]).find(g=>g.id===id)?.parentId){chain.unshift(id);}
+  for(const id of chain)target=applyRoute(target,pair.routing?.groups?.[id]);return target;
+}
+function shortDate(value){const time=new Date(value),now=new Date();return time.toLocaleDateString([],{month:'short',day:'numeric',...(time.getFullYear()!==now.getFullYear()?{year:'numeric'}:{})});}
+function connectionSettingsCount(pair){return connectionOverrideLabels(pair).filter(name=>name!=='program and model').length;}
+function connectionSettingsSummary(pair){
+  const policy=connectionHistoryPolicy(pair),parts=[policy.mode==='discard'?'No history':policy.mode==='for'?`History ${resolvedQuantity(policy.seconds)}`:'History kept'];
+  if(pair.expiresAt)parts.push(`Expires ${shortDate(pair.expiresAt)} if unused`);
+  else if((pair.overrides?.connectionExpirySeconds??state.settings?.connectionExpirySeconds)>0)parts.push('Expiry waits for active request');
+  if(pair.overrides?.muteNotifications)parts.push('Muted');
+  return parts.join(' · ');
+}
+// Each card shows three tiles. A tile states its current value, so the card
+// can be read without opening anything, and opens the one dialog that edits it.
+function connectionTile(label,action,ariaLabel,value,detail,onclick,{attention=false,mark}={}){
+  return el('button',{type:'button',class:`connection-tile${attention?' attention':''}`,'data-action':action,'aria-label':`${ariaLabel}: ${value}${detail?`. ${detail}`:''}`,onclick},
+    el('span',{class:'tile-label'},label,icon('chevron','chevron')),
+    el('span',{class:'tile-value'},mark??null,el('span',{},value)),
+    el('span',{class:`tile-detail${attention?' attention':''}`},detail));
+}
 function appRow(pair) {
-  const overrides = Object.values(pair.routing?.groups ?? {}), target = pair.routing?.default;
+  const overrides = Object.keys(pair.routing?.groups ?? {}).filter(id=>{const t=connectionRoute(pair,id);return t.provider||t.action;}),resolved=connectionRoute(pair),target=resolved.provider||resolved.action?resolved:null;
   const pending = state.jobs.filter(job => job.pairingId === pair.id && job.status === 'awaiting_approval').length+(state.permissions??[]).filter(request=>request.pairingId===pair.id).length;
   const working = state.jobs.some(job => job.pairingId === pair.id && ['queued','running'].includes(job.status));
   const setupNeeded=!target && !overrides.length;
-  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : setupNeeded ? 'Setup needed' : 'Connected';
+  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : setupNeeded ? '' : 'Connected';
   const grants = Object.keys(pair.actions ?? {}).length;
   const granted = state.commands.filter(command=>pair.actions?.[command.id]===command.hash).length;
- const folderCount=pair.folders?.length??0;
-  const choice = el('div',{class:`connection-choice${!target && !overrides.length ? ' unconfigured' : ''}`},
-    el('span',{class:'choice-label'},'Default program'),
-    el('button',{type:'button',class:`connection-program${setupNeeded?' attention':''}`,'data-action':'Programs and models','aria-label':`Programs and models for ${pair.name}`,onclick:() => openRouting(pair)},
-      el('span',{class:'choice-value'},target?.provider ? providerMark(target.provider,true) : icon(target?.action ? 'terminal' : 'bridge'),target ? targetLabel(target) : overrides.length ? 'Set by group' : 'Choose a program'),icon('chevron','chevron')));
-  if(overrides.length) choice.append(el('span',{class:'choice-note'},`${overrides.length} custom group${overrides.length===1?'':'s'}`));
-  if(target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution)) choice.append(el('span',{class:'choice-note attention'},'Unavailable for this app'));
-  if(target?.action && !state.commands.some(command=>command.id===target.action && command.hash===pair.actions?.[command.id])) choice.append(el('span',{class:'choice-note attention'},'Review command access'));
+  const folderCount=pair.folders?.length??0;
+  // Until the first program check reports this program, its availability is unknown, not unavailable.
+  const checking=!!target?.provider && programPending(target.provider);
+  const unavailable=!checking && target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution);
+  const commandMissing=target?.action && !state.commands.some(command=>command.id===target.action && command.hash===pair.actions?.[command.id]);
+  const programValue=target ? [targetLabel(target),target.provider&&target.reasoning?reasoningLabel(target.reasoning):''].filter(Boolean).join(' · ') : overrides.length ? 'Set per workflow' : 'Choose a program';
+  const programDetail=checking?'Checking…':unavailable?'Unavailable for this app':commandMissing?'Review command access':setupNeeded?'Needed before requests can run':overrides.length?`${overrides.length} workflow${overrides.length===1?'':'s'} customized`:pair.routing?.default?'Custom for this app':'Same as global';
+  const program=connectionTile('AI program','Programs and models',`Programs and models for ${pair.name}`,programValue,programDetail,()=>openRouting(pair),{attention:setupNeeded||unavailable||commandMissing,mark:target?.provider?providerMark(target.provider,true):target?.action?icon('terminal'):null});
+  const accessDetail=[pair.files?'Files on':'Files off',...(folderCount?[`${folderCount} folder${folderCount===1?'':'s'}`]:[]),...(granted?[`${granted} command${granted===1?'':'s'}`]:[])].join(' · ');
+  const access=connectionTile('Access','Access',`Access for ${pair.name}`,pair.automatic?'Runs automatically':'Asks each time',grants!==granted?'Review command access':accessDetail,()=>openAppPermissions(pair),{attention:grants!==granted});
+  const custom=connectionSettingsCount(pair);
+  const settings=connectionTile('Settings','Settings',`Settings for ${pair.name}`,custom?`${custom} custom setting${custom===1?'':'s'}`:'Same as global',connectionSettingsSummary(pair),()=>openConnectionSettings(pair));
   const menu = el('details',{class:'app-menu'},el('summary',{class:'icon-button','aria-label':`More options for ${pair.name}`,'data-action':'More options',title:'More options'},icon('more')));
   const menuAction = (label, fn, extra='') => button(label,async () => {menu.open=false;await fn();},extra);
   const items = el('div',{class:'action-menu'},
@@ -370,18 +433,11 @@ function appRow(pair) {
     menuAction('Disconnect',async () => {if(await confirmAction(`Disconnect ${pair.name}?`,'Its active requests will be cancelled. Connecting again requires a new invitation.','Disconnect',true))await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({revoke:true})});},'danger'));
   menu.append(items);
   menu.addEventListener('toggle',() => {if(menu.open && menu.isConnected)for(const other of document.querySelectorAll('.app-menu[open]'))if(other!==menu)other.open=false;});
-  const permissions = el('div',{class:'connection-choice'},el('span',{class:'choice-label'},'App access'),
-    el('button',{type:'button',class:'connection-program','data-action':'Access','aria-label':`Access for ${pair.name}`,onclick:() => openAppPermissions(pair)},el('span',{class:'choice-value'},icon('shield'),'Access'),icon('chevron','chevron')),
-    el('span',{class:'choice-note'},`${pair.automatic?'Runs automatically':'Asks each time'} · ${pair.files?'Files allowed':'Files off'}`));
-  const access = el('div',{class:'connection-meta'});
-  if (folderCount) access.append(button(`${folderCount} shared folder${folderCount===1?'':'s'}`,() => openPermissions(pair),'text-button'));
-  if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openAppPermissions(pair),'text-button'));
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account'},` · Account ID: ${pair.appUser}`)))),
-      el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending||setupNeeded?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
-    el('div',{class:'connection-settings'},choice,permissions),
-    access.children.length ? access : null);
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account',title:'Account ID in this app'},` · ${pair.appUser}`)))),
+      el('div',{class:'connection-controls'},status?el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}${pair.paused?' paused':''}`,...(pending?{href:'#activity'}:{})},status):null,menu)),
+    el('div',{class:'connection-settings'},program,access,settings));
 }
 document.addEventListener('click',event => {for(const menu of document.querySelectorAll('.app-menu[open]'))if(!menu.contains(event.target))menu.open=false;});
 document.addEventListener('keydown',event => {if(event.key==='Escape' && !document.querySelector('dialog[open]'))for(const menu of document.querySelectorAll('.app-menu[open]')){menu.open=false;menu.querySelector('summary').focus();}});
@@ -445,7 +501,7 @@ function render() {
   $('onboarding-programs').replaceChildren(...state.providers.map(nativeChip));
   $('onboarding-settings').hidden=state.providers.some(program=>program.execution);
   renderInvitations();renderAttention();
-  if($('connect-dialog').open && !$('invite-form').hidden && !invitationProgramChosen)fillDefaultPrograms($('invite-default-program'));
+  if($('connect-dialog').open && !$('invite-form').hidden){if(!invitationProgramChosen)fillDefaultPrograms($('invite-default-program'));$('invite-program-help').textContent=programResolution($('invite-default-program').value);}
   $('native-list').replaceChildren(...state.providers.map(nativeChip));
   preserveList($('app-list'),apps.map(appRow));
   const byTime=(a,b)=>b.createdAt.localeCompare(a.createdAt);
@@ -458,7 +514,7 @@ function render() {
   preserveList($('history-jobs'),history.map(job=>jobCard(job,true)));
   $('requests-empty').hidden=!!state.jobs.length || !!state.permissions?.length || Object.values(state.conversations??{}).some(item=>item.status==='open');
   $('clear-history').hidden=!history.length;
-  renderHistorySettings();
+  renderHistorySettings();renderOwnerSettings();renderNotificationOptions();renderLoginSetting();
   renderCommands(); renderSessions(); renderUpdates();
   for (const control of document.querySelectorAll('[data-sharing]')) control.setAttribute('aria-checked',String(state.sharing?.[control.dataset.sharing] ?? control.dataset.sharing !== 'rawErrors'));
   const openProviders = new Set([...$('provider-list').querySelectorAll('details[open]')].map(node => node.dataset.provider));
@@ -534,7 +590,7 @@ function openConnect() {
   $('connect-start').hidden=false; $('invite-form').hidden=true; $('invite-result').hidden=true; $('connect-title').textContent='Add connection';
   $('invite-commands-section').hidden=!state.commands.length; commandPicker($('invite-commands'),{},$('invite-command-consent')); $('connect-dialog').showModal();
 }
-$('invite-default-program').onchange=()=>{invitationProgramChosen=true;};
+$('invite-default-program').onchange=()=>{invitationProgramChosen=true;$('invite-program-help').textContent=programResolution($('invite-default-program').value);};
 $('connect-app').onclick=openConnect;
 let reviewedRelay, configuringRelay, processingLaunch=false, relayReviewGeneration=0;
 function relayInput() { const data=new FormData($('relay-form'));return {url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()}; }
@@ -732,7 +788,7 @@ $('command-form').onsubmit = action(async event => {
   await api(editingCommand ? `/commands/${editingCommand.id}` : '/commands', {method:editingCommand ? 'PUT' : 'POST',body:JSON.stringify(command)});
   $('command-dialog').close();
 });
-$('keep-request-history').onclick = action(toggleRequestHistory);
+$('start-at-login').onclick=action(async()=>{const enabled=!state.login?.enabled;await api('/login',{method:'PATCH',body:JSON.stringify({enabled})});notify(enabled?'Start at login enabled.':'Start at login disabled.','success');});
 $('toggle-runner').onclick = action(() => api('/runner', {method:'PATCH',body:JSON.stringify({enabled:!state.enabled})}));
 $('clear-history').onclick = action(async () => { if (await confirmAction('Clear request history?', 'Finished requests and their output will be removed. Active requests will stay.', 'Clear history', true)) await api('/history', {method:'DELETE'}); });
 $('sign-out').onclick = action(async () => { if(!await confirmAction('Lock this panel?','To reopen, choose the WebDeviceCable menu-bar or system-tray icon, then Open, or launch WebDeviceCable from your applications menu.','Lock panel'))return; await api('/session', {method:'DELETE'}); csrf = ''; lock(); });
@@ -817,11 +873,11 @@ $('program-access-form').onsubmit=action(async()=>{
 function targetLabel(target) { return target?.action ? state.commands.find(command => command.id === target.action)?.title ?? 'Unavailable command' : target?.provider ? state.providers.find(program=>program.id===target.provider)?.name ?? 'Unavailable AI program' : 'Use default'; }
 function routeEditor(pair, group, current) {
   const selector = el('select', {'data-field':'target','aria-label':`Program for ${group?.name ?? 'default'}`},
-    el('option',{value:''},group ? 'Same as app default' : 'Choose a program'));
+    el('option',{value:''},group ? 'App default' : globalProgram()?`Same as global (${targetLabel(state.settings.default)})`:'Choose a program'));
   const providers = state.providersByPairing?.[pair.id] ?? state.providers;
   if (!group || group.kind === 'ai') for (const provider of providers) {
     const supported = group?.operation !== 'image' || provider.imageGeneration;
-    const option = el('option',{value:`provider:${provider.id}`},provider.name + (!supported ? ' (images unavailable)' : provider.execution ? '' : ' (unavailable)'));
+    const option = el('option',{value:`provider:${provider.id}`},provider.name + (programPending(provider.id) ? ' (checking…)' : !supported ? ' (images unavailable)' : provider.execution ? '' : ' (unavailable)'));
     option.disabled = !supported; selector.append(option);
   }
   if (group?.operation !== 'image') for (const command of state.commands) if (pair.actions?.[command.id] === command.hash) selector.append(el('option',{value:`command:${command.id}`},command.title));
@@ -833,19 +889,19 @@ function routeEditor(pair, group, current) {
   const reasoning = el('select',{'data-field':'reasoning','aria-label':`Reasoning for ${group?.name ?? 'default'}`});
   model.dataset.value = optionValue('model','modelDefault'); reasoning.dataset.value = optionValue('reasoning','reasoningDefault');
   const note = el('small',{class:'route-selection'}), availability = el('p',{class:'route-note'});
-  const routeField = (label,select) => el('label',{},label,selectWrap(select),el('small',{class:'field-hint route-selected','aria-hidden':'true'}));
+  const routeField = (label,select) => el('label',{},label,selectWrap(select));
   const fields = el('div',{class:'route-fields'},routeField('Program',selector),routeField('Model',model),routeField('Reasoning',reasoning));
-  const row = el('details',{class:`route-editor${group ? '' : ' default-route'}`,'data-group':group?.id ?? '',...(group && group.kind!=='ai'?{'data-command-only':'true'}:{})},
-    el('summary',{},el('span',{class:'route-label'},el('strong',{},group?.name ?? `Default for ${pair.name}`),note),icon('chevron','chevron')),
-    fields,availability);
-  if (!group) row.open = true;
-  const reset = el('button',{type:'button',class:'text-button',onclick:() => {
+  const attrs = {'data-group':group?.id ?? '',...(group && group.kind!=='ai'?{'data-command-only':'true'}:{})};
+  // The app default is always shown; only workflows collapse.
+  const row = group
+    ? el('details',{class:'route-editor',...attrs},el('summary',{},el('span',{class:'route-label'},el('strong',{},group.name),note),icon('chevron','chevron')),fields,availability)
+    : el('div',{class:'route-editor default-route',...attrs},el('div',{class:'route-head'},el('strong',{},`Default for ${pair.name}`),el('small',{class:'field-hint'},'Used for every request unless a workflow below says otherwise.'),note),fields,availability);
+  if (group) row.append(el('button',{type:'button',class:'text-button route-reset',onclick:() => {
     selector.value=''; model.dataset.value=''; reasoning.dataset.value=''; refreshRoutingLabels(pair);
-  }},'Use app default settings');
-  if (group) row.append(reset);
+  }},group.parentId ? 'Reset to workflow default' : 'Reset to app default'));
   selector.onchange = () => {
     const next=selector.value.startsWith('provider:') ? selector.value.slice(9) : row.dataset.inheritedProvider;
-    if(next!==row.dataset.provider){model.dataset.value='';reasoning.dataset.value='';notify('Program changed. Choose compatible model and reasoning settings, or keep the inherited defaults.','info');}
+    if(next!==row.dataset.provider && (model.dataset.value || reasoning.dataset.value)){model.dataset.value='';reasoning.dataset.value='';notify('Model and reasoning were reset to fit the new program.','info');}
     refreshRoutingLabels(pair);
   };
   model.onchange = () => { model.dataset.value=model.value; refreshRoutingLabels(pair); };
@@ -875,17 +931,18 @@ function applyRoute(base, override) {
 }
 function refreshRoutingLabels(pair) {
   const rows=[...$('routing-form').querySelectorAll('[data-group]')];
+  const defaultRow=rows.find(row=>!row.dataset.group);if(defaultRow)defaultRow.querySelector('[data-field=target]').options[0].textContent=globalProgram()?`Same as global (${targetLabel(state.settings.default)})`:'Choose a program';
   const rowByID=new Map(rows.map(row=>[row.dataset.group,row]));
   const targetFor=(id,depth=0)=>{
     if(depth>8)return {};
     const group=(pair.groups??[]).find(item=>item.id===id),row=rowByID.get(id);
-    const base=id ? targetFor(group?.parentId ?? '',depth+1) : {};
+    const base=id ? targetFor(group?.parentId ?? '',depth+1) : state.settings?.default ?? {};
     return row ? applyRoute(base,readRoute(row)) : base;
   };
-  const fill=(select, options, inherited, group)=>{
+  const fill=(select, options, inherited, group,canInherit)=>{
     const value=select.dataset.value ?? '';
-    select.replaceChildren(el('option',{value:''},group ? `Same as ${group.parentId?'parent workflow':'app'} default (${inherited || "program’s default"})` : 'Program’s default'),
-      ...(group ? [el('option',{value:'@default'},'Program’s default')] : []),
+    select.replaceChildren(el('option',{value:''},canInherit ? group ? `${group.parentId?'Workflow':'App'} default (${inherited || "program’s default"})` : `Same as global (${inherited || 'program’s default'})` : 'Program’s default'),
+      ...(canInherit ? [el('option',{value:'@default'},'Program’s default')] : []),
       ...options.map(([value,label])=>el('option',{value},label)));
     // An old saved setting is kept visible; we never discard it on opening.
     if(value && ![...select.options].some(option=>option.value===value))select.append(el('option',{value},value==='@default'?'Program’s default':`${value} (not reported by client)`));
@@ -893,19 +950,21 @@ function refreshRoutingLabels(pair) {
   };
   for(const row of rows){
     const id=row.dataset.group,group=(pair.groups??[]).find(item=>item.id===id),target=targetFor(id);
-    const inherited=id?targetFor(group?.parentId ?? ''):{};
+    const inherited=id?targetFor(group?.parentId ?? ''):state.settings?.default ?? {};
+    const canInherit=!!inherited.provider&&inherited.provider===target.provider;
     row.dataset.provider=target.provider ?? '';row.dataset.inheritedProvider=inherited.provider ?? '';
     const native=state.native?.find(item=>item.id===target.provider),models=native?.models ?? [];
     const model=row.querySelector('[data-field=model]'),reasoning=row.querySelector('[data-field=reasoning]');
-    fill(model,models.map(item=>[item.model,item.displayName || item.model]),inherited.model,group);
+    fill(model,models.map(item=>[item.model,item.displayName || item.model]),inherited.model,group,canInherit);
     const selected=models.find(item=>item.model===target.model);
     const efforts=selected?.supportedReasoningEfforts ?? (!target.model ? models.reduce((common,item)=>common===null ? item.supportedReasoningEfforts ?? [] : common.filter(effort=>item.supportedReasoningEfforts?.some(other=>other.reasoningEffort===effort.reasoningEffort)),null) : []) ?? [];
-    fill(reasoning,efforts.map(item=>[item.reasoningEffort,({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[item.reasoningEffort] ?? item.reasoningEffort]),inherited.reasoning,group);
+    fill(reasoning,efforts.map(item=>[item.reasoningEffort,reasoningLabel(item.reasoningEffort)]),inherited.reasoning?reasoningLabel(inherited.reasoning):'',group,canInherit);
     model.disabled=!!target.action || !target.provider || !!group && group.kind!=='ai';
-    reasoning.disabled=model.disabled || !efforts.length && !reasoning.dataset.value;
+    reasoning.disabled=model.disabled || !efforts.length && !reasoning.dataset.value && !canInherit;
     const commandOnly=!!group && group.kind!=='ai';
-    model.closest('label').hidden=reasoning.closest('label').hidden=commandOnly || !!target.action;
-    if(group)row.querySelector('[data-field=target]').options[0].textContent=`Same as ${group.parentId?'parent workflow':'app'} default (${commandOnly?(inherited.action?targetLabel(inherited):'no command selected'):targetLabel(inherited)})`;
+    model.closest('label').hidden=reasoning.closest('label').hidden=commandOnly || !!target.action || !target.provider;
+    const parentName=group?.parentId?'Workflow default':'App default';
+    if(group)row.querySelector('[data-field=target]').options[0].textContent=`${parentName} (${commandOnly?(inherited.action?targetLabel(inherited):'none chosen'):inherited.provider||inherited.action?targetLabel(inherited):'none chosen'})`;
     const source=readRoute(row);
     const custom=source ? [source.provider || source.action ? 'Program' : '',source.model || source.modelDefault ? 'Model' : '',source.reasoning || source.reasoningDefault ? 'Reasoning' : ''].filter(Boolean) : [];
     const commandRequired=!!group && group.kind!=='ai' && !!target.provider;
@@ -914,35 +973,37 @@ function refreshRoutingLabels(pair) {
     const incompatible=commandRequired || group?.operation==='image' && !imageCompatible;
     const invalidEffort=!!target.reasoning && efforts.length>0 && !efforts.some(item=>item.reasoningEffort===target.reasoning);
     reasoning.setCustomValidity(invalidEffort ? 'Choose a reasoning level supported by this model, or the program’s default.' : '');
-    const pieces=commandOnly ? [target.action?targetLabel(target):'Choose an allowed command'] : target.action ? [targetLabel(target)] : [targetLabel(target),target.model || 'Program’s default model',target.reasoning ? `${target.reasoning} reasoning` : 'Program’s default reasoning'];
-    row.querySelector('.route-selection').textContent=(commandOnly || target.provider || target.action ? pieces.join(' · ') : 'Choose a default program')+(incompatible ? commandRequired ? '' : ' · Requires Codex' : id ? custom.length ? ` · ${custom.join(', ')} customized` : ' · Uses default settings' : '');
+    const modelName=models.find(item=>item.model===target.model)?.displayName || target.model;
+    const resolved=commandOnly ? (target.action?targetLabel(target):'Choose an allowed command') : target.action ? targetLabel(target) : target.provider ? [targetLabel(target),modelName || 'default model',target.reasoning ? `${reasoningLabel(target.reasoning)} reasoning` : 'default reasoning'].join(' · ') : 'No program chosen';
+    // Workflow summaries say whether they follow the default; the open editor shows the details.
+    const summary=!id ? '' : custom.length || commandOnly ? resolved : `${parentName} (${target.provider||target.action?targetLabel(target):'none chosen'})`;
+    row.querySelector('.route-selection').textContent=summary+(incompatible && !commandRequired ? ' · Requires Codex' : '');
+    row.querySelector('.route-selection').hidden=!id;
     row.querySelector('.route-selection').classList.toggle('needs-choice',incompatible || invalidEffort);
+    const reset=row.querySelector('.route-reset');if(reset)reset.hidden=!custom.length;
     for(const option of row.querySelector('[data-field=target]').options){
       if(!option.value.startsWith('provider:'))continue;
       const available=providersForPair(pair).find(item=>item.id===option.value.slice(9));
       if(!available)continue;
       const supported=group?.operation!=='image' || available.imageGeneration;
-      option.disabled=!supported;option.textContent=available.name+(!supported?' (images unavailable)':available.execution?'':' (unavailable)');
-    }
-    for(const select of row.querySelectorAll('.route-fields select')){
-      const selected=select.selectedOptions[0],hint=select.closest('label').querySelector('.route-selected');
-      hint.hidden=!group || selected?.value!=='';hint.textContent=selected?.textContent ?? '';
+      option.disabled=!supported;option.textContent=available.name+(programPending(available.id)?' (checking…)':!supported?' (images unavailable)':available.execution?'':' (unavailable)');
     }
     row.querySelector('.route-note').textContent=!commandOnly && target.provider && !provider ? 'This AI program was removed. Choose another program explicitly.' : commandRequired ? 'This workflow requires an allowed command. Choose one here or in its parent workflow.' : group?.operation==='image' && !imageCompatible ? 'This image stage requires Codex. Choose Codex here or in its workflow.' : group?.operation==='image' ? 'Model and reasoning configure the Codex turn. Its built-in image tool controls the image renderer.' : provider && !provider.execution ? provider.reason : target.provider && !efforts.length ? 'Reasoning options are not reported for this model; the program’s default applies.' : '';
   }
 }
+function programPending(id) { return state.nativeChecking && !state.native?.some(item=>item.id===id); }
 function providersForPair(pair) { return state.providersByPairing?.[pair.id] ?? state.providers; }
 function openRouting(pair) {
-  clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair)]);
+  clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair),state.settings?.default]);
   $('routing-title').textContent=`Programs and models · ${pair.name}`;
-  $('routing-context').textContent=`${pair.origin} · Choose a default AI program, then customize individual workflows if needed.`;
   $('routing-default').replaceChildren(routeEditor(pair,null,pair.routing?.default));
   const append=(parent='')=>(pair.groups ?? []).filter(group=>!group.hidden && (group.parentId ?? '')===parent).map(group=>{
     const row=routeEditor(pair,group,pair.routing?.groups?.[group.id]);
     const children=append(group.id); if(children.length)row.append(el('div',{class:'workflow-stages'},...children));
     return row;
   });
-  $('routing-groups').replaceChildren(el('h3',{class:'route-heading'},'Choose by workflow'),el('p',{class:'muted'},'Use a different program or command for specific tasks in this app; other tasks use the app default.'),...append());
+  const workflows=append();
+  $('routing-groups').replaceChildren(...(workflows.length?[el('h3',{class:'route-heading'},'Workflows'),el('p',{class:'muted'},'Choose a different program for specific tasks. The rest use the default above.'),...workflows]:[]));
   refreshRoutingLabels(pair); $('routing-dialog').showModal();
 }
 $('close-routing').onclick = () => $('routing-dialog').close();
@@ -1042,7 +1103,7 @@ function appMark(id) {
   return mark;
 }
 function reviewDraft(info,key) {
-  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:false,files:info.requestedPermissions?.files===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false,provider:firstReadyProgram()});
+  if(!reviewDrafts.has(key))reviewDrafts.set(key,{automatic:false,files:info.requestedPermissions?.files===true,logoId:info.logoId??'',initialURL:info.logoURL??'',loaded:false,provider:initialConnectionProgram()});
   return reviewDrafts.get(key);
 }
 function reviewMark(info,key) {
@@ -1063,53 +1124,132 @@ function connectionReview(info,key) {
   const draft=reviewDraft(info,key),automatic=el('input',{type:'checkbox','aria-label':`Approve requests automatically for ${info.name}`,'data-action':'Automatic approvals'});automatic.checked=draft.automatic;
   automatic.onchange=async()=>{if(automatic.checked){automatic.checked=false;automatic.checked=await confirmAutomatic(info);}draft.automatic=automatic.checked;};
   const files=el('input',{type:'checkbox','aria-label':`Allow files for ${info.name}`,'data-action':'File access'});files.checked=draft.files;files.onchange=()=>{draft.files=files.checked;};
-  if(!draft.providerChosen)draft.provider=firstReadyProgram();
-  const program=el('select',{'aria-label':`Default program for ${info.name}`,'data-action':'Default program'});fillDefaultPrograms(program,draft.provider);program.onchange=()=>{draft.provider=program.value;draft.providerChosen=true;};
-  return el('div',{class:'connection-review'},el('label',{},'Default program',selectWrap(program),el('small',{class:'field-hint'},'Custom programs need an access grant after connecting.')),el('label',{class:'check-line'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run without asking for approval each time.'))),el('label',{class:'check-line'},files,el('span',{},'Send and receive files',el('small',{},'This app can supply images and documents for its requests and receive files those requests produce.'))),el('small',{class:'muted'},'Computer folders: No access. Command access: Off.'));
+  if(!draft.providerChosen)draft.provider=initialConnectionProgram();
+  const hint=el('small',{id:`program-resolution-${++quantityID}`,class:'field-hint'},programResolution(draft.provider));
+  const program=el('select',{'aria-label':`Default program for ${info.name}`,'aria-describedby':hint.id,'data-action':'Default program'});fillDefaultPrograms(program,draft.provider);program.onchange=()=>{draft.provider=program.value;draft.providerChosen=true;hint.textContent=programResolution(program.value);};
+  return el('div',{class:'connection-review'},el('label',{},'Default program',selectWrap(program),hint,el('small',{class:'field-hint'},'Custom programs need an access grant after connecting.')),el('label',{class:'check-line'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run without asking for approval each time.'))),el('label',{class:'check-line'},files,el('span',{},'Send and receive files',el('small',{},'This app can supply images and documents for its requests and receive files those requests produce.'))),el('small',{class:'muted'},'Computer folders: No access. Command access: Off.'));
 }
 
-function effectiveRequestHistory(pair,value=pair.requestHistory||'global') {
-  return value==='keep'||value==='global'&&state.keepRequestHistory!==false;
+const durationUnits={seconds:1,minutes:60,hours:3600,days:86400},sizeUnits={KB:1024,MB:1048576};
+let quantityID=0,ownerSettingsDraft;
+window.addEventListener('beforeunload',event=>{if(ownerSettingsDraft?.dirty){event.preventDefault();event.returnValue='';}});
+function settingsValue(){return {maximumRequestSeconds:600,outputBytes:0,connectionExpirySeconds:0,...state.settings,history:state.settings?.history??{mode:state.keepRequestHistory===false?'discard':'keep'}};}
+function resolvedQuantity(value,units=durationUnits){
+  const entries=Object.entries(units).reverse();
+  const [unit,factor]=entries.find(([,factor])=>value>=factor&&value%factor===0)??Object.entries(units)[0];
+  const n=value/factor;return `${n} ${n===1&&unit.endsWith('s')?unit.slice(0,-1):unit}`;
 }
-function renderHistorySettings() {
-  $('keep-request-history').setAttribute('aria-checked',String(state.keepRequestHistory!==false));
-  const off=state.pairings.filter(pair=>!pair.revoked&&!effectiveRequestHistory(pair));
-  const note=$('history-note');
-  note.hidden=state.keepRequestHistory!==false&&!off.length;
-  note.textContent=state.keepRequestHistory===false
-    ?'Request history is off globally. Connections set to keep history still save finished requests.'
-    :'Request history is off for some connections. Their finished requests disappear after completion.';
-  for(const select of document.querySelectorAll('[data-request-history]'))select.options[0].textContent=globalHistoryLabel();
-  for(const hint of document.querySelectorAll('[data-history-resolution]'))hint.textContent=globalHistoryResolution();
+// Every duration/size editor shares canonical conversion, inline validation and wording.
+function quantityControl(label,value,units,min,max,onchange=()=>{}){
+  const id=`quantity-${++quantityID}`,entries=Object.entries(units);
+  const initial=[...entries].reverse().find(([,factor])=>value>=factor&&value%factor===0)??entries[0];
+  const number=el('input',{id:`${id}-input`,type:'number',required:'',min:'1',step:'any','aria-label':label,'aria-describedby':id,'data-permission-edit':''});number.value=String(value/initial[1]);
+  const unit=el('select',{'aria-label':`${label} unit`,'aria-describedby':id,'data-permission-edit':''},...entries.map(([name])=>el('option',{value:name},name)));unit.value=initial[0];
+  const hint=el('small',{id,class:'field-hint',role:'status','aria-live':'polite'});
+  const read=()=>{const n=Number(number.value)*units[unit.value],rounded=Math.round(n);return Math.abs(n-rounded)<=Number.EPSILON*Math.max(1,Math.abs(n))*8?rounded:n;};
+  const valid=()=>number.value.trim()!==''&&Number.isSafeInteger(read())&&read()>=min&&read()<=max;
+  const update=(silent=false)=>{number.min=String(min/units[unit.value]);number.max=String(max/units[unit.value]);const ok=valid(),message=ok?'':number.value.trim()===''?'Enter a value.':read()<min||read()>max?`Enter ${resolvedQuantity(min,units)} to ${resolvedQuantity(max,units)}.`:`Use a value equal to whole ${units===sizeUnits?'bytes':'seconds'}.`;number.setCustomValidity(message);number.setAttribute('aria-invalid',String(!ok));const canonical=ok?resolvedQuantity(read(),units):'';hint.textContent=message||(canonical.startsWith(`${Number(number.value)} `)?'':`${canonical} total.`);hint.hidden=!hint.textContent;hint.classList.toggle('invalid',!ok);if(!silent)onchange();};
+  let previousUnit=unit.value;
+  number.oninput=()=>update();unit.onchange=()=>{if(number.value.trim()!==''&&Number.isFinite(Number(number.value)))number.value=String(Number(number.value)*units[previousUnit]/units[unit.value]);previousUnit=unit.value;update();};
+  const node=el('div',{class:'quantity-control'},el('div',{class:'quantity-fields'},number,selectWrap(unit)),hint);
+  const result={node,read,valid,update,number,unit};update(true);return result;
 }
-function globalHistoryResolution(){return `Global setting: ${state.keepRequestHistory===false?'Don’t keep':'Keep'}.`;}
-function globalHistoryLabel(){return `Use the global setting (${state.keepRequestHistory===false?'don’t keep':'keep'})`;}
-function requestHistoryChoice(pair) {
-  const select=el('select',{'aria-label':'Request history','data-request-history':'','data-permission-edit':''},
-    el('option',{value:'global'},globalHistoryLabel()),el('option',{value:'keep'},'Keep'),el('option',{value:'discard'},'Don’t keep'));
-  select.value=pair.requestHistory||'global';
-  return select;
+function globalHistoryPolicy(){return settingsValue().history;}
+function connectionHistoryPolicy(pair,value=pair.requestHistory||'global',seconds=pair.historySeconds){return value==='global'?globalHistoryPolicy():{mode:value,seconds:value==='for'?seconds:undefined};}
+function effectiveRequestHistory(pair,value=pair.requestHistory||'global'){return connectionHistoryPolicy(pair,value).mode!=='discard';}
+function policyLabel(policy){return policy.mode==='discard'?'Don’t keep':policy.mode==='for'?`Keep for ${resolvedQuantity(policy.seconds)}`:'Keep until I clear it';}
+function globalHistoryLabel(){return `Same as global (${policyLabel(globalHistoryPolicy())})`;}
+function renderHistorySettings(){
+  const custom=state.pairings.filter(pair=>!pair.revoked&&pair.requestHistory&&pair.requestHistory!=='global');
+  const off=custom.some(pair=>!effectiveRequestHistory(pair));
+  const policy=globalHistoryPolicy(),note=$('history-note');note.hidden=policy.mode==='keep'&&!custom.length;
+  note.textContent=(policy.mode==='discard'?'Request history is off globally.':`Default request history: ${policyLabel(policy)}.`)+(custom.length?` History ${off?'is off for some connections; other custom settings may also apply':'has custom settings for some connections'}.`:'')+' Finished requests follow each connection’s policy. Change defaults in Settings, or one connection’s policy with Settings on its card.';
+  for(const select of document.querySelectorAll('[data-request-history]'))if(select.options[0].value==='global')select.options[0].textContent=globalHistoryLabel();
+  const o=settingsValue();for(const select of document.querySelectorAll('[data-override-key]')){const key=select.dataset.overrideKey,n=key==='outputBytes'?o.outputBytes||state.effectiveOutputBytes||1048576:o[key];const text=key==='connectionExpirySeconds'&&n===0?'Never':resolvedQuantity(n,key==='outputBytes'?sizeUnits:durationUnits);select.options[0].textContent=`Same as global (${text})`;}
 }
-function historyNeedsConfirmation(pair,value) {
-  return value!==(pair.requestHistory||'global')&&(value==='discard'||effectiveRequestHistory(pair)&&!effectiveRequestHistory(pair,value));
+function historyControl(pair,onchange=()=>{},global=false){
+  const select=el('select',{'aria-label':'Request history','data-request-history':'','data-permission-edit':''},...(global?[]:[el('option',{value:'global'},globalHistoryLabel())]),el('option',{value:'keep'},'Keep until I clear it'),el('option',{value:'for'},'Keep for'),el('option',{value:'discard'},'Don’t keep'));
+  select.value=global?globalHistoryPolicy().mode:pair.requestHistory||'global';
+  let quantity;const resolution=el('small',{id:`history-resolution-${++quantityID}`,class:'field-hint','data-history-resolution':'',role:'status'});select.setAttribute('aria-describedby',resolution.id);const resolve=()=>{resolution.hidden=select.value==='global';resolution.textContent=select.value==='global'?'':select.value==='discard'?'Finished requests, output and files are removed after results are delivered.':select.value==='for'?'Finished requests, output and files are removed after this period.':'Finished requests, output and files stay until you clear them.';};const changed=()=>{if(quantity){quantity.node.hidden=select.value!=='for';quantity.number.disabled=quantity.unit.disabled=select.value!=='for';}resolve();onchange();};
+  quantity=quantityControl('History duration',global?globalHistoryPolicy().seconds||86400:pair.historySeconds||86400,durationUnits,1,31536000,changed);
+  const node=el('div',{class:'owner-field'},el('label',{},'Request history',selectWrap(select)),quantity.node,resolution);
+  select.onchange=changed;quantity.node.hidden=select.value!=='for';quantity.number.disabled=quantity.unit.disabled=select.value!=='for';resolve();
+  return {node,select,quantity,read:()=>({mode:select.value,...(select.value==='for'?{seconds:quantity.read()}:{})}),valid:()=>select.value!=='for'||quantity.valid(),reset:()=>{if(global)return;select.value='global';changed();}};
 }
-function confirmHistoryOff(name) {
-  return confirmAction(name?`Stop keeping history · ${name}?`:'Stop keeping request history?',
-    name?'This connection’s saved finished requests, output and files will be removed. Active requests and open session context stay available.':'Saved finished requests, output and files will be removed for connections using this setting. Connections set to Keep are unchanged. Active requests and open session context stay available.',
-    'Turn off and remove history',true);
+function requestHistoryChoice(pair){return historyControl(pair).select;}
+function retentionReduced(before,after){return before.mode!=='discard'&&(after.mode==='discard'||after.mode==='for'&&(before.mode==='keep'||before.seconds>after.seconds));}
+function historyNeedsConfirmation(pair,value,seconds){return retentionReduced(connectionHistoryPolicy(pair),connectionHistoryPolicy(pair,value,seconds));}
+function confirmHistoryOff(name,policy=globalHistoryPolicy()){return confirmAction(name?`Reduce request history · ${name}?`:'Reduce request history?',`New policy: ${policyLabel(policy)}. ${name?'This connection’s':'Connections using the global setting will follow this policy. Their'} saved finished requests, output and files ${policy.mode==='discard'?'will be removed':'older than '+resolvedQuantity(policy.seconds)+' will be removed'}. Active requests and open session context stay available. This cannot be undone.`,'Save and remove history',true,'Keep editing');}
+function hasConnectionOverrides(pair){return Object.keys(pair.overrides??{}).some(key=>pair.overrides[key]!==null&&pair.overrides[key]!==false)||(pair.requestHistory&&pair.requestHistory!=='global')||!!pair.routing?.default||Object.keys(pair.routing?.groups??{}).length>0;}
+function connectionOverrideLabels(pair){
+  const labels={maximumRequestSeconds:'request time',outputBytes:'output size',connectionExpirySeconds:'connection expiry',muteNotifications:'muted notifications'};
+  return [...Object.entries(pair.overrides??{}).filter(([,value])=>value!==null&&value!==false).map(([key])=>labels[key]||key),...(pair.requestHistory&&pair.requestHistory!=='global'?['request history']:[]),...(pair.routing?.default||Object.keys(pair.routing?.groups??{}).length?['program and model']:[])];
 }
-async function toggleRequestHistory() {
-  const keep=state.keepRequestHistory===false;
-  if(!keep&&!await confirmHistoryOff())return;
-  await api('/history',{method:'PATCH',body:JSON.stringify({keep,confirmDiscard:!keep})});
+function overrideControl(label,key,pair,globalValue,units,min,max,onchange){
+  const value=pair.overrides?.[key],expiry=key==='connectionExpirySeconds';
+  const select=el('select',{'aria-label':label,'data-override-key':key,'data-permission-edit':''},el('option',{value:'global'},`Same as global (${expiry&&globalValue===0?'Never':resolvedQuantity(globalValue,units)})`),...(expiry?[el('option',{value:'never'},'Never')]:[]),el('option',{value:'custom'},expiry?'After no requests for':'Set a limit'));
+  select.value=value==null?'global':expiry&&value===0?'never':'custom';
+  let q;const change=()=>{if(q)q.node.hidden=select.value!=='custom';onchange();};
+  q=quantityControl(label,value||globalValue||min,units,min,max,change);
+  select.onchange=change;q.node.hidden=select.value!=='custom';
+  return {node:el('div',{class:'owner-field'},el('label',{},label,selectWrap(select)),q.node),read:()=>select.value==='global'?undefined:select.value==='never'?0:q.read(),valid:()=>select.value!=='custom'||q.valid(),reset:()=>{select.value='global';q.node.hidden=true;},select,q};
 }
+function connectionOverrideControls(pair,onchange){
+  const o=settingsValue();
+  const max=overrideControl('Maximum request time','maximumRequestSeconds',pair,o.maximumRequestSeconds,{seconds:1,minutes:60,hours:3600},1,3600,onchange);
+  const output=overrideControl('Output size limit','outputBytes',pair,o.outputBytes||state.effectiveOutputBytes||1048576,sizeUnits,4096,2097152,onchange);
+  const expiry=overrideControl('Connection expiry','connectionExpirySeconds',pair,o.connectionExpirySeconds,{hours:3600,days:86400},3600,31536000,onchange);
+  max.node.append(el('small',{class:'field-hint'},'Time allowed to run a request, excluding time waiting for approval.'));
+  output.node.append(el('small',{class:'field-hint'},'Maximum output saved for each request.'));
+  expiry.node.append(el('small',{class:'field-hint'},'Disconnect after this long without requests. Applies to existing connections too; expired apps must connect again. Active requests finish first.'));
+  const id=`mute-help-${++quantityID}`,mute=el('button',{type:'button',class:'toggle',role:'switch','aria-label':'Mute notifications','aria-checked':String(!!pair.overrides?.muteNotifications),'aria-describedby':id,'data-permission-edit':''},el('span'));
+  let muted=!!pair.overrides?.muteNotifications;mute.onclick=()=>{muted=!muted;mute.setAttribute('aria-checked',String(muted));onchange();};
+  const reset=()=>{for(const control of [max,output,expiry])control.reset();muted=false;mute.setAttribute('aria-checked','false');onchange();};
+  return {reset,max,output,expiry,mute,node:el('div',{class:'owner-fields'},max.node,output.node,expiry.node,el('div',{class:'setting-row'},el('div',{},el('strong',{},'Mute notifications'),el('small',{},'Stop desktop alerts and sound for this connection.'),el('small',{id,'data-notification-resolution':''},notificationResolution())),mute)),read:()=>Object.fromEntries(Object.entries({maximumRequestSeconds:max.read(),outputBytes:output.read(),connectionExpirySeconds:expiry.read(),muteNotifications:muted?true:undefined}).filter(([,v])=>v!==undefined)),valid:()=>max.valid()&&output.valid()&&expiry.valid()};
+}
+function renderOwnerSettings(){
+  const catalog=JSON.stringify([state.providers,state.native,state.effectiveOutputBytes]);
+  if(ownerSettingsDraft&&(ownerSettingsDraft.dirty||ownerSettingsDraft.revision===(state.settingsRevision??0)&&ownerSettingsDraft.catalog===catalog))return;
+  const o=settingsValue(),draft={revision:state.settingsRevision??0,dirty:false,catalog};ownerSettingsDraft=draft;
+  const unsaved=el('span',{class:'folder-unsaved',role:'status',hidden:''},'Unsaved changes');
+  let save,reset;const changed=()=>{draft.dirty=true;unsaved.hidden=false;if(save)save.disabled=!valid();if(reset)reset.hidden=false;};
+  const time=quantityControl('Maximum request time',o.maximumRequestSeconds,{seconds:1,minutes:60,hours:3600},1,3600,changed);
+  const history=historyControl({},changed,true);
+  const output=quantityControl('Output size limit',o.outputBytes||state.effectiveOutputBytes||1048576,sizeUnits,4096,2097152,changed);
+  const expiryMode=el('select',{'aria-label':'Connection expiry'},el('option',{value:'never'},'Never'),el('option',{value:'for'},'After no requests for'));expiryMode.value=o.connectionExpirySeconds?'for':'never';
+  const expiry=quantityControl('Connection expiry',o.connectionExpirySeconds||86400,{hours:3600,days:86400},3600,31536000,changed);expiry.node.hidden=expiryMode.value==='never';expiry.number.disabled=expiry.unit.disabled=expiryMode.value==='never';expiryMode.onchange=()=>{expiry.node.hidden=expiryMode.value==='never';expiry.number.disabled=expiry.unit.disabled=expiryMode.value==='never';changed();};
+  const provider=el('select',{'aria-label':'Global default program'},el('option',{value:''},'Choose per connection'),...state.providers.map(p=>el('option',{value:p.id},p.name)));if(o.default?.provider&&![...provider.options].some(option=>option.value===o.default.provider))provider.append(el('option',{value:o.default.provider},`${o.default.provider} (unavailable)`));provider.value=o.default?.provider??'';
+  const catalogHint=el('small',{id:'default-catalog-help',class:'field-hint'});
+  const model=el('select',{'aria-label':'Global default model','aria-describedby':catalogHint.id}),reasoning=el('select',{'aria-label':'Global default reasoning','aria-describedby':catalogHint.id});
+  function fillReasoning(){const models=state.native?.find(n=>n.id===provider.value)?.models??[],efforts=model.value?models.find(m=>m.model===model.value)?.supportedReasoningEfforts??[]:models.reduce((common,m)=>common===null?m.supportedReasoningEfforts??[]:common.filter(e=>m.supportedReasoningEfforts?.some(other=>other.reasoningEffort===e.reasoningEffort)),null)??[];const old=reasoning.value;reasoning.replaceChildren(el('option',{value:''},'Program’s default'),...efforts.map(e=>el('option',{value:e.reasoningEffort},reasoningLabel(e.reasoningEffort))));if(old&&!efforts.some(e=>e.reasoningEffort===old))reasoning.append(el('option',{value:old},reasoningLabel(old)));reasoning.value=old;reasoning.disabled=!provider.value||!efforts.length&&!old;}
+  function fillModels(){const models=state.native?.find(n=>n.id===provider.value)?.models??[],old=model.value;model.replaceChildren(el('option',{value:''},'Program’s default'),...models.map(m=>el('option',{value:m.model},m.displayName||m.model)));if(old&&!models.some(m=>m.model===old))model.append(el('option',{value:old},old));model.value=old;model.disabled=!provider.value||!models.length&&!old;catalogHint.textContent=!provider.value?'Choose a default program to set its model and reasoning.':!models.length?'This program has not reported model choices. Saved choices are kept; otherwise the program’s defaults apply.':'Model and reasoning choices come from the selected program.';fillReasoning();}
+  fillModels();
+  for(const [select,value]of [[model,o.default?.model],[reasoning,o.default?.reasoning]]){if(value&&![...select.options].some(option=>option.value===value))select.append(el('option',{value},value));select.value=value??'';if(select===model)fillReasoning();}
+  fillModels();
+  provider.onchange=()=>{model.value='';reasoning.value='';fillModels();changed();};model.onchange=()=>{reasoning.value='';fillReasoning();changed();};reasoning.onchange=changed;
+  const valid=()=>time.valid()&&history.valid()&&output.valid()&&(expiryMode.value==='never'||expiry.valid());
+  save=el('button',{type:'submit',class:'button primary'},'Save defaults');save.disabled=true;draft.dirty=false;
+  reset=el('button',{type:'button',class:'button secondary',hidden:''},'Reload saved defaults');reset.onclick=async()=>{if(draft.dirty&&!await confirmAction('Reload saved defaults?','Your unsaved default settings will be replaced with the currently saved values.','Reload defaults',false,'Keep editing'))return;ownerSettingsDraft=undefined;renderOwnerSettings();$('owner-settings').querySelector('select')?.focus();};
+  const field=(label,q,help)=>el('div',{class:'owner-field'},el('label',{for:q.number.id},label),q.node,el('small',{class:'field-hint'},help));
+  const form=el('form',{class:'owner-fields'},el('label',{},'Default program',selectWrap(provider)),el('div',{class:'owner-field'},el('div',{class:'form-columns'},el('label',{},'Model',selectWrap(model)),el('label',{},'Reasoning',selectWrap(reasoning))),catalogHint),field('Maximum request time',time,'Time allowed to run a request, excluding time waiting for approval.'),history.node,field('Output size limit',output,'Maximum output saved for each request. Some programs may return less.'),el('div',{class:'owner-field'},el('label',{},'Connection expiry',selectWrap(expiryMode)),expiry.node,el('small',{class:'field-hint'},'Disconnect after this long without requests. Applies to existing connections too; expired apps must connect again. Active requests finish first.')),el('div',{class:'actions'},unsaved,reset,save));
+  form.onsubmit=action(async event=>{event.preventDefault();if(!valid())return;const h=history.read(),reduced=retentionReduced(o.history,h);if(reduced&&!await confirmHistoryOff(undefined,h))return;
+    await api('/settings',{method:'PATCH',body:JSON.stringify({expectedRevision:draft.revision,confirmDiscard:reduced,settings:{maximumRequestSeconds:time.read(),history:h,outputBytes:output.read(),connectionExpirySeconds:expiryMode.value==='never'?0:expiry.read(),...(provider.value?{default:{provider:provider.value,model:model.value,reasoning:reasoning.value}}:{})}})});ownerSettingsDraft=undefined;notify('Defaults saved.','success');
+  });$('owner-settings').replaceChildren(form);
+}
+function renderLoginSetting(){const login=state.login;$('login-setting').hidden=!login;$('start-at-login').disabled=!login?.supported;$('start-at-login').setAttribute('aria-checked',String(!!login?.enabled));$('login-help').textContent=login?.supported?'Open the desktop app in the background when you sign in. Changes apply immediately.':login?.reason||'Start at login is unavailable in this installation.';}
 
+function openConnectionSettings(pair){openAppPermissions(pair,'settings');}
+// Access (what the app may do) and Settings (limits and history for this
+// connection) are separate dialogs that share one revisioned save.
 function openAppPermissions(pair,initialView='overview') {
   clearErrors();
-  const dialog=makeDialog('permissions-dialog',`Access · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
-  dialog.dataset.key=pair.id;
-  dialog.querySelector('[aria-label="Close"]').dataset.returnAction='Access';
-  const requestHistory=requestHistoryChoice(pair),originalHistory=pair.requestHistory||'global';
+  const settingsMode=initialView==='settings',title=settingsMode?'Settings':'Access',noun=settingsMode?'settings':'permissions';
+  const dialog=makeDialog('permissions-dialog',`${title} · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
+  dialog.dataset.key=pair.id;dialog.dataset.mode=settingsMode?'settings':'access';
+  dialog.querySelector('[aria-label="Close"]').dataset.returnAction=title;
+  let changed=()=>{};
+  const history=historyControl(pair,()=>{submission=undefined;changed();}),requestHistory=history.select,originalHistory=pair.requestHistory||'global',originalHistorySeconds=pair.historySeconds||0;
+  const overrides=connectionOverrideControls(pair,()=>{submission=undefined;changed();}),originalOverrides=JSON.stringify(pair.overrides??{});
   const folders=(pair.folders??[]).map(folder=>({...folder}));
   const folderNavigation={path:''};
   const folderKey=()=>JSON.stringify(folders.map(({id,path,write,automatic})=>({id,path,write:!!write,automatic:!!automatic})));
@@ -1117,7 +1257,7 @@ function openAppPermissions(pair,initialView='overview') {
   automatic.checked=originalAutomatic;files.checked=originalFiles;
   let saving=false,confirming=false,suspended=false,saveState='draft',submission;
   const expectedRevision=pair.permissionsRevision??0;
-  const dirty=()=>requestHistory.value!==originalHistory||automatic.checked!==originalAutomatic||files.checked!==originalFiles||folderKey()!==originalFolders;
+  const dirty=()=>JSON.stringify(overrides.read())!==originalOverrides||requestHistory.value!==originalHistory||(requestHistory.value==='for'&&history.quantity.read()!==originalHistorySeconds)||automatic.checked!==originalAutomatic||files.checked!==originalFiles||folderKey()!==originalFolders;
   const heading=dialog.querySelector('.dialog-heading'),back=el('button',{type:'button',class:'icon-button permission-back',hidden:'','aria-label':'Back to Access'},icon('arrow-left'));
   heading.prepend(back);
   const setView=(title,view,goBack)=>{
@@ -1133,10 +1273,10 @@ function openAppPermissions(pair,initialView='overview') {
     }
     if(!dirty()){closeDraft();return;}
     confirming=saveState==='unknown'
-      ?confirmAction('Close without confirming?','These changes may already be saved. Closing won’t undo permissions that were applied.','Close anyway',false,'Keep draft')
+      ?confirmAction('Close without confirming?',`These changes may already be saved. Closing won’t undo ${noun} that were applied.`,'Close anyway',false,'Keep draft')
       :saveState==='conflict'
-        ?confirmAction('Close this draft?','Closing this draft won’t change the permissions currently saved in WDC.','Close draft',false,'Keep draft')
-        :confirmAction('Discard unsaved changes?','Your permission and folder changes haven’t been saved.','Discard changes',true,'Keep editing');
+        ?confirmAction('Close this draft?',`Closing this draft won’t change the ${noun} currently saved in WDC.`,'Close draft',false,'Keep draft')
+        :confirmAction('Discard unsaved changes?',settingsMode?'Your changes to this connection’s settings haven’t been saved.':'Your access and folder changes haven’t been saved.','Discard changes',true,'Keep editing');
     try {
       if(await confirming&&dialog.open)closeDraft();
     } finally {confirming=false;}
@@ -1165,14 +1305,14 @@ function openAppPermissions(pair,initialView='overview') {
   const readSaved=()=>api(`/pairings/${pair.id}`,{signal:AbortSignal.timeout(5000)}).then(current=>({...current,reportedName:current.name,name:current.displayName||current.name}));
   const matchesDraft=current=>{
     const actual=current.folders??[],wanted=submission.desired.folders;
-    return (current.requestHistory||'global')===submission.desired.requestHistory&&!!current.automatic===submission.desired.automatic&&!!current.files===submission.desired.files&&
+    return JSON.stringify(current.overrides??{})===JSON.stringify(submission.desired.overrides)&&(current.historySeconds||0)===submission.desired.historySeconds&&(current.requestHistory||'global')===submission.desired.requestHistory&&!!current.automatic===submission.desired.automatic&&!!current.files===submission.desired.files&&
       current.paused===pair.paused&&current.revoked===pair.revoked&&actual.length===wanted.length&&
       wanted.every((folder,index)=>actual[index].path===folder.path&&(!folder.id||actual[index].id===folder.id)&&!!actual[index].write===!!folder.write&&!!actual[index].automatic===!!folder.automatic);
   };
   const saved=async()=>{
-    closeDraft();notify('Access saved.','success');
-    try{await refresh(true);}catch{notify('Access saved. Refresh WDC to update the connection card.','info');}
-    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,'Access')?.focus({preventScroll:true});
+    closeDraft();notify(`${title} saved.`,'success');
+    try{await refresh(true);}catch{notify(`${title} saved. Refresh WDC to update the connection card.`,'info');}
+    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,title)?.focus({preventScroll:true});
   };
   const reconcile=async()=>{
     try {
@@ -1199,14 +1339,16 @@ function openAppPermissions(pair,initialView='overview') {
     if(saving||saveState==='conflict'||!dirty())return;
     if(!submission){
       const changes={expectedPermissionsRevision:expectedRevision,permissionSaveId:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','')};
-      if(requestHistory.value!==originalHistory){changes.requestHistory=requestHistory.value;if(historyNeedsConfirmation(pair,requestHistory.value))changes.confirmDiscard=true;}
+      if(!history.valid()||!overrides.valid())return;
+      if(JSON.stringify(overrides.read())!==originalOverrides)changes.overrides=overrides.read();
+      if(requestHistory.value!==originalHistory||requestHistory.value==='for'&&history.quantity.read()!==originalHistorySeconds){changes.requestHistory=requestHistory.value;changes.historySeconds=requestHistory.value==='for'?history.quantity.read():0;if(historyNeedsConfirmation(pair,requestHistory.value,history.quantity.read()))changes.confirmDiscard=true;}
       if(automatic.checked!==originalAutomatic)changes.automatic=automatic.checked;
       if(files.checked!==originalFiles)changes.files=files.checked;
       if(folderKey()!==originalFolders)changes.folders=folders.map(folder=>({...folder}));
-      submission={payload:changes,desired:{requestHistory:requestHistory.value,automatic:automatic.checked,files:files.checked,folders:folders.map(folder=>({...folder}))}};
+      submission={payload:changes,desired:{overrides:overrides.read(),historySeconds:requestHistory.value==='for'?history.quantity.read():0,requestHistory:requestHistory.value,automatic:automatic.checked,files:files.checked,folders:folders.map(folder=>({...folder}))}};
     }
     return perform(async()=>{
-      if(submission.payload.confirmDiscard&&!submission.confirmed){if(!await confirmHistoryOff(pair.name)){submission=undefined;return;}submission.confirmed=true;}
+      if(submission.payload.confirmDiscard&&!submission.confirmed){if(!await confirmHistoryOff(pair.name,connectionHistoryPolicy(pair,requestHistory.value,history.quantity.read()))){submission=undefined;return;}submission.confirmed=true;}
       try{
         const result=await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify(submission.payload),signal:AbortSignal.timeout(10000)});
         if(!dialog.open)return;
@@ -1219,44 +1361,69 @@ function openAppPermissions(pair,initialView='overview') {
     },save);
   };
   const recoveryText=el('p');
-  const check=el('button',{type:'button',class:'button secondary'},'Check saved permissions');
+  const check=el('button',{type:'button',class:'button secondary'},`Check saved ${noun}`);
   check.onclick=()=>void perform(reconcile,check);
-  const reload=el('button',{type:'button',class:'button secondary'},'Reload saved permissions');
+  const reload=el('button',{type:'button',class:'button secondary'},`Reload saved ${noun}`);
   reload.onclick=()=>void perform(async()=>{
-    if(!await confirmAction('Reload saved permissions?','This will replace your draft with the currently saved settings.','Reload permissions',false,'Keep draft'))return;
+    if(!await confirmAction(`Reload saved ${noun}?`,'This will replace your draft with the currently saved settings.',`Reload ${noun}`,false,'Keep draft'))return;
     const current=await readSaved();if(!dialog.open)return;
-    closeDraft();openAppPermissions(current);
+    closeDraft();openAppPermissions(current,settingsMode?'settings':'overview');
   },reload);
   const recovery=el('div',{class:'permission-recovery',role:'alert',hidden:''},recoveryText,el('div',{class:'actions'},check,reload));
-  save.dataset.returnAction='Access';
-  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction='Access';
+  save.dataset.returnAction=title;
+  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction=title;
   const footer=el('div',{class:'permission-footer'},recovery,el('div',{class:'dialog-actions'},unsaved,cancel,save));
-  const changed=()=>{
-    save.disabled=saving||!dirty()||saveState==='conflict';unsaved.hidden=!dirty();warning.hidden=!originalFiles||files.checked;
+  changed=()=>{
+    save.disabled=saving||!history.valid()||!overrides.valid()||!dirty()||saveState==='conflict';unsaved.hidden=!dirty();warning.hidden=!originalFiles||files.checked;
     const label=saveState==='unknown'?'Retry save':'Save changes';save.textContent=label;save.setAttribute('aria-label',label);
     unsaved.textContent=saveState==='unknown'?'Save not confirmed':saveState==='conflict'?'Saved settings changed':'Unsaved changes';
     recovery.hidden=saveState==='draft';check.hidden=saveState!=='unknown';reload.hidden=saveState!=='conflict';
-    recoveryText.textContent=saveState==='unknown'?'Couldn’t confirm whether your changes were saved. Your edits are kept; check the saved permissions or retry this save.':'Permissions changed while this draft was open. Reload the saved settings before making changes.';
+    recoveryText.textContent=saveState==='unknown'?`Couldn’t confirm whether your changes were saved. Your edits are kept; check the saved ${noun} or retry this save.`:'This connection changed while this draft was open. Reload the saved settings before making changes.';
+    useGlobal.hidden=requestHistory.value==='global'&&!Object.keys(overrides.read()).length;
+    for(const row of dialog.querySelectorAll('.connection-setting'))row.refresh?.();
     for(const input of dialog.querySelectorAll('[data-permission-edit]'))input.disabled=saving||saveState!=='draft'||input.dataset.permissionEdit==='add-folder'&&folders.length>=16;
-    folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'} selected`:'Choose folders this app can read or edit.';
+    folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'}`:'None';
   };
   automatic.dataset.permissionEdit=files.dataset.permissionEdit='';
-  requestHistory.onchange=()=>{submission=undefined;changed();};
+
   files.onchange=changed;
   automatic.onchange=async()=>{if(automatic.checked){automatic.checked=false;automatic.checked=await confirmAutomatic(pair);}changed();};
   const clearView=()=>{clearErrors();for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions, :scope > .permission-footer'))panel.remove();};
   const showOverview=()=>{
-    clearView();setView('Access','overview');dialog.append(overview,footer);changed();folderAccess.focus({preventScroll:true});
+    clearView();setView(title,'overview');dialog.append(overview,footer);changed();(settingsMode?requestHistory:folderAccess).focus({preventScroll:true});
   };
   const showFolders=()=>{
     renderFolderAccess(dialog,pair,folders,footer,changed,showOverview,clearView,folderNavigation);
     back.focus({preventScroll:true});
   };
-  const folderAccess=el('button',{type:'button',class:'connection-program permission-folder-access','aria-label':'Folder access',onclick:showFolders},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},icon('folder'),'Folder access'),folderSummary),icon('chevron','chevron'));
-  const overview=el('div',{class:'dialog-body app-permissions-body'},
-    el('label',{class:'check-line permission-option'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run this app’s requests within its allowed access without asking each time.'))),
-    el('label',{class:'check-line permission-option'},files,el('span',{},'Send and receive files',el('small',{},'Share images and documents with the AI, and receive files it creates. This does not grant access to folders on your computer.'))),warning,
-    el('label',{class:'permission-option permission-history'},'Request history',selectWrap(requestHistory),el('small',{class:'field-hint','data-history-resolution':''},globalHistoryResolution())),folderAccess);
+  // Access rows: switches for on/off choices, chevron rows for editors, each
+  // showing its current value on the right.
+  const navRow=(title,description,value,onclick,attrs={})=>el('button',{type:'button',class:'access-nav',onclick,...attrs},el('span',{class:'access-text'},el('strong',{},title),el('small',{},description)),value,icon('chevron','chevron'));
+  folderSummary.className='access-value';
+  const folderAccess=navRow('Folder access','Folders on this computer the app can read or edit.',folderSummary,showFolders,{'aria-label':'Folder access'});
+  const switchRow=(input,title,description)=>{input.classList.add('switch');input.setAttribute('role','switch');return el('label',{class:'access-switch'},el('span',{class:'access-text'},el('strong',{},title),el('small',{},description)),input);};
+  const useGlobal=el('button',{type:'button',class:'button secondary compact','data-permission-edit':'',onclick:()=>{history.reset();overrides.reset();}},'Reset all to global');
+  // One row per setting: what it is on the left, its control on the right,
+  // and a Custom tag whenever the value differs from the global default.
+  const settingRow=(title,help,controls,isCustom,extra='')=>{
+    const tag=el('span',{class:'custom-tag',hidden:''},'Custom');
+    const row=el('div',{class:`connection-setting${extra}`},el('div',{class:'connection-setting-text'},el('strong',{},title,tag),...[help].flat().filter(Boolean).map(text=>text instanceof Node?text:el('small',{},text))),el('div',{class:'connection-setting-control'},...controls));
+    row.refresh=()=>{tag.hidden=!isCustom();};return row;
+  };
+  const notifyNote=notificationResolution(),muteNote=notifyNote.startsWith('Browser notifications are on')?null:el('small',{'data-notification-resolution':''},notifyNote);
+  const settingsList=settingsMode?el('div',{class:'connection-settings-list'},
+    settingRow('Request history','How long finished requests, output and files are kept.',[requestHistory.parentElement,history.quantity.node],()=>requestHistory.value!=='global'),
+    settingRow('Maximum request time','Run time allowed for one request, not counting approval.',[overrides.max.select.parentElement,overrides.max.q.node],()=>overrides.max.select.value!=='global'),
+    settingRow('Output size limit','Most output saved for one request.',[overrides.output.select.parentElement,overrides.output.q.node],()=>overrides.output.select.value!=='global'),
+    settingRow('Connection expiry','Disconnect after this long without requests. The app must connect again.',[overrides.expiry.select.parentElement,overrides.expiry.q.node],()=>overrides.expiry.select.value!=='global'),
+    settingRow('Mute notifications',['No desktop alerts or sound for this connection.',muteNote],[overrides.mute],()=>overrides.mute.getAttribute('aria-checked')==='true',' toggle-row')):null;
+  const overview=settingsMode
+    ?el('div',{class:'dialog-body app-permissions-body connection-settings-body'},
+      el('div',{class:'settings-intro'},el('p',{},`Changes here apply only to ${pair.name}. Everything else follows your global Settings.`),useGlobal),
+      settingsList)
+    :el('div',{class:'dialog-body app-permissions-body'},el('div',{class:'access-list'},
+      switchRow(automatic,'Run requests automatically','Skip asking each time. Requests still stay within this app’s access.'),
+      switchRow(files,'Send and receive files','Share images and documents with the AI and get back files it creates. No folder access.'),warning,folderAccess));
   const openAccessEditor=(editor,id)=>{
     suspended=true;dialog.close();
     const child=$(id),returnButton=el('button',{type:'button',class:'icon-button permission-back','aria-label':'Back to Access',onclick:()=>child.close()},icon('arrow-left'));
@@ -1274,9 +1441,11 @@ function openAppPermissions(pair,initialView='overview') {
     },{once:true});
     editor(pair);
   };
-  const accessRow=(title,description,editor,id)=>el('button',{type:'button',class:'connection-program permission-folder-access','data-permission-edit':'','aria-label':title,onclick:()=>openAccessEditor(editor,id)},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},title),el('small',{},description)),icon('chevron','chevron'));
-  if(state.commands.length || Object.keys(pair.actions??{}).length)overview.append(accessRow('Command access','Choose the commands this app may run.',openCommandAccess,'command-access-dialog'));
-  if(state.programs?.some(program=>program.type==='custom') || Object.keys(pair.programGrants??{}).length)overview.append(accessRow('Custom AI program access','Choose custom programs that may run with your account permissions.',openProgramAccess,'program-access-dialog'));
+  const allowedLabel=n=>n?`${n} allowed`:'None';
+  const accessRow=(title,description,value,editor,id)=>navRow(title,description,el('span',{class:'access-value'},value),()=>openAccessEditor(editor,id),{'data-permission-edit':'','aria-label':title});
+  const accessList=overview.querySelector('.access-list');
+  if(!settingsMode && (state.commands.length || Object.keys(pair.actions??{}).length))accessList.append(accessRow('Command access','Commands on this computer the app may run.',allowedLabel(state.commands.filter(command=>pair.actions?.[command.id]===command.hash).length),openCommandAccess,'command-access-dialog'));
+  if(!settingsMode && (state.programs?.some(program=>program.type==='custom') || Object.keys(pair.programGrants??{}).length))accessList.append(accessRow('Custom AI program access','Custom programs that may run with your account permissions.',allowedLabel(Object.keys(pair.programGrants??{}).length),openProgramAccess,'program-access-dialog'));
   if(initialView==='folders')showFolders();else showOverview();
   dialog.showModal();
 }
@@ -1455,9 +1624,9 @@ function makeDialog(id,title){
 function openConnectionDetails(pair) {
   clearErrors();
   const dialog = makeDialog('connection-details-dialog',`Connection details · ${pair.name}`);
-  dialog.append(el('div',{class:'dialog-body'},el('p',{class:'dialog-context'},pair.origin),
+  dialog.append(el('div',{class:'dialog-body'},
     el('div',{class:'job-details'},el('dl',{},...[
-      ['App ID',pair.appId],['Account ID',pair.appUser],['Connected',new Date(pair.createdAt).toLocaleString()]
+      ['Website',pair.origin],['App ID',pair.appId],['Account ID',pair.appUser],['Connected',new Date(pair.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})]
     ].flatMap(([label,value])=>[el('dt',{},label),el('dd',{},value)])))),
     el('div',{class:'dialog-actions'},button('Done',()=>dialog.close(),'primary')));
   dialog.showModal();
