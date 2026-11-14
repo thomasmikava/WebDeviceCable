@@ -1,0 +1,101 @@
+{
+  "tag_name": "v0.2.5",
+  "name": "WebDeviceCable 0.2.5 — Windows Codex and Claude detection",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-11-07T21:57:21Z",
+  "html_url": "https://github.com/thomasmikava/WebDeviceCable/releases/tag/v0.2.5",
+  "assets": [
+    {
+      "name": "build-manifest.json",
+      "size": 969,
+      "state": "uploaded",
+      "digest": "sha256:6bae67618b53d9e33bbee2a17127f0b6f37a6109a0a1528f7583e2e5b2c78577",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/build-manifest.json"
+    },
+    {
+      "name": "INSTALL.md",
+      "size": 6099,
+      "state": "uploaded",
+      "digest": "sha256:823cf9725c4d1bd2c697d6b930c3097a634eb76507dd5ce7023ae1f23cfab181",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/INSTALL.md"
+    },
+    {
+      "name": "RELEASE_PUBLIC_KEY.pem",
+      "size": 113,
+      "state": "uploaded",
+      "digest": "sha256:3359a61c9695aae5693f248abde1b9c56715d742024ff7c9ade1052c0e274405",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/RELEASE_PUBLIC_KEY.pem"
+    },
+    {
+      "name": "SHA256SUMS",
+      "size": 1110,
+      "state": "uploaded",
+      "digest": "sha256:373a790be8bb4366908387b5187edd10cbbfa938f6c2dba27d581f8474229be0",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/SHA256SUMS"
+    },
+    {
+      "name": "SHA256SUMS.sig",
+      "size": 64,
+      "state": "uploaded",
+      "digest": "sha256:cbf4b24abb0a206bc304b243abdaa1ff03a8fb6b1e33c81c08dffdf4f356674e",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/SHA256SUMS.sig"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-Linux-ARM64.tar.gz",
+      "size": 6444020,
+      "state": "uploaded",
+      "digest": "sha256:6a233182b97e3030d9b7582acdaad2b95e4ed2bfc41e855a3c7370250c967190",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-Linux-ARM64.tar.gz"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-Linux-x64.tar.gz",
+      "size": 7091765,
+      "state": "uploaded",
+      "digest": "sha256:93a28bded6f4de9d7270203c3b3032a598e856978915c821faafdfd963470373",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-Linux-x64.tar.gz"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-macOS-Apple-Silicon.pkg",
+      "size": 5657268,
+      "state": "uploaded",
+      "digest": "sha256:8d67e472c1da113db65663c81b3cf6d9bec74c0b20aade52081364885596f24a",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-macOS-Apple-Silicon.pkg"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-macOS-Apple-Silicon.zip",
+      "size": 11529385,
+      "state": "uploaded",
+      "digest": "sha256:3cfaf345368ce9eca75f84bb306690af2d4600aab7c709250be22056b039ecd4",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-macOS-Apple-Silicon.zip"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-macOS-Intel.pkg",
+      "size": 6293084,
+      "state": "uploaded",
+      "digest": "sha256:56108bf21dac5103d48dc91dfe903d506dc869ae5ecabc0058a3cbcca1f5a87d",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-macOS-Intel.pkg"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-macOS-Intel.zip",
+      "size": 12792282,
+      "state": "uploaded",
+      "digest": "sha256:3763b060f55801b0832dc2c844934592f4c8706c72b815088325e3a17b2bf011",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-macOS-Intel.zip"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-Windows-ARM64-Setup.exe",
+      "size": 11254339,
+      "state": "uploaded",
+      "digest": "sha256:9abad266d4965af688c9860a0e5a63f4562cad7d1245cfaf04047cebeb90dfa0",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-Windows-ARM64-Setup.exe"
+    },
+    {
+      "name": "WebDeviceCable-0.2.5-Windows-x64-Setup.exe",
+      "size": 12475468,
+      "state": "uploaded",
+      "digest": "sha256:90d847e26316cd01ae32a5061e688a3d05a585430cc1293a61503c3e6439827a",
+      "browser_download_url": "https://github.com/thomasmikava/WebDeviceCable/releases/download/v0.2.5/WebDeviceCable-0.2.5-Windows-x64-Setup.exe"
+    }
+  ]
+}

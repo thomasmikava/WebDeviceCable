@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+{{> head}}
+</head>
+<body>
+{{> header}}
+  <main id="main">
+    <section class="hero wrap">
+      <div class="hero-text">
+        <h1>Let websites use the AI tools on your computer.</h1>
+        <p class="lead">WebDeviceCable is a small free app. Websites you approve can use the AI plan you already have, so you need no new account and no API key. Your sign-in stays on your computer.</p>
+        {{{cta_hero}}}
+        <p class="from-site">Came here from a website? Install WebDeviceCable, then go back and click <strong>Connect to WebDeviceCable</strong>.</p>
+      </div>
+      <figure class="preview hero-preview" aria-label="Example: the WebDeviceCable window when a website asks to connect">
+        <div class="window">
+          <div class="window-bar">
+            <span class="window-brand"><span class="brand-logo" aria-hidden="true"></span>WebDeviceCable</span>
+          </div>
+          <p class="window-label accent">Connection requests</p>
+          <div class="card card-accent">
+            <div class="card-heading">
+              <span class="app-mark"><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#app"></use></svg></span>
+              <div>
+                <p class="card-title">Writer</p>
+                <p class="card-sub">https://example.com</p>
+              </div>
+            </div>
+            <div class="check-line">
+              <span class="checkbox" aria-hidden="true"></span>
+              <div>
+                <p class="check-title">Approve requests automatically</p>
+                <p class="check-sub">Turn off to review each AI request before it runs.</p>
+              </div>
+            </div>
+            <p class="card-note">Connecting will not share your computer’s folders or give this app permission to run commands.</p>
+            <div class="card-footer">
+              <span class="card-sub">Connection details</span>
+              <span class="card-actions"><span class="button secondary">Decline</span><span class="button primary">Connect</span></span>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </section>
+
+    <section class="section wrap" aria-labelledby="how">
+      <h2 id="how">How it works</h2>
+      <ol class="steps">
+        <li><span class="step-number" aria-hidden="true">1</span><p>Install WebDeviceCable. Sign in to Codex or Claude Code as you normally do.</p></li>
+        <li><span class="step-number" aria-hidden="true">2</span><p>On a website that supports it, click <strong>Connect to WebDeviceCable</strong>.</p></li>
+        <li><span class="step-number" aria-hidden="true">3</span><p>Approve the website in WebDeviceCable. Its AI requests now run on your computer.</p></li>
+      </ol>
+    </section>
+
+    <section class="section wrap" aria-labelledby="programs">
+      <h2 id="programs">Works with the programs you already use</h2>
+      <p class="section-lead">WebDeviceCable is made for AI tools first. It can run other programs on your computer too, but only the ones you add.</p>
+      <ul class="programs">
+        <li class="program">
+          <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>
+          <div>
+            <p class="program-name">Codex</p>
+            <p class="program-note">Built in. Uses your existing sign-in. Can also create and edit images.</p>
+          </div>
+        </li>
+        <li class="program">
+          <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>
+          <div>
+            <p class="program-name">Claude Code</p>
+            <p class="program-note">Built in. Uses your existing sign-in.</p>
+          </div>
+        </li>
+        <li class="program program-own">
+          <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#plus"></use></svg></span>
+          <div>
+            <p class="program-name">Your own programs</p>
+            <p class="program-note">Another AI tool, or any other program on your computer. You add it yourself in WebDeviceCable’s settings file, and a website can run it only if you allow it.</p>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="section wrap features" aria-label="What you get">
+      <div class="feature">
+        <div class="feature-text">
+          <h2>You approve every website.</h2>
+          <p>Nothing connects until you click Connect. You choose which program each website may use.</p>
+        </div>
+        <figure class="preview" aria-label="Example: a connected website and its settings">
+          <div class="card">
+            <div class="card-heading">
+              <span class="app-mark"><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#app"></use></svg></span>
+              <div>
+                <p class="card-title">Writer</p>
+                <p class="card-sub">https://example.com</p>
+              </div>
+              <span class="card-state">Connected</span>
+            </div>
+            <div class="choices">
+              <div>
+                <p class="choice-label">Default program</p>
+                <p class="field"><span>Claude Code</span><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#chevron"></use></svg></p>
+              </div>
+              <div>
+                <p class="choice-label">Request approval</p>
+                <p class="field"><span>Ask each time</span><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#chevron"></use></svg></p>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+
+      <div class="feature">
+        <div class="feature-text">
+          <h2>Your sign-in stays on your computer.</h2>
+          <p>WebDeviceCable uses the Codex or Claude Code you already have. It never reads or copies your login.</p>
+        </div>
+        <figure class="preview" aria-label="Example: AI programs found on this computer">
+          <div class="device-strip">
+            <span class="device-label">On this device</span>
+            <span class="chip"><span class="chip-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>Claude Code <span class="ready">Ready</span></span>
+            <span class="chip"><span class="chip-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>Codex <span class="ready">Ready</span></span>
+          </div>
+        </figure>
+      </div>
+
+      <div class="feature">
+        <div class="feature-text">
+          <h2>See every request.</h2>
+          <p>You can ask to approve each request before it runs, and look back at what ran.</p>
+        </div>
+        <figure class="preview" aria-label="Example: a request waiting for approval">
+          <p class="window-label">Needs your approval</p>
+          <div class="card card-warning">
+            <div class="card-heading">
+              <span class="app-mark"><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#app"></use></svg></span>
+              <div>
+                <p class="card-title">Writer</p>
+                <p class="card-sub">Claude Code · just now</p>
+              </div>
+            </div>
+            <p class="prompt">Summarize this draft in three short bullet points.</p>
+            <div class="card-actions end"><span class="button secondary">Deny</span><span class="button primary">Approve</span></div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section wrap install" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install</h2>
+      <p class="notice">This is an early release. The installers are not signed by a publisher yet, so your computer will ask you to confirm.</p>
+      <div class="install-grid">
+        <div class="install-os" data-os-block="darwin">
+          <h3>Mac</h3>
+          <ol>
+            <li>Open the downloaded <code>.pkg</code> file and follow the installer.</li>
+            <li>If macOS says the developer cannot be verified, open <strong>System Settings → Privacy &amp; Security</strong> and click <strong>Open Anyway</strong>. <a href="https://support.apple.com/102445">Apple’s help</a></li>
+            <li>Open WebDeviceCable from Applications.</li>
+          </ol>
+        </div>
+        <div class="install-os" data-os-block="windows">
+          <h3>Windows</h3>
+          <ol>
+            <li>Open the downloaded <code>Setup.exe</code> file. It installs for you only, without administrator access.</li>
+            <li>If Windows shows “Windows protected your PC”, click <strong>More info</strong>, then <strong>Run anyway</strong>. <a href="https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation">Microsoft’s help</a></li>
+            <li>Open WebDeviceCable from the Start menu.</li>
+          </ol>
+        </div>
+        <div class="install-os" data-os-block="linux">
+          <h3>Linux</h3>
+          <ol>
+            <li>Extract the downloaded <code>.tar.gz</code> file.</li>
+            <li>Open a terminal in that folder and run <code>./install.sh</code>. No root access is needed.</li>
+            <li>Open WebDeviceCable from your applications menu.</li>
+          </ol>
+        </div>
+      </div>
+      <p class="after-install">WebDeviceCable sits in your menu bar or system tray. Click it to open its control panel in your browser. If a website sent you here, go back to it and click <strong>Connect to WebDeviceCable</strong>.</p>
+      <p class="after-install">Updates are manual for now: download the new version and install it over the old one. To hear about new versions, open the <a href="{{repo_url}}">GitHub page</a> and choose <strong>Watch → Custom → Releases</strong>. You need a free GitHub account for this.</p>
+      <p class="small-link"><a href="{{repo_url}}/blob/main/INSTALL.md">Full installation guide</a></p>
+    </section>
+
+    <section class="section wrap" id="downloads" aria-labelledby="downloads-title">
+      <h2 id="downloads-title">All downloads</h2>
+      {{{downloads}}}
+    </section>
+
+    <section class="section wrap" aria-labelledby="questions">
+      <h2 id="questions">Questions</h2>
+      <div class="faq">
+        <div>
+          <h3>Is it free?</h3>
+          <p>Yes. WebDeviceCable is free and open source. It uses the Codex or Claude Code you already have, so your plan’s usual limits apply. It never switches to a paid API.</p>
+        </div>
+        <div>
+          <h3>What do I need?</h3>
+          <p>A Mac, Windows or Linux computer with Codex or Claude Code installed and signed in. WebDeviceCable finds them on its own. You can also add other programs yourself.</p>
+          <p>Don’t have either yet? Install <a href="https://developers.openai.com/codex/cli">Codex</a> or <a href="https://code.claude.com/docs/en/quickstart">Claude Code</a> first.</p>
+        </div>
+        <div>
+          <h3>What can a connected website do?</h3>
+          <p>Send AI requests to the program you chose for it, and read the answers. It cannot see your folders or run commands unless you allow that in WebDeviceCable.</p>
+          <p class="muted">WebDeviceCable has not had an independent security review yet.</p>
+        </div>
+        <div>
+          <h3>Which websites work with it?</h3>
+          <p>Websites that have added WebDeviceCable show a <strong>Connect to WebDeviceCable</strong> button.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap closing" aria-labelledby="closing">
+      <h2 id="closing">Connect your first website.</h2>
+      {{{cta_end}}}
+      <p class="small-link"><a href="{{developers}}">Add WebDeviceCable to your website →</a></p>
+    </section>
+  </main>
+{{> footer}}
+</body>
+</html>

@@ -38,6 +38,8 @@ Build all six targets on macOS, where Xcode tools provide both native launcher a
 
 Upload only the eight downloads listed above, `INSTALL.md`, `build-manifest.json`, `RELEASE_PUBLIC_KEY.pem`, `SHA256SUMS` and `SHA256SUMS.sig` to a **draft prerelease** tagged `vVERSION`. Do not upload staging folders, local caches or private keys. The npm packages are already distributed independently; this release does not republish them. Check the final download list and publish the prerelease when ready to invite testers. Keep Windows/Linux native-provider and clean-machine browser checks explicitly pending for [early-user testing](testing.md). The separate signed stable channel still requires its native acceptance checks below.
 
+The [website](https://thomasmikava.github.io/WebDeviceCable/) links the latest release that is not a pre-release. Publishing, promoting, editing or deleting a release rebuilds it; the build fails, and the previous site stays up, if any of the six installers or `SHA256SUMS` is missing. To rebuild by hand, run `gh workflow run pages.yml --ref main`. `npm run preview:site` shows it locally from the saved release data in `scripts/testdata/`.
+
 ## Signing keys
 
 Publisher certificates, notary credentials, the WebDeviceCable release key and the Sparkle key are maintainer secrets. Store them outside the source repository, with restricted permissions and encrypted backups. Never pass private key material as a command-line argument, commit it, include it in an artifact or make it available to pull-request builds.

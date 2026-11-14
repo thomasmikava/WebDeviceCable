@@ -4,6 +4,7 @@
 .tools
 node_modules
 dist
+site
 *.key
 *.pem
 *.p12
