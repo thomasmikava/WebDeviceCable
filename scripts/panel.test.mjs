@@ -155,18 +155,18 @@ function historyAccessPanel(){
   dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;};dialog.removeAttribute=key=>delete dialog.attrs[key];
   heading.querySelector=()=>title;dialog.querySelector=selector=>selector==='.dialog-heading'?heading:selector==='[aria-label="Close"]'?close:null;
   p.window.removeEventListener=()=>{};p.context.dialogImpl=dialog;p.context.makeDialogImpl=()=>dialog;
-  p.run('makeDialog=makeDialogImpl;refresh=async()=>{};state.commands=[];state.programs=[];openAppPermissions({id:"pair",name:"Writer",permissionsRevision:3,requestHistory:"global"});');
+  p.run('makeDialog=makeDialogImpl;refresh=async()=>{};state.commands=[];state.programs=[];openConnectionSettings({id:"pair",name:"Writer",permissionsRevision:3,requestHistory:"global"});');
   const descendants=node=>[node,...(node.children??[]).filter(child=>child instanceof Element).flatMap(descendants)];
   const all=descendants(dialog),select=all.find(node=>node.tagName==='SELECT'),save=all.find(node=>node.attrs['data-action']==='Save changes');
   return {...p,dialog,select,save};
 }
-test('Access stages history in its existing draft and cancellation of purge confirmation preserves it',async()=>{
+test('Connection settings stage history in their own draft and cancellation of purge confirmation preserves it',async()=>{
   const p=historyAccessPanel();let writes=0;
   p.context.apiImpl=async()=>{writes++;};p.run('api=apiImpl;confirmAction=async()=>false;');
   assert.equal(p.save.disabled,true);p.select.value='discard';p.select.onchange();assert.equal(p.save.disabled,false);assert.equal(writes,0);
   await p.save.onclick();assert.equal(writes,0);assert.equal(p.select.value,'discard');assert.equal(p.dialog.open,true);
 });
-test('Access saves a confirmed history override with its revision and immutable save receipt',async()=>{
+test('Connection settings save a confirmed history override with its revision and immutable save receipt',async()=>{
   const p=historyAccessPanel(),writes=[];
   p.context.apiImpl=async(path,init)=>{const body=JSON.parse(init.body);writes.push({path,body});return {permissionSaveId:body.permissionSaveId,requestHistory:'discard'};};
   p.run('api=apiImpl;confirmAction=async()=>true;');p.select.value='discard';p.select.onchange();await p.save.onclick();

@@ -33,7 +33,7 @@ function saveInvitations(){writeLocal(panelStorage.session,`wdc-invitations:${lo
 function globalProgram(){return state?.settings?.default?.provider;}
 function reasoningLabel(value){return ({low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Maximum',none:'None'})[value]??value;}
 function programResolution(value){
-  if(value)return `Selected program: ${targetLabel({provider:value})}.`;
+  if(value)return '';
   const target=state.settings?.default;
   return target?.provider?`Global setting: ${targetLabel(target)} · ${target.model||'Program’s default model'} · ${target.reasoning?reasoningLabel(target.reasoning)+' reasoning':'Program’s default reasoning'}.`:'Choose a program in Programs and models after connecting.';
 }
@@ -387,22 +387,43 @@ function connectionRoute(pair,group=''){
   const chain=[];for(let id=group;id&&chain.length<8;id=(pair.groups??[]).find(g=>g.id===id)?.parentId){chain.unshift(id);}
   for(const id of chain)target=applyRoute(target,pair.routing?.groups?.[id]);return target;
 }
+function shortDate(value){const time=new Date(value),now=new Date();return time.toLocaleDateString([],{month:'short',day:'numeric',...(time.getFullYear()!==now.getFullYear()?{year:'numeric'}:{})});}
+function connectionSettingsCount(pair){return connectionOverrideLabels(pair).filter(name=>name!=='program and model').length;}
+function connectionSettingsSummary(pair){
+  const policy=connectionHistoryPolicy(pair),parts=[policy.mode==='discard'?'No history':policy.mode==='for'?`History ${resolvedQuantity(policy.seconds)}`:'History kept'];
+  if(pair.expiresAt)parts.push(`Expires ${shortDate(pair.expiresAt)} if unused`);
+  else if((pair.overrides?.connectionExpirySeconds??state.settings?.connectionExpirySeconds)>0)parts.push('Expiry waits for active request');
+  if(pair.overrides?.muteNotifications)parts.push('Muted');
+  return parts.join(' · ');
+}
+// Each card shows three tiles. A tile states its current value, so the card
+// can be read without opening anything, and opens the one dialog that edits it.
+function connectionTile(label,action,ariaLabel,value,detail,onclick,{attention=false,mark}={}){
+  return el('button',{type:'button',class:`connection-tile${attention?' attention':''}`,'data-action':action,'aria-label':`${ariaLabel}: ${value}${detail?`. ${detail}`:''}`,onclick},
+    el('span',{class:'tile-label'},label,icon('chevron','chevron')),
+    el('span',{class:'tile-value'},mark??null,el('span',{},value)),
+    el('span',{class:`tile-detail${attention?' attention':''}`},detail));
+}
 function appRow(pair) {
-  const overrides = Object.values(pair.routing?.groups ?? {}).filter((_,i)=>{const id=Object.keys(pair.routing.groups)[i],t=connectionRoute(pair,id);return t.provider||t.action;}),resolved=connectionRoute(pair),target=resolved.provider||resolved.action?resolved:null;
+  const overrides = Object.keys(pair.routing?.groups ?? {}).filter(id=>{const t=connectionRoute(pair,id);return t.provider||t.action;}),resolved=connectionRoute(pair),target=resolved.provider||resolved.action?resolved:null;
   const pending = state.jobs.filter(job => job.pairingId === pair.id && job.status === 'awaiting_approval').length+(state.permissions??[]).filter(request=>request.pairingId===pair.id).length;
   const working = state.jobs.some(job => job.pairingId === pair.id && ['queued','running'].includes(job.status));
   const setupNeeded=!target && !overrides.length;
-  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : setupNeeded ? 'Setup needed' : 'Connected';
+  const status = pair.paused ? 'Paused' : pending ? pending === 1 ? 'Approval needed' : `${pending} awaiting approval` : working ? 'Working' : setupNeeded ? '' : 'Connected';
   const grants = Object.keys(pair.actions ?? {}).length;
   const granted = state.commands.filter(command=>pair.actions?.[command.id]===command.hash).length;
- const folderCount=pair.folders?.length??0;
-  const choice = el('div',{class:`connection-choice${!target && !overrides.length ? ' unconfigured' : ''}`},
-    el('span',{class:'choice-label'},'Default program'),
-    el('button',{type:'button',class:`connection-program${setupNeeded?' attention':''}`,'data-action':'Programs and models','aria-label':`Programs and models for ${pair.name}`,onclick:() => openRouting(pair)},
-      el('span',{class:'choice-value'},target?.provider ? providerMark(target.provider,true) : icon(target?.action ? 'terminal' : 'bridge'),target ? targetLabel(target) : overrides.length ? 'Set by group' : 'Choose a program'),icon('chevron','chevron')));
-  if(overrides.length) choice.append(el('span',{class:'choice-note'},`${overrides.length} custom group${overrides.length===1?'':'s'}`));
-  if(target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution)) choice.append(el('span',{class:'choice-note attention'},'Unavailable for this app'));
-  if(target?.action && !state.commands.some(command=>command.id===target.action && command.hash===pair.actions?.[command.id])) choice.append(el('span',{class:'choice-note attention'},'Review command access'));
+  const folderCount=pair.folders?.length??0;
+  // Until the first program check reports this program, its availability is unknown, not unavailable.
+  const checking=!!target?.provider && programPending(target.provider);
+  const unavailable=!checking && target?.provider && !(state.providersByPairing?.[pair.id] ?? state.providers).some(provider=>provider.id===target.provider && provider.execution);
+  const commandMissing=target?.action && !state.commands.some(command=>command.id===target.action && command.hash===pair.actions?.[command.id]);
+  const programValue=target ? [targetLabel(target),target.provider&&target.reasoning?reasoningLabel(target.reasoning):''].filter(Boolean).join(' · ') : overrides.length ? 'Set per workflow' : 'Choose a program';
+  const programDetail=checking?'Checking…':unavailable?'Unavailable for this app':commandMissing?'Review command access':setupNeeded?'Needed before requests can run':overrides.length?`${overrides.length} workflow${overrides.length===1?'':'s'} customized`:pair.routing?.default?'Custom for this app':'Same as global';
+  const program=connectionTile('AI program','Programs and models',`Programs and models for ${pair.name}`,programValue,programDetail,()=>openRouting(pair),{attention:setupNeeded||unavailable||commandMissing,mark:target?.provider?providerMark(target.provider,true):target?.action?icon('terminal'):null});
+  const accessDetail=[pair.files?'Files on':'Files off',...(folderCount?[`${folderCount} folder${folderCount===1?'':'s'}`]:[]),...(granted?[`${granted} command${granted===1?'':'s'}`]:[])].join(' · ');
+  const access=connectionTile('Access','Access',`Access for ${pair.name}`,pair.automatic?'Runs automatically':'Asks each time',grants!==granted?'Review command access':accessDetail,()=>openAppPermissions(pair),{attention:grants!==granted});
+  const custom=connectionSettingsCount(pair);
+  const settings=connectionTile('Settings','Settings',`Settings for ${pair.name}`,custom?`${custom} custom setting${custom===1?'':'s'}`:'Same as global',connectionSettingsSummary(pair),()=>openConnectionSettings(pair));
   const menu = el('details',{class:'app-menu'},el('summary',{class:'icon-button','aria-label':`More options for ${pair.name}`,'data-action':'More options',title:'More options'},icon('more')));
   const menuAction = (label, fn, extra='') => button(label,async () => {menu.open=false;await fn();},extra);
   const items = el('div',{class:'action-menu'},
@@ -412,24 +433,11 @@ function appRow(pair) {
     menuAction('Disconnect',async () => {if(await confirmAction(`Disconnect ${pair.name}?`,'Its active requests will be cancelled. Connecting again requires a new invitation.','Disconnect',true))await api(`/pairings/${pair.id}`,{method:'PATCH',body:JSON.stringify({revoke:true})});},'danger'));
   menu.append(items);
   menu.addEventListener('toggle',() => {if(menu.open && menu.isConnected)for(const other of document.querySelectorAll('.app-menu[open]'))if(other!==menu)other.open=false;});
-  const permissions = el('div',{class:'connection-choice'},el('span',{class:'choice-label'},'App access'),
-    el('button',{type:'button',class:'connection-program','data-action':'Access','aria-label':`Access for ${pair.name}`,onclick:() => openAppPermissions(pair)},el('span',{class:'choice-value'},icon('shield'),'Access'),icon('chevron','chevron')),
-    el('span',{class:'choice-note'},`${pair.automatic?'Runs automatically':'Asks each time'} · ${pair.files?'Files allowed':'Files off'}`));
-  const access = el('div',{class:'connection-meta'});
-  if(hasConnectionOverrides(pair)){
-    const names=connectionOverrideLabels(pair),label=`Custom settings: ${names.join(', ')}`;
-    access.append(el('button',{type:'button',class:'text-button',title:label,'aria-label':label,onclick:()=>names.some(name=>name!=='program and model')?openAppPermissions(pair):openRouting(pair)},'Custom settings'));
-  }
-  if(pair.expiresAt)access.append(el('small',{},'Disconnects if idle until ',el('time',{datetime:pair.expiresAt},new Date(pair.expiresAt).toLocaleString())));
-  else if((pair.overrides?.connectionExpirySeconds ?? state.settings?.connectionExpirySeconds)>0)access.append(el('small',{},'Expiry waits for the active request to finish.'));
-  if (folderCount) access.append(button(`${folderCount} shared folder${folderCount===1?'':'s'}`,() => openPermissions(pair),'text-button'));
-  if (grants) access.append(button(grants!==granted ? 'Review command access' : `${granted} allowed command${granted===1?'':'s'}`,() => openAppPermissions(pair),'text-button'));
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account'},` · Account ID: ${pair.appUser}`)))),
-      el('div',{class:'connection-controls'},el(pending?'a':'span',{class:`connection-status${pending||setupNeeded?' attention':''}${working?' working':''}`,...(pending?{href:'#activity'}:{})},status),menu)),
-    el('div',{class:'connection-settings'},choice,permissions),
-    access.children.length ? access : null);
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account',title:'Account ID in this app'},` · ${pair.appUser}`)))),
+      el('div',{class:'connection-controls'},status?el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}${pair.paused?' paused':''}`,...(pending?{href:'#activity'}:{})},status):null,menu)),
+    el('div',{class:'connection-settings'},program,access,settings));
 }
 document.addEventListener('click',event => {for(const menu of document.querySelectorAll('.app-menu[open]'))if(!menu.contains(event.target))menu.open=false;});
 document.addEventListener('keydown',event => {if(event.key==='Escape' && !document.querySelector('dialog[open]'))for(const menu of document.querySelectorAll('.app-menu[open]')){menu.open=false;menu.querySelector('summary').focus();}});
@@ -865,11 +873,11 @@ $('program-access-form').onsubmit=action(async()=>{
 function targetLabel(target) { return target?.action ? state.commands.find(command => command.id === target.action)?.title ?? 'Unavailable command' : target?.provider ? state.providers.find(program=>program.id===target.provider)?.name ?? 'Unavailable AI program' : 'Use default'; }
 function routeEditor(pair, group, current) {
   const selector = el('select', {'data-field':'target','aria-label':`Program for ${group?.name ?? 'default'}`},
-    el('option',{value:''},group ? 'Same as app default' : globalProgram()?`Same as global (${targetLabel(state.settings.default)})`:'Choose a program'));
+    el('option',{value:''},group ? 'App default' : globalProgram()?`Same as global (${targetLabel(state.settings.default)})`:'Choose a program'));
   const providers = state.providersByPairing?.[pair.id] ?? state.providers;
   if (!group || group.kind === 'ai') for (const provider of providers) {
     const supported = group?.operation !== 'image' || provider.imageGeneration;
-    const option = el('option',{value:`provider:${provider.id}`},provider.name + (!supported ? ' (images unavailable)' : provider.execution ? '' : ' (unavailable)'));
+    const option = el('option',{value:`provider:${provider.id}`},provider.name + (programPending(provider.id) ? ' (checking…)' : !supported ? ' (images unavailable)' : provider.execution ? '' : ' (unavailable)'));
     option.disabled = !supported; selector.append(option);
   }
   if (group?.operation !== 'image') for (const command of state.commands) if (pair.actions?.[command.id] === command.hash) selector.append(el('option',{value:`command:${command.id}`},command.title));
@@ -881,19 +889,19 @@ function routeEditor(pair, group, current) {
   const reasoning = el('select',{'data-field':'reasoning','aria-label':`Reasoning for ${group?.name ?? 'default'}`});
   model.dataset.value = optionValue('model','modelDefault'); reasoning.dataset.value = optionValue('reasoning','reasoningDefault');
   const note = el('small',{class:'route-selection'}), availability = el('p',{class:'route-note'});
-  const routeField = (label,select) => {const id=`route-choice-${++quantityID}`;select.setAttribute('aria-describedby',id);return el('label',{},label,selectWrap(select),el('small',{id,class:'field-hint route-selected'}));};
+  const routeField = (label,select) => el('label',{},label,selectWrap(select));
   const fields = el('div',{class:'route-fields'},routeField('Program',selector),routeField('Model',model),routeField('Reasoning',reasoning));
-  const row = el('details',{class:`route-editor${group ? '' : ' default-route'}`,'data-group':group?.id ?? '',...(group && group.kind!=='ai'?{'data-command-only':'true'}:{})},
-    el('summary',{},el('span',{class:'route-label'},el('strong',{},group?.name ?? `Default for ${pair.name}`),note),icon('chevron','chevron')),
-    fields,availability);
-  if (!group) row.open = true;
-  const reset = el('button',{type:'button',class:'text-button',onclick:() => {
+  const attrs = {'data-group':group?.id ?? '',...(group && group.kind!=='ai'?{'data-command-only':'true'}:{})};
+  // The app default is always shown; only workflows collapse.
+  const row = group
+    ? el('details',{class:'route-editor',...attrs},el('summary',{},el('span',{class:'route-label'},el('strong',{},group.name),note),icon('chevron','chevron')),fields,availability)
+    : el('div',{class:'route-editor default-route',...attrs},el('div',{class:'route-head'},el('strong',{},`Default for ${pair.name}`),el('small',{class:'field-hint'},'Used for every request unless a workflow below says otherwise.'),note),fields,availability);
+  if (group) row.append(el('button',{type:'button',class:'text-button route-reset',onclick:() => {
     selector.value=''; model.dataset.value=''; reasoning.dataset.value=''; refreshRoutingLabels(pair);
-  }},'Use app default settings');
-  if (group) row.append(reset);
+  }},group.parentId ? 'Reset to workflow default' : 'Reset to app default'));
   selector.onchange = () => {
     const next=selector.value.startsWith('provider:') ? selector.value.slice(9) : row.dataset.inheritedProvider;
-    if(next!==row.dataset.provider){model.dataset.value='';reasoning.dataset.value='';notify('Program changed. Choose compatible model and reasoning settings, or keep the inherited defaults.','info');}
+    if(next!==row.dataset.provider && (model.dataset.value || reasoning.dataset.value)){model.dataset.value='';reasoning.dataset.value='';notify('Model and reasoning were reset to fit the new program.','info');}
     refreshRoutingLabels(pair);
   };
   model.onchange = () => { model.dataset.value=model.value; refreshRoutingLabels(pair); };
@@ -933,7 +941,7 @@ function refreshRoutingLabels(pair) {
   };
   const fill=(select, options, inherited, group,canInherit)=>{
     const value=select.dataset.value ?? '';
-    select.replaceChildren(el('option',{value:''},canInherit ? group ? `Same as ${group.parentId?'parent workflow':'app'} default (${inherited || "program’s default"})` : `Same as global (${inherited || 'program’s default'})` : 'Program’s default'),
+    select.replaceChildren(el('option',{value:''},canInherit ? group ? `${group.parentId?'Workflow':'App'} default (${inherited || "program’s default"})` : `Same as global (${inherited || 'program’s default'})` : 'Program’s default'),
       ...(canInherit ? [el('option',{value:'@default'},'Program’s default')] : []),
       ...options.map(([value,label])=>el('option',{value},label)));
     // An old saved setting is kept visible; we never discard it on opening.
@@ -954,8 +962,9 @@ function refreshRoutingLabels(pair) {
     model.disabled=!!target.action || !target.provider || !!group && group.kind!=='ai';
     reasoning.disabled=model.disabled || !efforts.length && !reasoning.dataset.value && !canInherit;
     const commandOnly=!!group && group.kind!=='ai';
-    model.closest('label').hidden=reasoning.closest('label').hidden=commandOnly || !!target.action;
-    if(group)row.querySelector('[data-field=target]').options[0].textContent=`Same as ${group.parentId?'parent workflow':'app'} default (${commandOnly?(inherited.action?targetLabel(inherited):'no command selected'):targetLabel(inherited)})`;
+    model.closest('label').hidden=reasoning.closest('label').hidden=commandOnly || !!target.action || !target.provider;
+    const parentName=group?.parentId?'Workflow default':'App default';
+    if(group)row.querySelector('[data-field=target]').options[0].textContent=`${parentName} (${commandOnly?(inherited.action?targetLabel(inherited):'none chosen'):inherited.provider||inherited.action?targetLabel(inherited):'none chosen'})`;
     const source=readRoute(row);
     const custom=source ? [source.provider || source.action ? 'Program' : '',source.model || source.modelDefault ? 'Model' : '',source.reasoning || source.reasoningDefault ? 'Reasoning' : ''].filter(Boolean) : [];
     const commandRequired=!!group && group.kind!=='ai' && !!target.provider;
@@ -964,35 +973,37 @@ function refreshRoutingLabels(pair) {
     const incompatible=commandRequired || group?.operation==='image' && !imageCompatible;
     const invalidEffort=!!target.reasoning && efforts.length>0 && !efforts.some(item=>item.reasoningEffort===target.reasoning);
     reasoning.setCustomValidity(invalidEffort ? 'Choose a reasoning level supported by this model, or the program’s default.' : '');
-    const pieces=commandOnly ? [target.action?targetLabel(target):'Choose an allowed command'] : target.action ? [targetLabel(target)] : [targetLabel(target),target.model || 'Program’s default model',target.reasoning ? `${target.reasoning} reasoning` : 'Program’s default reasoning'];
-    row.querySelector('.route-selection').textContent=(commandOnly || target.provider || target.action ? pieces.join(' · ') : 'Choose a default program')+(incompatible ? commandRequired ? '' : ' · Requires Codex' : id ? custom.length ? ` · ${custom.join(', ')} customized` : ' · Uses default settings' : '');
+    const modelName=models.find(item=>item.model===target.model)?.displayName || target.model;
+    const resolved=commandOnly ? (target.action?targetLabel(target):'Choose an allowed command') : target.action ? targetLabel(target) : target.provider ? [targetLabel(target),modelName || 'default model',target.reasoning ? `${reasoningLabel(target.reasoning)} reasoning` : 'default reasoning'].join(' · ') : 'No program chosen';
+    // Workflow summaries say whether they follow the default; the open editor shows the details.
+    const summary=!id ? '' : custom.length || commandOnly ? resolved : `${parentName} (${target.provider||target.action?targetLabel(target):'none chosen'})`;
+    row.querySelector('.route-selection').textContent=summary+(incompatible && !commandRequired ? ' · Requires Codex' : '');
+    row.querySelector('.route-selection').hidden=!id;
     row.querySelector('.route-selection').classList.toggle('needs-choice',incompatible || invalidEffort);
+    const reset=row.querySelector('.route-reset');if(reset)reset.hidden=!custom.length;
     for(const option of row.querySelector('[data-field=target]').options){
       if(!option.value.startsWith('provider:'))continue;
       const available=providersForPair(pair).find(item=>item.id===option.value.slice(9));
       if(!available)continue;
       const supported=group?.operation!=='image' || available.imageGeneration;
-      option.disabled=!supported;option.textContent=available.name+(!supported?' (images unavailable)':available.execution?'':' (unavailable)');
-    }
-    for(const select of row.querySelectorAll('.route-fields select')){
-      const selected=select.selectedOptions[0],hint=select.closest('label').querySelector('.route-selected');
-      hint.hidden=false;hint.textContent=selected?.textContent ?? '';
+      option.disabled=!supported;option.textContent=available.name+(programPending(available.id)?' (checking…)':!supported?' (images unavailable)':available.execution?'':' (unavailable)');
     }
     row.querySelector('.route-note').textContent=!commandOnly && target.provider && !provider ? 'This AI program was removed. Choose another program explicitly.' : commandRequired ? 'This workflow requires an allowed command. Choose one here or in its parent workflow.' : group?.operation==='image' && !imageCompatible ? 'This image stage requires Codex. Choose Codex here or in its workflow.' : group?.operation==='image' ? 'Model and reasoning configure the Codex turn. Its built-in image tool controls the image renderer.' : provider && !provider.execution ? provider.reason : target.provider && !efforts.length ? 'Reasoning options are not reported for this model; the program’s default applies.' : '';
   }
 }
+function programPending(id) { return state.nativeChecking && !state.native?.some(item=>item.id===id); }
 function providersForPair(pair) { return state.providersByPairing?.[pair.id] ?? state.providers; }
 function openRouting(pair) {
   clearErrors(); routingPairID=pair.id; routingRevision=pair.routing?.revision ?? 0; routingCatalog=JSON.stringify([state.native,providersForPair(pair),state.settings?.default]);
   $('routing-title').textContent=`Programs and models · ${pair.name}`;
-  $('routing-context').textContent=`${pair.origin} · Choose a default AI program, then customize individual workflows if needed.`;
   $('routing-default').replaceChildren(routeEditor(pair,null,pair.routing?.default));
   const append=(parent='')=>(pair.groups ?? []).filter(group=>!group.hidden && (group.parentId ?? '')===parent).map(group=>{
     const row=routeEditor(pair,group,pair.routing?.groups?.[group.id]);
     const children=append(group.id); if(children.length)row.append(el('div',{class:'workflow-stages'},...children));
     return row;
   });
-  $('routing-groups').replaceChildren(el('h3',{class:'route-heading'},'Choose by workflow'),el('p',{class:'muted'},'Use a different program or command for specific tasks in this app; other tasks use the app default.'),...append());
+  const workflows=append();
+  $('routing-groups').replaceChildren(...(workflows.length?[el('h3',{class:'route-heading'},'Workflows'),el('p',{class:'muted'},'Choose a different program for specific tasks. The rest use the default above.'),...workflows]:[]));
   refreshRoutingLabels(pair); $('routing-dialog').showModal();
 }
 $('close-routing').onclick = () => $('routing-dialog').close();
@@ -1137,7 +1148,7 @@ function quantityControl(label,value,units,min,max,onchange=()=>{}){
   const hint=el('small',{id,class:'field-hint',role:'status','aria-live':'polite'});
   const read=()=>{const n=Number(number.value)*units[unit.value],rounded=Math.round(n);return Math.abs(n-rounded)<=Number.EPSILON*Math.max(1,Math.abs(n))*8?rounded:n;};
   const valid=()=>number.value.trim()!==''&&Number.isSafeInteger(read())&&read()>=min&&read()<=max;
-  const update=(silent=false)=>{number.min=String(min/units[unit.value]);number.max=String(max/units[unit.value]);const ok=valid(),message=ok?'':number.value.trim()===''?'Enter a value.':read()<min||read()>max?`Enter ${resolvedQuantity(min,units)} to ${resolvedQuantity(max,units)}.`:`Use a value equal to whole ${units===sizeUnits?'bytes':'seconds'}.`;number.setCustomValidity(message);number.setAttribute('aria-invalid',String(!ok));hint.textContent=message||`${resolvedQuantity(read(),units)} total.`;hint.classList.toggle('invalid',!ok);if(!silent)onchange();};
+  const update=(silent=false)=>{number.min=String(min/units[unit.value]);number.max=String(max/units[unit.value]);const ok=valid(),message=ok?'':number.value.trim()===''?'Enter a value.':read()<min||read()>max?`Enter ${resolvedQuantity(min,units)} to ${resolvedQuantity(max,units)}.`:`Use a value equal to whole ${units===sizeUnits?'bytes':'seconds'}.`;number.setCustomValidity(message);number.setAttribute('aria-invalid',String(!ok));const canonical=ok?resolvedQuantity(read(),units):'';hint.textContent=message||(canonical.startsWith(`${Number(number.value)} `)?'':`${canonical} total.`);hint.hidden=!hint.textContent;hint.classList.toggle('invalid',!ok);if(!silent)onchange();};
   let previousUnit=unit.value;
   number.oninput=()=>update();unit.onchange=()=>{if(number.value.trim()!==''&&Number.isFinite(Number(number.value)))number.value=String(Number(number.value)*units[previousUnit]/units[unit.value]);previousUnit=unit.value;update();};
   const node=el('div',{class:'quantity-control'},el('div',{class:'quantity-fields'},number,selectWrap(unit)),hint);
@@ -1148,23 +1159,22 @@ function connectionHistoryPolicy(pair,value=pair.requestHistory||'global',second
 function effectiveRequestHistory(pair,value=pair.requestHistory||'global'){return connectionHistoryPolicy(pair,value).mode!=='discard';}
 function policyLabel(policy){return policy.mode==='discard'?'Don’t keep':policy.mode==='for'?`Keep for ${resolvedQuantity(policy.seconds)}`:'Keep until I clear it';}
 function globalHistoryLabel(){return `Same as global (${policyLabel(globalHistoryPolicy())})`;}
-function globalHistoryResolution(){return `Global setting: ${policyLabel(globalHistoryPolicy())}.`;}
 function renderHistorySettings(){
   const custom=state.pairings.filter(pair=>!pair.revoked&&pair.requestHistory&&pair.requestHistory!=='global');
   const off=custom.some(pair=>!effectiveRequestHistory(pair));
   const policy=globalHistoryPolicy(),note=$('history-note');note.hidden=policy.mode==='keep'&&!custom.length;
-  note.textContent=(policy.mode==='discard'?'Request history is off globally.':`Default request history: ${policyLabel(policy)}.`)+(custom.length?` History ${off?'is off for some connections; other custom settings may also apply':'has custom settings for some connections'}.`:'')+' Finished requests follow each connection’s policy. Change defaults in Settings or a connection’s policy in Access.';
-  for(const select of document.querySelectorAll('[data-request-history]'))if(select.options[0].value==='global'){select.options[0].textContent=globalHistoryLabel();if(select.value==='global'){const hint=select.closest('.owner-field')?.querySelector('[data-history-resolution]');if(hint)hint.textContent=globalHistoryResolution();}}
-  const o=settingsValue();for(const select of document.querySelectorAll('[data-override-key]')){const key=select.dataset.overrideKey,n=key==='outputBytes'?o.outputBytes||state.effectiveOutputBytes||1048576:o[key];const text=key==='connectionExpirySeconds'&&n===0?'Never':resolvedQuantity(n,key==='outputBytes'?sizeUnits:durationUnits);select.options[0].textContent=`Same as global (${text})`;if(select.value==='global'){const hint=select.closest('.owner-field')?.querySelector('[data-override-resolution]');if(hint)hint.textContent=`Global setting: ${text}.`;}}
+  note.textContent=(policy.mode==='discard'?'Request history is off globally.':`Default request history: ${policyLabel(policy)}.`)+(custom.length?` History ${off?'is off for some connections; other custom settings may also apply':'has custom settings for some connections'}.`:'')+' Finished requests follow each connection’s policy. Change defaults in Settings, or one connection’s policy with Settings on its card.';
+  for(const select of document.querySelectorAll('[data-request-history]'))if(select.options[0].value==='global')select.options[0].textContent=globalHistoryLabel();
+  const o=settingsValue();for(const select of document.querySelectorAll('[data-override-key]')){const key=select.dataset.overrideKey,n=key==='outputBytes'?o.outputBytes||state.effectiveOutputBytes||1048576:o[key];const text=key==='connectionExpirySeconds'&&n===0?'Never':resolvedQuantity(n,key==='outputBytes'?sizeUnits:durationUnits);select.options[0].textContent=`Same as global (${text})`;}
 }
 function historyControl(pair,onchange=()=>{},global=false){
   const select=el('select',{'aria-label':'Request history','data-request-history':'','data-permission-edit':''},...(global?[]:[el('option',{value:'global'},globalHistoryLabel())]),el('option',{value:'keep'},'Keep until I clear it'),el('option',{value:'for'},'Keep for'),el('option',{value:'discard'},'Don’t keep'));
   select.value=global?globalHistoryPolicy().mode:pair.requestHistory||'global';
-  let quantity;const resolution=el('small',{id:`history-resolution-${++quantityID}`,class:'field-hint','data-history-resolution':'',role:'status'});select.setAttribute('aria-describedby',resolution.id);const resolve=()=>{resolution.textContent=select.value==='global'?globalHistoryResolution():select.value==='discard'?'Finished requests, output and files are removed after results are delivered.':select.value==='for'?'Finished requests, output and files are removed after this period.':'Finished requests, output and files stay until you clear them.';};const changed=()=>{if(quantity){quantity.node.hidden=select.value!=='for';quantity.number.disabled=quantity.unit.disabled=select.value!=='for';}resolve();onchange();};
+  let quantity;const resolution=el('small',{id:`history-resolution-${++quantityID}`,class:'field-hint','data-history-resolution':'',role:'status'});select.setAttribute('aria-describedby',resolution.id);const resolve=()=>{resolution.hidden=select.value==='global';resolution.textContent=select.value==='global'?'':select.value==='discard'?'Finished requests, output and files are removed after results are delivered.':select.value==='for'?'Finished requests, output and files are removed after this period.':'Finished requests, output and files stay until you clear them.';};const changed=()=>{if(quantity){quantity.node.hidden=select.value!=='for';quantity.number.disabled=quantity.unit.disabled=select.value!=='for';}resolve();onchange();};
   quantity=quantityControl('History duration',global?globalHistoryPolicy().seconds||86400:pair.historySeconds||86400,durationUnits,1,31536000,changed);
   const node=el('div',{class:'owner-field'},el('label',{},'Request history',selectWrap(select)),quantity.node,resolution);
   select.onchange=changed;quantity.node.hidden=select.value!=='for';quantity.number.disabled=quantity.unit.disabled=select.value!=='for';resolve();
-  return {node,select,quantity,read:()=>({mode:select.value,...(select.value==='for'?{seconds:quantity.read()}:{})}),valid:()=>select.value!=='for'||quantity.valid()};
+  return {node,select,quantity,read:()=>({mode:select.value,...(select.value==='for'?{seconds:quantity.read()}:{})}),valid:()=>select.value!=='for'||quantity.valid(),reset:()=>{if(global)return;select.value='global';changed();}};
 }
 function requestHistoryChoice(pair){return historyControl(pair).select;}
 function retentionReduced(before,after){return before.mode!=='discard'&&(after.mode==='discard'||after.mode==='for'&&(before.mode==='keep'||before.seconds>after.seconds));}
@@ -1179,11 +1189,10 @@ function overrideControl(label,key,pair,globalValue,units,min,max,onchange){
   const value=pair.overrides?.[key],expiry=key==='connectionExpirySeconds';
   const select=el('select',{'aria-label':label,'data-override-key':key,'data-permission-edit':''},el('option',{value:'global'},`Same as global (${expiry&&globalValue===0?'Never':resolvedQuantity(globalValue,units)})`),...(expiry?[el('option',{value:'never'},'Never')]:[]),el('option',{value:'custom'},expiry?'After no requests for':'Set a limit'));
   select.value=value==null?'global':expiry&&value===0?'never':'custom';
-  const resolution=el('small',{id:`override-resolution-${++quantityID}`,class:'field-hint',role:'status','data-override-resolution':key});select.setAttribute('aria-describedby',resolution.id);
-  let q;const resolve=()=>{resolution.hidden=select.value!=='global';resolution.textContent=`Global setting: ${expiry&&globalValue===0?'Never':resolvedQuantity(globalValue,units)}.`;};const change=()=>{if(q)q.node.hidden=select.value!=='custom';resolve();onchange();};
+  let q;const change=()=>{if(q)q.node.hidden=select.value!=='custom';onchange();};
   q=quantityControl(label,value||globalValue||min,units,min,max,change);
-  select.onchange=change;q.node.hidden=select.value!=='custom';resolve();
-  return {node:el('div',{class:'owner-field'},el('label',{},label,selectWrap(select)),q.node,resolution),read:()=>select.value==='global'?undefined:select.value==='never'?0:q.read(),valid:()=>select.value!=='custom'||q.valid(),select,q};
+  select.onchange=change;q.node.hidden=select.value!=='custom';
+  return {node:el('div',{class:'owner-field'},el('label',{},label,selectWrap(select)),q.node),read:()=>select.value==='global'?undefined:select.value==='never'?0:q.read(),valid:()=>select.value!=='custom'||q.valid(),reset:()=>{select.value='global';q.node.hidden=true;},select,q};
 }
 function connectionOverrideControls(pair,onchange){
   const o=settingsValue();
@@ -1195,7 +1204,8 @@ function connectionOverrideControls(pair,onchange){
   expiry.node.append(el('small',{class:'field-hint'},'Disconnect after this long without requests. Applies to existing connections too; expired apps must connect again. Active requests finish first.'));
   const id=`mute-help-${++quantityID}`,mute=el('button',{type:'button',class:'toggle',role:'switch','aria-label':'Mute notifications','aria-checked':String(!!pair.overrides?.muteNotifications),'aria-describedby':id,'data-permission-edit':''},el('span'));
   let muted=!!pair.overrides?.muteNotifications;mute.onclick=()=>{muted=!muted;mute.setAttribute('aria-checked',String(muted));onchange();};
-  return {node:el('div',{class:'owner-fields'},max.node,output.node,expiry.node,el('div',{class:'setting-row'},el('div',{},el('strong',{},'Mute notifications'),el('small',{},'Stop desktop alerts and sound for this connection.'),el('small',{id,'data-notification-resolution':''},notificationResolution())),mute)),read:()=>Object.fromEntries(Object.entries({maximumRequestSeconds:max.read(),outputBytes:output.read(),connectionExpirySeconds:expiry.read(),muteNotifications:muted?true:undefined}).filter(([,v])=>v!==undefined)),valid:()=>max.valid()&&output.valid()&&expiry.valid()};
+  const reset=()=>{for(const control of [max,output,expiry])control.reset();muted=false;mute.setAttribute('aria-checked','false');onchange();};
+  return {reset,max,output,expiry,mute,node:el('div',{class:'owner-fields'},max.node,output.node,expiry.node,el('div',{class:'setting-row'},el('div',{},el('strong',{},'Mute notifications'),el('small',{},'Stop desktop alerts and sound for this connection.'),el('small',{id,'data-notification-resolution':''},notificationResolution())),mute)),read:()=>Object.fromEntries(Object.entries({maximumRequestSeconds:max.read(),outputBytes:output.read(),connectionExpirySeconds:expiry.read(),muteNotifications:muted?true:undefined}).filter(([,v])=>v!==undefined)),valid:()=>max.valid()&&output.valid()&&expiry.valid()};
 }
 function renderOwnerSettings(){
   const catalog=JSON.stringify([state.providers,state.native,state.effectiveOutputBytes]);
@@ -1228,11 +1238,15 @@ function renderOwnerSettings(){
 }
 function renderLoginSetting(){const login=state.login;$('login-setting').hidden=!login;$('start-at-login').disabled=!login?.supported;$('start-at-login').setAttribute('aria-checked',String(!!login?.enabled));$('login-help').textContent=login?.supported?'Open the desktop app in the background when you sign in. Changes apply immediately.':login?.reason||'Start at login is unavailable in this installation.';}
 
+function openConnectionSettings(pair){openAppPermissions(pair,'settings');}
+// Access (what the app may do) and Settings (limits and history for this
+// connection) are separate dialogs that share one revisioned save.
 function openAppPermissions(pair,initialView='overview') {
   clearErrors();
-  const dialog=makeDialog('permissions-dialog',`Access · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
-  dialog.dataset.key=pair.id;
-  dialog.querySelector('[aria-label="Close"]').dataset.returnAction='Access';
+  const settingsMode=initialView==='settings',title=settingsMode?'Settings':'Access',noun=settingsMode?'settings':'permissions';
+  const dialog=makeDialog('permissions-dialog',`${title} · ${pair.name}`),automatic=el('input',{type:'checkbox'}),files=el('input',{type:'checkbox'});
+  dialog.dataset.key=pair.id;dialog.dataset.mode=settingsMode?'settings':'access';
+  dialog.querySelector('[aria-label="Close"]').dataset.returnAction=title;
   let changed=()=>{};
   const history=historyControl(pair,()=>{submission=undefined;changed();}),requestHistory=history.select,originalHistory=pair.requestHistory||'global',originalHistorySeconds=pair.historySeconds||0;
   const overrides=connectionOverrideControls(pair,()=>{submission=undefined;changed();}),originalOverrides=JSON.stringify(pair.overrides??{});
@@ -1259,10 +1273,10 @@ function openAppPermissions(pair,initialView='overview') {
     }
     if(!dirty()){closeDraft();return;}
     confirming=saveState==='unknown'
-      ?confirmAction('Close without confirming?','These changes may already be saved. Closing won’t undo permissions that were applied.','Close anyway',false,'Keep draft')
+      ?confirmAction('Close without confirming?',`These changes may already be saved. Closing won’t undo ${noun} that were applied.`,'Close anyway',false,'Keep draft')
       :saveState==='conflict'
-        ?confirmAction('Close this draft?','Closing this draft won’t change the permissions currently saved in WDC.','Close draft',false,'Keep draft')
-        :confirmAction('Discard unsaved changes?','Your access, override and folder changes haven’t been saved.','Discard changes',true,'Keep editing');
+        ?confirmAction('Close this draft?',`Closing this draft won’t change the ${noun} currently saved in WDC.`,'Close draft',false,'Keep draft')
+        :confirmAction('Discard unsaved changes?',settingsMode?'Your changes to this connection’s settings haven’t been saved.':'Your access and folder changes haven’t been saved.','Discard changes',true,'Keep editing');
     try {
       if(await confirming&&dialog.open)closeDraft();
     } finally {confirming=false;}
@@ -1296,9 +1310,9 @@ function openAppPermissions(pair,initialView='overview') {
       wanted.every((folder,index)=>actual[index].path===folder.path&&(!folder.id||actual[index].id===folder.id)&&!!actual[index].write===!!folder.write&&!!actual[index].automatic===!!folder.automatic);
   };
   const saved=async()=>{
-    closeDraft();notify('Access saved.','success');
-    try{await refresh(true);}catch{notify('Access saved. Refresh WDC to update the connection card.','info');}
-    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,'Access')?.focus({preventScroll:true});
+    closeDraft();notify(`${title} saved.`,'success');
+    try{await refresh(true);}catch{notify(`${title} saved. Refresh WDC to update the connection card.`,'info');}
+    if(!document.querySelector('dialog[open]'))keyedControl(pair.id,title)?.focus({preventScroll:true});
   };
   const reconcile=async()=>{
     try {
@@ -1347,26 +1361,28 @@ function openAppPermissions(pair,initialView='overview') {
     },save);
   };
   const recoveryText=el('p');
-  const check=el('button',{type:'button',class:'button secondary'},'Check saved permissions');
+  const check=el('button',{type:'button',class:'button secondary'},`Check saved ${noun}`);
   check.onclick=()=>void perform(reconcile,check);
-  const reload=el('button',{type:'button',class:'button secondary'},'Reload saved permissions');
+  const reload=el('button',{type:'button',class:'button secondary'},`Reload saved ${noun}`);
   reload.onclick=()=>void perform(async()=>{
-    if(!await confirmAction('Reload saved permissions?','This will replace your draft with the currently saved settings.','Reload permissions',false,'Keep draft'))return;
+    if(!await confirmAction(`Reload saved ${noun}?`,'This will replace your draft with the currently saved settings.',`Reload ${noun}`,false,'Keep draft'))return;
     const current=await readSaved();if(!dialog.open)return;
-    closeDraft();openAppPermissions(current);
+    closeDraft();openAppPermissions(current,settingsMode?'settings':'overview');
   },reload);
   const recovery=el('div',{class:'permission-recovery',role:'alert',hidden:''},recoveryText,el('div',{class:'actions'},check,reload));
-  save.dataset.returnAction='Access';
-  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction='Access';
+  save.dataset.returnAction=title;
+  const cancel=button('Cancel',()=>dialog.requestDismiss());cancel.dataset.returnAction=title;
   const footer=el('div',{class:'permission-footer'},recovery,el('div',{class:'dialog-actions'},unsaved,cancel,save));
   changed=()=>{
     save.disabled=saving||!history.valid()||!overrides.valid()||!dirty()||saveState==='conflict';unsaved.hidden=!dirty();warning.hidden=!originalFiles||files.checked;
     const label=saveState==='unknown'?'Retry save':'Save changes';save.textContent=label;save.setAttribute('aria-label',label);
     unsaved.textContent=saveState==='unknown'?'Save not confirmed':saveState==='conflict'?'Saved settings changed':'Unsaved changes';
     recovery.hidden=saveState==='draft';check.hidden=saveState!=='unknown';reload.hidden=saveState!=='conflict';
-    recoveryText.textContent=saveState==='unknown'?'Couldn’t confirm whether your changes were saved. Your edits are kept; check the saved permissions or retry this save.':'Permissions changed while this draft was open. Reload the saved settings before making changes.';
+    recoveryText.textContent=saveState==='unknown'?`Couldn’t confirm whether your changes were saved. Your edits are kept; check the saved ${noun} or retry this save.`:'This connection changed while this draft was open. Reload the saved settings before making changes.';
+    useGlobal.hidden=requestHistory.value==='global'&&!Object.keys(overrides.read()).length;
+    for(const row of dialog.querySelectorAll('.connection-setting'))row.refresh?.();
     for(const input of dialog.querySelectorAll('[data-permission-edit]'))input.disabled=saving||saveState!=='draft'||input.dataset.permissionEdit==='add-folder'&&folders.length>=16;
-    folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'} selected`:'Choose folders this app can read or edit.';
+    folderSummary.textContent=folders.length?`${folders.length} folder${folders.length===1?'':'s'}`:'None';
   };
   automatic.dataset.permissionEdit=files.dataset.permissionEdit='';
 
@@ -1374,17 +1390,40 @@ function openAppPermissions(pair,initialView='overview') {
   automatic.onchange=async()=>{if(automatic.checked){automatic.checked=false;automatic.checked=await confirmAutomatic(pair);}changed();};
   const clearView=()=>{clearErrors();for(const panel of dialog.querySelectorAll(':scope > .dialog-body, :scope > .dialog-actions, :scope > .permission-footer'))panel.remove();};
   const showOverview=()=>{
-    clearView();setView('Access','overview');dialog.append(overview,footer);changed();folderAccess.focus({preventScroll:true});
+    clearView();setView(title,'overview');dialog.append(overview,footer);changed();(settingsMode?requestHistory:folderAccess).focus({preventScroll:true});
   };
   const showFolders=()=>{
     renderFolderAccess(dialog,pair,folders,footer,changed,showOverview,clearView,folderNavigation);
     back.focus({preventScroll:true});
   };
-  const folderAccess=el('button',{type:'button',class:'connection-program permission-folder-access','aria-label':'Folder access',onclick:showFolders},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},icon('folder'),'Folder access'),folderSummary),icon('chevron','chevron'));
-  const overview=el('div',{class:'dialog-body app-permissions-body'},
-    el('label',{class:'check-line permission-option'},automatic,el('span',{},'Run requests automatically',el('small',{},'Run this app’s requests within its allowed access without asking each time.'))),
-    el('label',{class:'check-line permission-option'},files,el('span',{},'Send and receive files',el('small',{},'Share images and documents with the AI, and receive files it creates. This does not grant access to folders on your computer.'))),warning,
-    el('details',{class:'permission-option advanced connection-overrides',...(Object.keys(pair.overrides??{}).length||originalHistory!=='global'?{open:''}:{})},disclosure('Overrides'),el('p',{class:'field-hint'},'Use global defaults or customize this connection. Changes apply when you save.'),el('div',{class:'owner-fields'},history.node,overrides.node)),folderAccess);
+  // Access rows: switches for on/off choices, chevron rows for editors, each
+  // showing its current value on the right.
+  const navRow=(title,description,value,onclick,attrs={})=>el('button',{type:'button',class:'access-nav',onclick,...attrs},el('span',{class:'access-text'},el('strong',{},title),el('small',{},description)),value,icon('chevron','chevron'));
+  folderSummary.className='access-value';
+  const folderAccess=navRow('Folder access','Folders on this computer the app can read or edit.',folderSummary,showFolders,{'aria-label':'Folder access'});
+  const switchRow=(input,title,description)=>{input.classList.add('switch');input.setAttribute('role','switch');return el('label',{class:'access-switch'},el('span',{class:'access-text'},el('strong',{},title),el('small',{},description)),input);};
+  const useGlobal=el('button',{type:'button',class:'button secondary compact','data-permission-edit':'',onclick:()=>{history.reset();overrides.reset();}},'Reset all to global');
+  // One row per setting: what it is on the left, its control on the right,
+  // and a Custom tag whenever the value differs from the global default.
+  const settingRow=(title,help,controls,isCustom,extra='')=>{
+    const tag=el('span',{class:'custom-tag',hidden:''},'Custom');
+    const row=el('div',{class:`connection-setting${extra}`},el('div',{class:'connection-setting-text'},el('strong',{},title,tag),...[help].flat().filter(Boolean).map(text=>text instanceof Node?text:el('small',{},text))),el('div',{class:'connection-setting-control'},...controls));
+    row.refresh=()=>{tag.hidden=!isCustom();};return row;
+  };
+  const notifyNote=notificationResolution(),muteNote=notifyNote.startsWith('Browser notifications are on')?null:el('small',{'data-notification-resolution':''},notifyNote);
+  const settingsList=settingsMode?el('div',{class:'connection-settings-list'},
+    settingRow('Request history','How long finished requests, output and files are kept.',[requestHistory.parentElement,history.quantity.node],()=>requestHistory.value!=='global'),
+    settingRow('Maximum request time','Run time allowed for one request, not counting approval.',[overrides.max.select.parentElement,overrides.max.q.node],()=>overrides.max.select.value!=='global'),
+    settingRow('Output size limit','Most output saved for one request.',[overrides.output.select.parentElement,overrides.output.q.node],()=>overrides.output.select.value!=='global'),
+    settingRow('Connection expiry','Disconnect after this long without requests. The app must connect again.',[overrides.expiry.select.parentElement,overrides.expiry.q.node],()=>overrides.expiry.select.value!=='global'),
+    settingRow('Mute notifications',['No desktop alerts or sound for this connection.',muteNote],[overrides.mute],()=>overrides.mute.getAttribute('aria-checked')==='true',' toggle-row')):null;
+  const overview=settingsMode
+    ?el('div',{class:'dialog-body app-permissions-body connection-settings-body'},
+      el('div',{class:'settings-intro'},el('p',{},`Changes here apply only to ${pair.name}. Everything else follows your global Settings.`),useGlobal),
+      settingsList)
+    :el('div',{class:'dialog-body app-permissions-body'},el('div',{class:'access-list'},
+      switchRow(automatic,'Run requests automatically','Skip asking each time. Requests still stay within this app’s access.'),
+      switchRow(files,'Send and receive files','Share images and documents with the AI and get back files it creates. No folder access.'),warning,folderAccess));
   const openAccessEditor=(editor,id)=>{
     suspended=true;dialog.close();
     const child=$(id),returnButton=el('button',{type:'button',class:'icon-button permission-back','aria-label':'Back to Access',onclick:()=>child.close()},icon('arrow-left'));
@@ -1402,9 +1441,11 @@ function openAppPermissions(pair,initialView='overview') {
     },{once:true});
     editor(pair);
   };
-  const accessRow=(title,description,editor,id)=>el('button',{type:'button',class:'connection-program permission-folder-access','data-permission-edit':'','aria-label':title,onclick:()=>openAccessEditor(editor,id)},el('span',{class:'permission-folder-label'},el('span',{class:'choice-value'},title),el('small',{},description)),icon('chevron','chevron'));
-  if(state.commands.length || Object.keys(pair.actions??{}).length)overview.append(accessRow('Command access','Choose the commands this app may run.',openCommandAccess,'command-access-dialog'));
-  if(state.programs?.some(program=>program.type==='custom') || Object.keys(pair.programGrants??{}).length)overview.append(accessRow('Custom AI program access','Choose custom programs that may run with your account permissions.',openProgramAccess,'program-access-dialog'));
+  const allowedLabel=n=>n?`${n} allowed`:'None';
+  const accessRow=(title,description,value,editor,id)=>navRow(title,description,el('span',{class:'access-value'},value),()=>openAccessEditor(editor,id),{'data-permission-edit':'','aria-label':title});
+  const accessList=overview.querySelector('.access-list');
+  if(!settingsMode && (state.commands.length || Object.keys(pair.actions??{}).length))accessList.append(accessRow('Command access','Commands on this computer the app may run.',allowedLabel(state.commands.filter(command=>pair.actions?.[command.id]===command.hash).length),openCommandAccess,'command-access-dialog'));
+  if(!settingsMode && (state.programs?.some(program=>program.type==='custom') || Object.keys(pair.programGrants??{}).length))accessList.append(accessRow('Custom AI program access','Custom programs that may run with your account permissions.',allowedLabel(Object.keys(pair.programGrants??{}).length),openProgramAccess,'program-access-dialog'));
   if(initialView==='folders')showFolders();else showOverview();
   dialog.showModal();
 }
@@ -1583,9 +1624,9 @@ function makeDialog(id,title){
 function openConnectionDetails(pair) {
   clearErrors();
   const dialog = makeDialog('connection-details-dialog',`Connection details · ${pair.name}`);
-  dialog.append(el('div',{class:'dialog-body'},el('p',{class:'dialog-context'},pair.origin),
+  dialog.append(el('div',{class:'dialog-body'},
     el('div',{class:'job-details'},el('dl',{},...[
-      ['App ID',pair.appId],['Account ID',pair.appUser],['Connected',new Date(pair.createdAt).toLocaleString()]
+      ['Website',pair.origin],['App ID',pair.appId],['Account ID',pair.appUser],['Connected',new Date(pair.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})]
     ].flatMap(([label,value])=>[el('dt',{},label),el('dd',{},value)])))),
     el('div',{class:'dialog-actions'},button('Done',()=>dialog.close(),'primary')));
   dialog.showModal();

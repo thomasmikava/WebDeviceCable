@@ -83,9 +83,12 @@
 <dialog id="connect-dialog" aria-labelledby="connect-title">
   <div class="dialog-heading"><h2 id="connect-title">Add connection</h2><button id="close-connect" class="icon-button" aria-label="Close"><span data-icon="close"></span></button></div>
   <div id="connect-start"><div class="dialog-body pairing-start">
-    <section class="connection-method"><h3>Start in your app</h3><p>In your app, choose <strong>Connect to WebDeviceCable</strong>, then approve its request here.</p><p class="waiting-indicator" role="status"><span></span>Waiting for an app…</p></section>
-    <section class="connection-method"><h3>Use an invitation</h3><p>If your app asks for an invitation, create one for its exact website and account ID.</p><button id="show-invitation-form" class="button secondary" type="button">Create invitation</button></section>
-    <section class="connection-method"><h3>Connect a server</h3><p>Connect an app’s server using its relay URL and single-use pairing code. It can send requests while its website is closed.</p><button id="connect-server" class="button secondary" type="button">Connect a server</button></section>
+    <section class="connect-waiting"><span class="connect-waiting-icon"><span data-icon="app"></span></span><div><h3>Start in your app</h3><p>In your app, choose <strong>Connect to WebDeviceCable</strong>. Its request appears here for you to approve.</p><p class="waiting-indicator" role="status"><span></span>Waiting for an app…</p></div></section>
+    <p class="connect-or">Or connect another way</p>
+    <div class="connect-options">
+      <button id="show-invitation-form" class="connect-option" type="button"><span class="connect-option-icon"><span data-icon="document"></span></span><span class="connect-option-text"><strong>Create an invitation</strong><small>If your app asks for one. It works only for that app’s website and account ID.</small></span><span data-icon="chevron" class="chevron"></span></button>
+      <button id="connect-server" class="connect-option" type="button"><span class="connect-option-icon"><span data-icon="bridge"></span></span><span class="connect-option-text"><strong>Connect a server</strong><small>Use the app’s relay URL and pairing code. Requests can run while its website is closed.</small></span><span data-icon="chevron" class="chevron"></span></button>
+    </div>
   </div><div class="dialog-actions"><button id="done-connect-start" class="button secondary" type="button">Close</button></div></div>
   <form id="invite-form" hidden>
     <div class="dialog-body">
@@ -132,7 +135,7 @@
 </dialog>
 <dialog id="routing-dialog" aria-labelledby="routing-title">
   <div class="dialog-heading"><h2 id="routing-title">Programs and models</h2><button id="close-routing" class="icon-button" aria-label="Close Programs and models"><span data-icon="close"></span></button></div>
-  <form id="routing-form"><div class="dialog-body"><p id="routing-context" class="dialog-context"></p><div id="routing-default"></div><div id="routing-groups"></div></div><div class="dialog-actions"><button id="routing-access" class="text-button dialog-auxiliary" type="button">Access</button><div class="dialog-decisions"><button class="button secondary" type="button" data-cancel-dialog="close-routing">Cancel</button><button class="button primary" type="submit">Save changes</button></div></div></form>
+  <form id="routing-form"><div class="dialog-body"><div id="routing-default"></div><div id="routing-groups"></div></div><div class="dialog-actions"><button id="routing-access" class="text-button dialog-auxiliary" type="button">Access</button><div class="dialog-decisions"><button class="button secondary" type="button" data-cancel-dialog="close-routing">Cancel</button><button class="button primary" type="submit">Save changes</button></div></div></form>
 </dialog>
 <dialog id="ai-program-dialog" aria-labelledby="ai-program-title">
   <div class="dialog-heading"><h2 id="ai-program-title">Add AI program</h2><button id="close-ai-program" class="icon-button" aria-label="Close AI program editor"><span data-icon="close"></span></button></div>

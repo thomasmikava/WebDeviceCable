@@ -70,7 +70,7 @@ Custom harnesses use explicit per-connection, configuration-bound grants with th
 
 ## Owner settings boundaries
 
-Owner settings and connection overrides require the existing local session, CSRF and exact Origin. Access overrides participate in permission revisions and payload-bound save receipts. Settings have a separate revision to reject stale saves. Global routing supplies only a target; it never bypasses custom-program grants, command consent, account pins, exact origins or isolation. Sessions retain their immutable execution plan.
+Owner settings and connection overrides require the existing local session, CSRF and exact Origin. Per-connection settings participate in permission revisions and payload-bound save receipts. Settings have a separate revision to reject stale saves. Global routing supplies only a target; it never bypasses custom-program grants, command consent, account pins, exact origins or isolation. Sessions retain their immutable execution plan.
 
 Execution time is 1–3600 seconds, initially capped at 600 globally. Omission uses the effective owner maximum and requests above it are capped; command configuration supplies an additional limit. Approval/queue waiting is independently bounded to 10 minutes. Renewable leases still cancel disconnected tabs, short polling/HTTP deadlines remain bounded, and secure channels renew without changing signed/encrypted formats. Output overrides are bounded to 4096–2097152 bytes. Idle connection expiry (never or 1 hour–365 days) revokes the pairing like Disconnect, preserving replay receipts and history policy. In-progress work postpones idle expiry; completion begins a fresh idle interval.
 
