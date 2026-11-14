@@ -3,6 +3,7 @@ package desktop
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,8 @@ func TestLoginPlatformsAndInstalledPaths(t *testing.T) {
 	exe := filepath.Join(home, "bin", "WebDeviceCable")
 	entry := filepath.Join(home, "share", "applications", "webdevicecable.desktop")
 	os.MkdirAll(filepath.Dir(entry), 0700)
-	os.WriteFile(entry, []byte("Exec=\""+exe+"\" desktop %u\n"), 0600)
+	// Desktop entries escape backslashes, which Windows temp paths contain.
+	os.WriteFile(entry, []byte("Exec=\""+strings.ReplaceAll(exe, `\`, `\\`)+"\" desktop %u\n"), 0600)
 	item, why := installedLoginItem("linux", exe, home, "", "", filepath.Join(home, "config"))
 	if item == nil || why != "" {
 		t.Fatal(why)
