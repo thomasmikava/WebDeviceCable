@@ -243,7 +243,7 @@ func (s *Server) Handler() http.Handler {
 		if s.project(w, r) == nil {
 			return
 		}
-		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "filePermissionsVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
+		jsonOut(w, 200, map[string]any{"connectionReviewVersion": 1, "filePermissionsVersion": 1, "userLabelVersion": 1, "scopedToolsVersion": 1, "toolInputSchemaVersion": 1, "toolOperationDetailsVersion": 1, "limits": wirelimits.Capabilities()})
 	})
 	m.HandleFunc("POST /relay/v1/enrollments", s.enroll)
 	m.HandleFunc("POST /connector/v1/inspect", s.inspect)
@@ -283,7 +283,11 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := in.Options.Validate(p.Origin); err != nil {
-		problem(w, 400, "invalid_logo")
+		if errors.Is(err, onboarding.ErrUserLabel) {
+			problem(w, 400, "invalid_user_label")
+		} else {
+			problem(w, 400, "invalid_logo")
+		}
 		return
 	}
 	s.mu.Lock()
@@ -322,7 +326,7 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := s.projects[t.ProjectID]
-	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID, "logoURL": t.LogoURL, "requestedPermissions": t.RequestedPermissions})
+	jsonOut(w, 200, map[string]any{"appId": p.AppID, "name": p.Name, "origin": p.Origin, "appUser": t.AppUser, "connectionId": t.ConnectionID, "logoURL": t.LogoURL, "requestedPermissions": t.RequestedPermissions, "userLabel": t.UserLabel})
 }
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Code, Invitation, Token string }

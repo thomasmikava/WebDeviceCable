@@ -97,7 +97,7 @@ function renderInvitations(){
   invitationCopies=invitationCopies.filter(copy=>pendingInvitations.some(entry=>entry.pairingId===copy.pairingId));saveInvitations();
   $('pending-invitations').hidden=!pendingInvitations.length;
   preserveList($('invitation-list'),pendingInvitations.map(entry=>el('article',{class:'pending-invitation','data-key':entry.pairingId},
-    el('div',{class:'app-title'},el('h3',{},entry.name),el('small',{},entry.origin),el('small',{},`Account ID: ${entry.appUser}`),el('small',{'data-expires':entry.expiresAt},countdown(entry.expiresAt)),entry.invitation?null:el('small',{},'Copy is available only in the tab that created this invitation.')),
+    el('div',{class:'app-title'},el('h3',{},entry.name),el('small',{},siteName(entry.origin)),el('small',{'data-expires':entry.expiresAt},countdown(entry.expiresAt)),entry.invitation?null:el('small',{},'Copy is available only in the tab that created this invitation.')),
     el('div',{class:'actions'},entry.invitation?button('Copy again',async()=>{
       try{await navigator.clipboard.writeText(entry.invitation);notify('Invitation copied.','success');}catch{showInvitation(entry);$('copy-invite').click();}
     }):null,button('Cancel',()=>cancelInvitation(entry),'danger')))));
@@ -435,7 +435,7 @@ function appRow(pair) {
   menu.addEventListener('toggle',() => {if(menu.open && menu.isConnected)for(const other of document.querySelectorAll('.app-menu[open]'))if(other!==menu)other.open=false;});
   return el('article',{class:`app-connection${pair.paused?' paused':''}`,'data-key':pair.id,tabindex:'-1'},
     el('div',{class:'connection-header'},
-      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),el('small',{},pair.origin,el('span',{class:'connection-account',title:'Account ID in this app'},` · ${pair.appUser}`)))),
+      el('div',{class:'connection-identity'},appMark(pair.logoId),el('div',{class:'app-title'},el('h3',{},pair.name),identityLine(pair))),
       el('div',{class:'connection-controls'},status?el(pending?'a':'span',{class:`connection-status${pending?' attention':''}${working?' working':''}${pair.paused?' paused':''}`,...(pending?{href:'#activity'}:{})},status):null,menu)),
     el('div',{class:'connection-settings'},program,access,settings));
 }
@@ -596,8 +596,8 @@ let reviewedRelay, configuringRelay, processingLaunch=false, relayReviewGenerati
 function relayInput() { const data=new FormData($('relay-form'));return {url:String(data.get('url')).replace(/\/$/,''),code:String(data.get('code')).trim()}; }
 function showRelayReview(info) {
   reviewedRelay=info;
-  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),el('small',{},info.origin))),el('span',{},`Account ID: ${info.appUser}`),connectionReview(info,`relay:${info.connectionId}`),
-    el('small',{},'This server can request work while the website is closed. Your local approvals and permissions still apply.'));
+  $('relay-review').replaceChildren(el('div',{class:'connection-identity'},reviewMark(info,`relay:${info.connectionId}`),el('div',{class:'app-title'},el('strong',{},info.name),identityLine(info))),connectionReview(info,`relay:${info.connectionId}`),
+    el('small',{},'This server can request work while the website is closed. Your local approvals and permissions still apply.'),connectionDetails(info));
   $('relay-review').hidden=false; $('relay-submit').textContent='Approve connection'; $('relay-decline').hidden=false;
 }
 function openRelay() {
@@ -732,7 +732,7 @@ function commandPicker(container, granted, consent) {
   if (!state.commands.length) container.append(el('p', {class:'muted'}, 'No commands configured.'));
   update();
 }
-function openCommandAccess(pair) { clearErrors(); accessPairID = pair.id; $('command-access-context').textContent = `${pair.name} · ${pair.origin}`; commandPicker($('command-access-list'), pair.actions ?? {}, $('access-command-consent')); $('command-access-dialog').showModal(); }
+function openCommandAccess(pair) { clearErrors(); accessPairID = pair.id; $('command-access-context').textContent = `${pair.name} · ${siteName(pair.origin)}`; commandPicker($('command-access-list'), pair.actions ?? {}, $('access-command-consent')); $('command-access-dialog').showModal(); }
 $('close-command-access').onclick = () => $('command-access-dialog').close();
 $('command-access-form').onsubmit = action(async event => {
   event.preventDefault(); const grants = selectedCommands($('command-access-list'));
@@ -1069,13 +1069,13 @@ function initPairingRequest() {
       stop();clearTimeout(expires);history.replaceState(null,'','#apps');notify('App connected.','success');return;
     }
     if (incomingPairing || event.data.type !== 'wdc:pairing-request' || !validWebsite(event.origin)) return;
-    const {appId,name,appUser,logoURL,requestedPermissions} = event.data;
+    const {appId,name,appUser,logoURL,requestedPermissions,userLabel} = event.data;
     if (![appId,name,appUser].every(value => typeof value === 'string' && value.trim()) || appId.length > 100 || name.length > 100 || appUser.length > 200) return;
     incomingPairing = {requestId,opener,origin:event.origin,appId,name,appUser,registered:()=>{registered=true;},cancel:()=>{delivered=true;opener.postMessage({type:'wdc:pairing-rejected',requestId},event.origin);stop();clearTimeout(expires);}};clearInterval(timer);
     const item={id:requestId,name,origin:event.origin,loading:true,expiresAt:Date.now()+300000};connectionLoads.set(requestId,item);render();
     const register=async()=>{
       item.loading=true;item.error=undefined;render();
-      try{await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser,logoURL,requestedPermissions})});registered=true;connectionLoads.delete(requestId);await refresh();}
+      try{await api('/pairing-requests',{method:'POST',body:JSON.stringify({id:requestId,origin:event.origin,appId,name,appUser,logoURL,requestedPermissions,userLabel})});registered=true;connectionLoads.delete(requestId);await refresh();}
       catch(error){if(connectionLoads.get(requestId)!==item)return;item.loading=false;item.error=error.message;item.retry=register;render();}
     };
     void register();
@@ -1093,12 +1093,18 @@ function initPairingRequest() {
   window.addEventListener('pagehide',() => {if(registered && !delivered) void api(`/pairing-requests/${requestId}/decision`,{method:'POST',keepalive:true,body:JSON.stringify({approve:false})}).catch(()=>{});},{once:true});
 }
 function validWebsite(origin) {try{const url=new URL(origin);return url.origin===origin&&(url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname));}catch{return false;}}
+// Websites show as their host. The full address and the app's own account ID stay in Connection details.
+function siteName(address) {try{const url=new URL(address);return url.host+(url.pathname==='/'?'':url.pathname);}catch{return address??'';}}
+// The account label is optional and set by the website, for example the user's name or email.
+function identityLine(item) {return el('small',{},siteName(item.origin),item.userLabel?el('span',{class:'connection-account'},` · ${item.userLabel}`):null);}
+function detailRows(item) {return [['Website',item.origin],...(item.userLabel?[['Account',item.userLabel]]:[]),['Account ID',item.appUser],['App ID',item.appId]];}
+function connectionDetails(item) {return el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},...detailRows(item).flatMap(([label,value])=>[el('dt',{},label),el('dd',{},value)])));}
 const reviewDrafts=new Map(), logoBlobs=new Map();
 function appMark(id) {
   const mark=el('span',{class:'app-mark','aria-hidden':'true'},icon('app'));
   if(id) {
     if(!logoBlobs.has(id))logoBlobs.set(id,controlFetch(`/logos/${id}`).then(response=>response.blob()).then(blob=>URL.createObjectURL(blob)).catch(()=>{logoBlobs.delete(id);return null;}));
-    void logoBlobs.get(id).then(url=>{if(url)mark.replaceChildren(el('img',{src:url,alt:''}));});
+    void logoBlobs.get(id).then(url=>{if(url){mark.classList.add('has-logo');mark.replaceChildren(el('img',{src:url,alt:''}));}});
   }
   return mark;
 }
@@ -1561,7 +1567,7 @@ function renderConnectionRequests() {
     if(cached?.signature===signature)return cached.node;
     const ready=!request.loading&&!request.error&&!request.submitted && !!request.name;
     const title=request.name??'New connection';
-    const heading=el('div',{class:'connection-request-heading'},ready?reviewMark(request,request.id):appMark(request.logoId??reviewDrafts.get(request.id)?.logoId),el('div',{class:'connection-request-identity'},el('h3',{},title),el('small',{},request.origin)));
+    const heading=el('div',{class:'connection-request-heading'},ready?reviewMark(request,request.id):appMark(request.logoId??reviewDrafts.get(request.id)?.logoId),el('div',{class:'connection-request-identity'},el('h3',{},title),identityLine(request)));
     const card=el('article',{class:`connection-request${ready?'':' connection-pending'}`,'data-key':request.id,tabindex:'-1','aria-label':`${title} connection request`},heading);
     connectionViews.set(request.id,{signature,node:card,name:request.name});
     if(!ready){
@@ -1570,7 +1576,7 @@ function renderConnectionRequests() {
       if(request.error){card.append(el('div',{class:'connection-request-actions'},button('Dismiss',()=>dismissConnection(request)),request.expired?null:button('Try again',()=>request.input?inspectConnection(connectionLoads.get(request.id)):request.retry())));}
       return card;
     }
-    const details=el('details',{class:'connection-details'},disclosure('Connection details'),el('dl',{},el('dt',{},'Account ID'),el('dd',{},request.appUser),el('dt',{},'App ID'),el('dd',{},request.appId)));
+    const details=connectionDetails(request);
     card.append(connectionReview(request,request.id));
     if(request.input)card.append(el('p',{class:'connection-server-note'},'This app can send requests even when its website is closed.'));
     card.append(el('div',{class:'connection-request-footer'},details,el('div',{class:'actions'},button('Decline',()=>declineConnection(request)),button('Connect',()=>approveConnection(request),'primary'))));
@@ -1626,7 +1632,7 @@ function openConnectionDetails(pair) {
   const dialog = makeDialog('connection-details-dialog',`Connection details · ${pair.name}`);
   dialog.append(el('div',{class:'dialog-body'},
     el('div',{class:'job-details'},el('dl',{},...[
-      ['Website',pair.origin],['App ID',pair.appId],['Account ID',pair.appUser],['Connected',new Date(pair.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})]
+      ...detailRows(pair),['Connected',new Date(pair.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})]
     ].flatMap(([label,value])=>[el('dt',{},label),el('dd',{},value)])))),
     el('div',{class:'dialog-actions'},button('Done',()=>dialog.close(),'primary')));
   dialog.showModal();

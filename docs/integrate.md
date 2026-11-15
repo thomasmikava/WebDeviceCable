@@ -76,6 +76,7 @@ $('connect').onclick = async () => {
     if (!connection) {
       ({ connection } = await BridgeClient.requestPairing({ ...account, name: 'Your app',
         logoURL: new URL('/logo.png', location.origin).href,
+        userLabel: signedInUser.email, // Optional: shown to the user in WebDeviceCable.
         requestedPermissions: { automaticApprovals: true, files: true } }));
       await store.save(connection).catch(showError); // Memory still works for this visit.
     }

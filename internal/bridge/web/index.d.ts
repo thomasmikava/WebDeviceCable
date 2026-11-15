@@ -266,6 +266,8 @@ export interface ConnectionReviewOptions {
         automaticApprovals?: boolean;
         files?: boolean;
     };
+    /** How your app names the signed-in user, such as their name or email. WDC shows it beside your website; it is never used for access. Older WDC versions ignore it. */
+    userLabel?: string;
 }
 export interface PairingOptions extends ConnectionReviewOptions {
     appId: string;

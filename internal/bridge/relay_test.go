@@ -79,7 +79,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 		t.Fatalf("project credential missing: %v", e)
 	}
 	key = project.APIKey
-	status, b = request("POST", "/relay/v1/enrollments", map[string]any{"appUser": "admin-1", "logoURL": "https://kings.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true, "files": true}}, "")
+	status, b = request("POST", "/relay/v1/enrollments", map[string]any{"appUser": "admin-1", "logoURL": "https://kings.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true, "files": true}, "userLabel": "Admin One"}, "")
 	if status != 201 {
 		t.Fatalf("enroll %d %s", status, b)
 	}
@@ -88,7 +88,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 		t.Fatal(e)
 	}
 	inspect := object(t, f.rawReq("POST", "/api/relay/inspect", f.origin, "", "", map[string]string{"url": remote.URL, "code": enrollment.Code}, true), 200)
-	if inspect["logoURL"] != "https://kings.example/logo.svg" || inspect["requestedPermissions"].(map[string]any)["automaticApprovals"] != true {
+	if inspect["logoURL"] != "https://kings.example/logo.svg" || inspect["requestedPermissions"].(map[string]any)["automaticApprovals"] != true || inspect["userLabel"] != "Admin One" {
 		t.Fatal("relay suggestions lost", inspect)
 	}
 	tampered := map[string]any{}
@@ -129,7 +129,7 @@ func TestOutboundRelayUsesExistingSecureDispatcher(t *testing.T) {
 	if caps.Pairing.Automatic || !caps.Pairing.Files || caps.Pairing.LogoID != logoID {
 		t.Fatal("owner override was not honored", caps.Pairing)
 	}
-	if caps.Pairing.AppUser != "admin-1" || caps.Pairing.Relay != nil || caps.Pairing.Transport != "relay" {
+	if caps.Pairing.AppUser != "admin-1" || caps.Pairing.UserLabel != "Admin One" || caps.Pairing.Relay != nil || caps.Pairing.Transport != "relay" {
 		t.Fatalf("invalid/redaction: %s", b)
 	}
 	if status, _ = rpc("GET", "/v2/capabilities", "", "", "admin-2"); status != 403 {

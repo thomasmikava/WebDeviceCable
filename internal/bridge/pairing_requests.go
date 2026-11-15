@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ type invitationInput struct {
 	Name                       string            `json:"name"`
 	Origin                     string            `json:"origin"`
 	AppUser                    string            `json:"appUser"`
+	UserLabel                  string            `json:"userLabel,omitempty"`
 	Files                      bool              `json:"files"`
 	Automatic                  bool              `json:"automatic"`
 	Mode                       string            `json:"mode"`
@@ -33,7 +35,7 @@ func (a *App) createInvitation(in invitationInput, origin string) (map[string]an
 			in.Mode = "commands"
 		}
 	}
-	p := Pairing{LogoID: in.LogoID, ClientPublicKey: in.PublicKey, ID: secret(), AppID: in.AppID, Name: in.Name, Origin: in.Origin, AppUser: in.AppUser, Automatic: in.Automatic, Files: in.Files, Mode: in.Mode, DeviceID: a.state.DeviceID, CreatedAt: a.now()}
+	p := Pairing{LogoID: in.LogoID, ClientPublicKey: in.PublicKey, ID: secret(), AppID: in.AppID, Name: in.Name, Origin: in.Origin, AppUser: in.AppUser, UserLabel: in.UserLabel, Automatic: in.Automatic, Files: in.Files, Mode: in.Mode, DeviceID: a.state.DeviceID, CreatedAt: a.now()}
 	if len(in.Actions) > 0 && !in.CommandPermissionsAccepted {
 		return nil, fail(400, "command_consent_required", "Command access must be explicitly accepted with OS account permissions.")
 	}
@@ -63,6 +65,14 @@ func (a *App) createInvitation(in invitationInput, origin string) (map[string]an
 	}
 	a.notifyConnections()
 	return map[string]any{"invitation": a.invitationBundle(token, origin, p, expires), "expiresAt": expires, "pairing": publicPairing(&p)}, nil
+}
+
+// optionsError keeps a bad account label apart from a bad logo, so apps can tell which to fix.
+func optionsError(err error) error {
+	if errors.Is(err, onboarding.ErrUserLabel) {
+		return fail(400, "invalid_user_label", err.Error())
+	}
+	return fail(400, "invalid_logo", err.Error())
 }
 
 type pairingRequest struct {
@@ -121,7 +131,7 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 			return fail(400, "invalid_pairing", err.Error())
 		}
 		if err := in.Options.Validate(in.Origin); err != nil {
-			return fail(400, "invalid_logo", err.Error())
+			return optionsError(err)
 		}
 		a.pendingPairingRequests()
 		if existing := a.pairingRequests[in.ID]; existing != nil {
@@ -186,7 +196,7 @@ func (a *App) pairingRequestRoutes(mux *http.ServeMux, control func(func(http.Re
 			if err := a.checkLogo(logoID); err != nil {
 				return err
 			}
-			result, err := a.createInvitation(invitationInput{LogoID: logoID, Automatic: automatic, Files: files, PublicKey: request.PublicKey, AppID: request.AppID, Name: request.Name, AppUser: request.AppUser, Origin: request.Origin}, origin)
+			result, err := a.createInvitation(invitationInput{LogoID: logoID, Automatic: automatic, Files: files, PublicKey: request.PublicKey, AppID: request.AppID, Name: request.Name, AppUser: request.AppUser, UserLabel: request.UserLabel, Origin: request.Origin}, origin)
 			if err != nil {
 				return err
 			}

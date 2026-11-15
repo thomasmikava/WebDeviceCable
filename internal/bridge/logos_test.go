@@ -23,10 +23,10 @@ func TestConnectionReviewPermissionsLogoAndPersistence(t *testing.T) {
 	}
 	for _, automatic := range []bool{true, false} {
 		id := secret()
-		input := map[string]any{"id": id, "appId": "review", "name": "Review app", "appUser": "alice", "origin": "https://review.example", "logoURL": "https://review.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}}
+		input := map[string]any{"id": id, "appId": "review", "name": "Review app", "appUser": "alice", "origin": "https://review.example", "logoURL": "https://review.example/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "userLabel": "Alice Example"}
 		object(t, f.req("POST", "/api/pairing-requests", f.origin, "", "", input, true), 201)
 		pending := object(t, f.req("GET", "/api/state", f.origin, "", "", nil, true), 200)["pairingRequests"].([]any)
-		if pending[0].(map[string]any)["logoURL"] != input["logoURL"] || len(f.a.state.Invitations) != 0 {
+		if pending[0].(map[string]any)["logoURL"] != input["logoURL"] || pending[0].(map[string]any)["userLabel"] != "Alice Example" || len(f.a.state.Invitations) != 0 {
 			t.Fatal("review lost suggestions or granted access early")
 		}
 		input["requestedPermissions"] = map[string]bool{"automaticApprovals": false}
@@ -36,7 +36,7 @@ func TestConnectionReviewPermissionsLogoAndPersistence(t *testing.T) {
 		request := object(t, f.req("GET", path, f.origin, "", "", nil, true), 200)
 		claim := object(t, f.req("POST", "/v2/pairings/claim", "https://review.example", request["invitation"].(string), "", map[string]string{"appId": "review", "appUser": "alice"}, false), 201)
 		pair := claim["pairing"].(map[string]any)
-		if pair["automatic"] != automatic || pair["logoId"] != logoID || pair["mode"] != "restricted" {
+		if pair["automatic"] != automatic || pair["logoId"] != logoID || pair["mode"] != "restricted" || pair["userLabel"] != "Alice Example" {
 			t.Fatal(pair)
 		}
 		pairID := pair["id"].(string)
@@ -52,7 +52,7 @@ func TestConnectionReviewPermissionsLogoAndPersistence(t *testing.T) {
 			t.Fatal(err)
 		}
 		var persisted State
-		if json.Unmarshal(raw, &persisted) != nil || persisted.Pairings[pairID].LogoID != logoID || persisted.Pairings[pairID].Automatic != automatic {
+		if json.Unmarshal(raw, &persisted) != nil || persisted.Pairings[pairID].LogoID != logoID || persisted.Pairings[pairID].Automatic != automatic || persisted.Pairings[pairID].UserLabel != "Alice Example" {
 			t.Fatal("review choices were not saved")
 		}
 	}
@@ -61,6 +61,35 @@ func TestConnectionReviewPermissionsLogoAndPersistence(t *testing.T) {
 	if response.Code != 200 || response.Header().Get("Content-Type") != "image/svg+xml" || !bytes.Equal(response.Body.Bytes(), svg) {
 		t.Fatal("cached logo changed")
 	}
+}
+
+func TestUserLabelIsOptionalAndOneLineOfText(t *testing.T) {
+	f := setup(t)
+	request := func(label any) map[string]any {
+		input := map[string]any{"id": secret(), "appId": "review", "name": "Review app", "appUser": "alice", "origin": "https://review.example"}
+		if label != nil {
+			input["userLabel"] = label
+		}
+		return input
+	}
+	// No label: the request and the pairing carry none.
+	input := request(nil)
+	object(t, f.req("POST", "/api/pairing-requests", f.origin, "", "", input, true), 201)
+	path := "/api/pairing-requests/" + input["id"].(string)
+	object(t, f.req("POST", path+"/decision", f.origin, "", "", map[string]any{"approve": true}, true), 200)
+	invitation := object(t, f.req("GET", path, f.origin, "", "", nil, true), 200)["invitation"].(string)
+	pair := object(t, f.req("POST", "/v2/pairings/claim", "https://review.example", invitation, "", map[string]string{"appId": "review", "appUser": "alice"}, false), 201)["pairing"].(map[string]any)
+	if _, ok := pair["userLabel"]; ok {
+		t.Fatal("a missing label must stay missing", pair)
+	}
+	for _, bad := range []any{"   ", "two\nlines", "tab\there", "\u202eevil", strings.Repeat("é", 201), 42} {
+		response := f.req("POST", "/api/pairing-requests", f.origin, "", "", request(bad), true)
+		if response.Code != 400 || bad != 42 && !strings.Contains(response.Body.String(), "invalid_user_label") {
+			t.Fatalf("label %q: %d %s", bad, response.Code, response.Body)
+		}
+	}
+	object(t, f.req("POST", "/api/pairing-requests", f.origin, "", "", request(strings.Repeat("é", 200)), true), 201)
+	object(t, f.req("POST", "/api/pairing-requests", f.origin, "", "", request("Jane Doe · jane@example.com"), true), 201)
 }
 
 func TestLogoValidationAndFetchBoundaries(t *testing.T) {

@@ -383,7 +383,7 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 	object(t, f.rawReq("POST", "/api/launch-intents", "", f.a.adminKey, "", map[string]string{"uri": uri}, false), 409)
 	ephemeral, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nonce := secret()
-	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "logoURL": "https://website.example:8443/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
+	payload, _ := json.Marshal(map[string]any{"requestId": requestID, "origin": origin, "publicKey": publicKey(key), "nonce": nonce, "timestamp": f.now.UnixMilli(), "appId": "website", "name": "Website", "appUser": "alice", "logoURL": "https://website.example:8443/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "userLabel": "alice@website.example", "ephemeralKey": b64.EncodeToString(ephemeral.PublicKey().Bytes())})
 	signed, _ := signBytes(key, payload)
 	response := f.rawReq("POST", "/v2/connect", origin, "", "", signed, false)
 	object(t, response, 200)
@@ -404,6 +404,9 @@ func TestLaunchRequiresInstalledIntentSignatureAndConsent(t *testing.T) {
 		}
 		if inv.Pairing.ClientPublicKey != publicKey(key) {
 			t.Fatal("invitation not bound to requesting key")
+		}
+		if inv.Pairing.UserLabel != "alice@website.example" {
+			t.Fatal("signed account label lost")
 		}
 	}
 	if _, err := ParseLaunchURI(uri + "&command=sh"); err == nil {

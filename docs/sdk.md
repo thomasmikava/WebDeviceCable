@@ -13,9 +13,12 @@ Start with [Integrate WDC](integrate.md) for the complete browser setup. `Connec
 const { connection } = await BridgeClient.requestPairing({
   appId: 'writer.example', name: 'Writer', appUser: signedInUser.id,
   logoURL: 'https://writer.example/logo.png',
+  userLabel: signedInUser.email,
   requestedPermissions: { automaticApprovals: true, files: true },
 });
 ```
+
+`userLabel` is optional: how your app names the signed-in user, such as their name or email. WDC shows it next to your website so the user can tell accounts apart. It is one line of text, at most 200 characters, and is never used for access; `appUser` stays the account identity. Leave it out and WDC shows nothing in its place.
 
 Logo and approval suggestions use [connection review](connection-review.md); the new optional file suggestion requires the [file-permission candidate](file-permissions.md). Automatic approvals start off, even when requested by the app; the owner must enable them and confirm before Connect. The logo appears as app identity; replacement, upload and removal are available in the connected app’s settings. Omitting `automaticApprovals` retains Ask each time. Existing pairings are unchanged.
 
