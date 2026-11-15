@@ -235,7 +235,7 @@ export class SecureTransport {
 }
 
 /** Signed launch rendezvous. The invitation itself is encrypted to an ephemeral key. */
-export async function launchRequest(endpoint:string, origin:string, keys:{privateKey:CryptoKey;publicKey:string}, details:{requestId:string;appId:string;name:string;appUser:string;logoURL?:string;requestedPermissions?:{automaticApprovals?:boolean;files?:boolean}}, pinned?:RunnerIdentity):Promise<{identity:RunnerIdentity;status:string;invitation:string}> {
+export async function launchRequest(endpoint:string, origin:string, keys:{privateKey:CryptoKey;publicKey:string}, details:{requestId:string;appId:string;name:string;appUser:string;logoURL?:string;requestedPermissions?:{automaticApprovals?:boolean;files?:boolean};userLabel?:string}, pinned?:RunnerIdentity):Promise<{identity:RunnerIdentity;status:string;invitation:string}> {
   endpoint=localURL(endpoint);checkOrigin(origin);
   try {
   const ephemeral=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},false,['deriveBits']);
@@ -244,6 +244,7 @@ export async function launchRequest(endpoint:string, origin:string, keys:{privat
   const bytes=encode.encode(JSON.stringify(request)), signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys.privateKey,bytes);
   const response=await fetch(endpoint+'/v2/connect',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(5000),headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({payload:base64url(bytes),signature:base64url(new Uint8Array(signature))})});
   if(!response.ok) {
+    if(response.status===400&&details.userLabel)throw new BridgeError('user_label_unsupported','This WDC desktop does not show account labels.',400);
     if(response.status===400&&(details.logoURL||details.requestedPermissions))throw new BridgeSecurityError('The requested connection settings could not be verified. Update WDC desktop to 0.2.1 or later and try again. No unsigned approval was accepted.');
     throw new BridgeError('launch_required','Open WebDeviceCable to continue.',response.status);
   }

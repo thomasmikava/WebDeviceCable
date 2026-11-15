@@ -88,6 +88,12 @@ export interface PermissionStatus {files:boolean;automaticApprovals:boolean;tool
 export interface ConnectionReviewOptions {
   logoURL?: string;
   requestedPermissions?: { automaticApprovals?: boolean; files?:boolean };
+  /** How your app names the signed-in user, such as their name or email. WDC shows it beside your website; it is never used for access. Older WDC versions ignore it. */
+  userLabel?: string;
+}
+// One line of visible text, at most 200 characters. Bidirectional overrides could reorder the website name shown beside it.
+function validUserLabel(label: unknown): label is string {
+  return typeof label === 'string' && label.trim() !== '' && [...label].length <= 200 && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(label);
 }
 export interface PairingOptions extends ConnectionReviewOptions {
   appId: string; name: string; appUser: string; baseURL?: string; timeoutMs?: number; launchInstalled?: boolean;
@@ -99,7 +105,8 @@ export function connectionReviewOptions(options: ConnectionReviewOptions, origin
     if (typeof options.logoURL !== 'string' || options.logoURL.length > 2048 || url.username || url.password || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(url.hostname) && (!origin || url.origin === origin)))) throw new BridgeError('invalid_logo', 'Supply a logo HTTPS URL, or the app’s loopback HTTP URL.', 400);
   }
   if (options.requestedPermissions !== undefined && (typeof options.requestedPermissions !== 'object' || options.requestedPermissions === null || Array.isArray(options.requestedPermissions) || Object.entries(options.requestedPermissions).some(([key,value]) => !['automaticApprovals','files'].includes(key) || value !== undefined && typeof value !== 'boolean'))) throw new BridgeError('invalid_permissions', 'automaticApprovals and files must be booleans.', 400);
-  return {...(options.logoURL ? {logoURL:options.logoURL} : {}), ...(options.requestedPermissions ? {requestedPermissions:{...options.requestedPermissions}} : {})};
+  if (options.userLabel !== undefined && options.userLabel !== '' && !validUserLabel(options.userLabel)) throw new BridgeError('invalid_user_label', 'userLabel must be one line of visible text, at most 200 characters.', 400);
+  return {...(options.logoURL ? {logoURL:options.logoURL} : {}), ...(options.requestedPermissions ? {requestedPermissions:{...options.requestedPermissions}} : {}), ...(options.userLabel ? {userLabel:options.userLabel} : {})};
 }
 export interface ClientOptions { minimumRoutingVersion?: number; baseURL?: string; connection: ConnectionKeys; origin?: string; groups?: ActionGroups; account?: {appId: string; appUser: string} }
 export interface BridgeTransport {
@@ -281,10 +288,18 @@ export class BridgeClient {
     const cancel=doc.createElement('button');cancel.textContent='Cancel';cancel.style.cssText='display:block;margin-top:28px';cancel.onclick=()=>popup.close();doc.body.append(heading,status,link,cancel);
     const keys=await createSigningKeys();link.href='webdevicecable://connect?'+new URLSearchParams({requestId,origin,publicKey:keys.publicKey});link.click();
     let pinned: import('./secure.js').RunnerIdentity|undefined;const deadline=Date.now()+timeout;
+    let review=connectionReviewOptions(options,origin);
     try {
       while(Date.now()<deadline&&!popup.closed){
         try {
-          const result=await launchRequest(endpoint,origin,keys,{requestId,appId:options.appId,name:options.name,appUser:options.appUser,...connectionReviewOptions(options,origin)},pinned);pinned=result.identity;
+          let result;
+          try {result=await launchRequest(endpoint,origin,keys,{requestId,appId:options.appId,name:options.name,appUser:options.appUser,...review},pinned);}
+          catch(error){
+            // Desktops before 0.2.7 reject the unknown field. The label is only shown to the owner, so connect without it.
+            if(!(error instanceof BridgeError&&error.code==='user_label_unsupported'))throw error;
+            const {userLabel:_,...rest}=review;review=rest;continue;
+          }
+          pinned=result.identity;
           status.textContent='Waiting for your approval in WebDeviceCable…';
           if(result.status==='rejected')throw new BridgeError('pairing_declined','Connection declined in WebDeviceCable.',403,{category:'permission'});
           if(result.status==='approved')return await BridgeClient.pairWithKeys({invitation:result.invitation,appId:options.appId,appUser:options.appUser,origin,baseURL:endpoint},keys);

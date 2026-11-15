@@ -17,6 +17,10 @@ async function json(response) {
         throw new BridgeError(body.error?.code ?? 'http_error', body.error?.message ?? 'Bridge request failed.', response.status, body.error);
     return body;
 }
+// One line of visible text, at most 200 characters. Bidirectional overrides could reorder the website name shown beside it.
+function validUserLabel(label) {
+    return typeof label === 'string' && label.trim() !== '' && [...label].length <= 200 && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(label);
+}
 export function connectionReviewOptions(options, origin) {
     if (options.logoURL !== undefined) {
         let url;
@@ -31,7 +35,9 @@ export function connectionReviewOptions(options, origin) {
     }
     if (options.requestedPermissions !== undefined && (typeof options.requestedPermissions !== 'object' || options.requestedPermissions === null || Array.isArray(options.requestedPermissions) || Object.entries(options.requestedPermissions).some(([key, value]) => !['automaticApprovals', 'files'].includes(key) || value !== undefined && typeof value !== 'boolean')))
         throw new BridgeError('invalid_permissions', 'automaticApprovals and files must be booleans.', 400);
-    return { ...(options.logoURL ? { logoURL: options.logoURL } : {}), ...(options.requestedPermissions ? { requestedPermissions: { ...options.requestedPermissions } } : {}) };
+    if (options.userLabel !== undefined && options.userLabel !== '' && !validUserLabel(options.userLabel))
+        throw new BridgeError('invalid_user_label', 'userLabel must be one line of visible text, at most 200 characters.', 400);
+    return { ...(options.logoURL ? { logoURL: options.logoURL } : {}), ...(options.requestedPermissions ? { requestedPermissions: { ...options.requestedPermissions } } : {}), ...(options.userLabel ? { userLabel: options.userLabel } : {}) };
 }
 export class BridgeJobError extends BridgeError {
     job;
@@ -319,10 +325,22 @@ export class BridgeClient {
         link.click();
         let pinned;
         const deadline = Date.now() + timeout;
+        let review = connectionReviewOptions(options, origin);
         try {
             while (Date.now() < deadline && !popup.closed) {
                 try {
-                    const result = await launchRequest(endpoint, origin, keys, { requestId, appId: options.appId, name: options.name, appUser: options.appUser, ...connectionReviewOptions(options, origin) }, pinned);
+                    let result;
+                    try {
+                        result = await launchRequest(endpoint, origin, keys, { requestId, appId: options.appId, name: options.name, appUser: options.appUser, ...review }, pinned);
+                    }
+                    catch (error) {
+                        // Desktops before 0.2.7 reject the unknown field. The label is only shown to the owner, so connect without it.
+                        if (!(error instanceof BridgeError && error.code === 'user_label_unsupported'))
+                            throw error;
+                        const { userLabel: _, ...rest } = review;
+                        review = rest;
+                        continue;
+                    }
                     pinned = result.identity;
                     status.textContent = 'Waiting for your approval in WebDeviceCable…';
                     if (result.status === 'rejected')

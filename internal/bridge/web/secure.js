@@ -398,6 +398,8 @@ export async function launchRequest(endpoint, origin, keys, details, pinned) {
         const bytes = encode.encode(JSON.stringify(request)), signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, bytes);
         const response = await fetch(endpoint + '/v2/connect', { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ payload: base64url(bytes), signature: base64url(new Uint8Array(signature)) }) });
         if (!response.ok) {
+            if (response.status === 400 && details.userLabel)
+                throw new BridgeError('user_label_unsupported', 'This WDC desktop does not show account labels.', 400);
             if (response.status === 400 && (details.logoURL || details.requestedPermissions))
                 throw new BridgeSecurityError('The requested connection settings could not be verified. Update WDC desktop to 0.2.1 or later and try again. No unsigned approval was accepted.');
             throw new BridgeError('launch_required', 'Open WebDeviceCable to continue.', response.status);

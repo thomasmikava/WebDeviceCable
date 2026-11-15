@@ -122,20 +122,24 @@ export class RelayClient extends BridgeClient {
     static enroll(options) {
         const suggestions = connectionReviewOptions(options);
         return (async () => {
-            if (options.logoURL || options.requestedPermissions) {
-                let capability;
+            if (options.logoURL || options.requestedPermissions || suggestions.userLabel) {
+                let capability = {};
                 try {
                     capability = await relayRequest(options, '/relay/v1/capabilities');
                 }
                 catch (error) {
-                    if (error instanceof BridgeError && error.status === 404)
+                    if (!(error instanceof BridgeError && error.status === 404))
+                        throw error;
+                    if (options.logoURL || options.requestedPermissions)
                         throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
-                    throw error;
                 }
                 if (options.requestedPermissions?.files && capability.filePermissionsVersion !== 1)
                     throw new BridgeError('relay_update_required', 'Update the WDC relay to review file access.', 409);
-                if (capability.connectionReviewVersion !== 1)
+                if ((options.logoURL || options.requestedPermissions) && capability.connectionReviewVersion !== 1)
                     throw new BridgeError('relay_update_required', 'Update the WDC relay to 0.2.1 or later to review connection settings.', 409);
+                // Relays before 0.2.7 reject the label. It is only shown to the desktop owner, so enroll without it.
+                if (capability.userLabelVersion !== 1)
+                    delete suggestions.userLabel;
             }
             return relayRequest(options, '/relay/v1/enrollments', { method: 'POST', body: JSON.stringify({ appUser: options.appUser, ...suggestions }) });
         })();

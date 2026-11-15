@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/thomasmikava/WebDeviceCable/internal/onboarding"
 )
 
 const LeaseTTL = 12 * time.Second
@@ -69,6 +71,7 @@ type Pairing struct {
 	Name                string              `json:"name"`
 	Origin              string              `json:"origin"`
 	AppUser             string              `json:"appUser"`
+	UserLabel           string              `json:"userLabel,omitempty"`
 	DeviceID            string              `json:"deviceId"`
 	ClientPublicKey     string              `json:"clientPublicKey,omitempty"`
 	CredentialHash      string              `json:"credentialHash,omitempty"`
@@ -280,6 +283,9 @@ func exactOrigin(raw string) bool {
 func validatePairing(p Pairing) error {
 	if len(p.AppID) < 1 || len(p.AppID) > 100 || len(p.Name) < 1 || len(p.Name) > 100 || len(p.AppUser) < 1 || len(p.AppUser) > 200 {
 		return errors.New("appId, name and appUser are required (100/100/200 character limits)")
+	}
+	if !onboarding.ValidUserLabel(p.UserLabel) {
+		return onboarding.ErrUserLabel
 	}
 	if !exactOrigin(p.Origin) {
 		return errors.New("origin must be an exact HTTPS origin or loopback HTTP origin, without a path")

@@ -673,7 +673,9 @@ details.route-editor > .text-button { margin: 0; min-height: 0; padding: 0; }
 .provider-mark.small > .icon { width:15px; height:15px; }
 
 /* Connection review keeps the app's requested settings visible before approval. */
-.app-mark img{width:100%;height:100%;object-fit:contain;border-radius:10px}
+/* A logo fills its tile as sent: scaled to fit, with no tile colour or inset around it. */
+.app-mark.has-logo{position:relative;background:none}
+.app-mark.has-logo>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 .connection-review{display:grid;gap:14px;padding:20px 0 0}
 .connection-review>.check-line{padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius-panel);background:var(--surface-raised)}
 .connection-review>.muted{font-size: var(--font-meta);line-height:var(--leading-body);margin:0}
@@ -742,7 +744,6 @@ details.route-editor > .text-button { margin: 0; min-height: 0; padding: 0; }
 .connect-option > .chevron { width:16px; height:16px; margin:0; color:var(--muted); transform:rotate(-90deg); }
 .connection-program.attention, .unconfigured .choice-value { color:var(--warning); }
 .connection-program.attention { border-color:var(--warning); }
-.connection-account { white-space:nowrap; }
 .notification-hint { margin-bottom:24px; border:1px solid var(--border); border-radius:var(--radius-card); padding:16px 20px; background:var(--surface); }
 .notification-hint p { margin:0 0 12px; font-size: var(--font-label); line-height:1.7; color:var(--muted); }
 .notification-hint .actions { margin:0; flex-wrap:wrap; }

@@ -11,12 +11,14 @@ Both transports accept the same optional suggestions when starting a new pairing
 ```js
 await BridgeClient.requestPairing({
   appId: 'rorido', name: 'Rorido', appUser: signedInUser.id,
+  userLabel: signedInUser.name,
   logoURL: new URL('/pwa-192x192.png', location.origin).href,
   requestedPermissions: { automaticApprovals: true },
 });
 
 await RelayClient.enroll({
   baseURL, apiKey, appUser: String(user.id),
+  userLabel: user.email,
   logoURL: 'https://admin.example.com/logo.svg',
   requestedPermissions: { automaticApprovals: true },
 });
@@ -26,11 +28,19 @@ Suggestions appear on the authenticated desktop connection review. `automaticApp
 
 The signed installed-app rendezvous binds suggestions to the initial request; the popup fallback carries the same fields from its verified opener origin. Relay enrollment stores suggestions with its expiring ticket. Desktop relay approval re-inspects and compares the entire displayed identity and suggestions. Changed terms require another review. No suggestions change an existing pairing or bypass local approval.
 
+## Account label
+
+`userLabel` (0.2.7) is how the app names the signed-in user, such as their name or email. WDC shows it after the website on the review and on the connected app card, for example `writer.example · Alice Example`. The account ID (`appUser`) is shown only under **Connection details**. Without a label, WDC shows just the website. The label is one line of visible text, at most 200 characters, with no control or bidirectional-override characters. It is saved with the connection when the user approves it, and connecting again saves the current label. It is display text only: authorization, claims and signed requests use `appUser`.
+
+Websites show as their host (`writer.example`); the full origin is under **Connection details**.
+
+Older desktops drop the label: the panel popup ignores the field, and the SDK retries the installed-app request without it when a runner before 0.2.7 rejects it. `RelayClient.enroll` sends it only to relays that advertise `userLabelVersion:1`.
+
 ## Logos and owner changes
 
 WDC fetches the proposed logo while showing the authenticated review. It sends no account identifiers, WDC credentials or browser cookies to the image host. Images are cached in the private desktop data directory. The panel displays authenticated cached bytes through local object URLs, rather than hot-linking the external server.
 
-Pairing shows the app’s logo as identity, with no logo-editing controls or image-loading messages. If its logo cannot load, WDC quietly uses the placeholder. After connecting, **More options → Edit app** shows an editable display name, the current logo, an **Upload image** button and an image URL field with **Preview**. **Remove logo** clears the preview. **Save changes** applies the name and logo together to this connection; **Cancel** discards both. Saving stays disabled until the name or logo changes, and while an image is loading or a changed URL still needs previewing. Closing the dialog cancels image loading and discards the draft. Removal persists until the owner explicitly chooses another image. The application cannot replace an owner's chosen logo through execution requests. Display names are owner-only aliases: the original app name, account, pairing ID, permissions and active work are preserved, and the alias is omitted from app-facing responses. An empty `displayName` in the owner PATCH API restores the app-supplied name.
+Pairing shows the app’s logo as identity, with no logo-editing controls or image-loading messages. A logo fills its tile, scaled to fit without cropping, with no tile colour or inset around it; the image is shown exactly as sent. If its logo cannot load, WDC quietly uses the placeholder. After connecting, **More options → Edit app** shows an editable display name, the current logo, an **Upload image** button and an image URL field with **Preview**. **Remove logo** clears the preview. **Save changes** applies the name and logo together to this connection; **Cancel** discards both. Saving stays disabled until the name or logo changes, and while an image is loading or a changed URL still needs previewing. Closing the dialog cancels image loading and discards the draft. Removal persists until the owner explicitly chooses another image. The application cannot replace an owner's chosen logo through execution requests. Display names are owner-only aliases: the original app name, account, pairing ID, permissions and active work are preserved, and the alias is omitted from app-facing responses. An empty `displayName` in the owner PATCH API restores the app-supplied name.
 
 Supported formats: PNG, JPEG, GIF and a static SVG subset, maximum 256 KiB. Raster dimensions are at most 2048 × 2048. SVG excludes scripts, event attributes, CSS, external references and embedded documents. Remote fetching times out after five seconds, denies redirects/proxies and non-public addresses, and allows development loopback images only from the application's exact origin. Use the final image URL. Logo upload has its own bounded owner endpoint; ordinary logical request and tool budgets are unchanged.
 

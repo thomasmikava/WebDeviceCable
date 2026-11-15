@@ -131,3 +131,16 @@ test('relay feature gates reject new input schemas and operation reporting befor
   assert.equal(client.executions.size,0);assert.equal(seen.some(path=>['/v2/admission','/v2/jobs','/v2/tool-calls/poll'].includes(path)),false);
  }finally{await client.close();globalThis.fetch=saved;}
 });
+
+test('relay enrollment sends the account label only to relays that accept it',async()=>{
+ const saved=globalThis.fetch;let capabilities;const seen=[];
+ globalThis.fetch=async(url,init)=>{if(url.endsWith('/capabilities'))return capabilities?Response.json(capabilities):Response.json({error:{code:'not_found'}},{status:404});seen.push(JSON.parse(init.body));return Response.json({code:'a'.repeat(64)});};
+ const options={baseURL:'https://relay.example',apiKey:'fixture-key',appUser:'alice',userLabel:'Alice Example'};
+ try{
+  capabilities={connectionReviewVersion:1,userLabelVersion:1};await RelayClient.enroll(options);
+  capabilities={connectionReviewVersion:1};await RelayClient.enroll(options);
+  capabilities=undefined;await RelayClient.enroll(options);
+  assert.deepEqual(seen,[{appUser:'alice',userLabel:'Alice Example'},{appUser:'alice'},{appUser:'alice'}]);
+  assert.throws(()=>RelayClient.enroll({...options,userLabel:'two\nlines'}),error=>error.code==='invalid_user_label');
+ }finally{globalThis.fetch=saved;}
+});

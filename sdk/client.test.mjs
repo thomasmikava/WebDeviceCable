@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BridgeClient, BridgeError, BridgeSecurityError } from '../internal/bridge/web/index.js';
+import { launchRequest } from '../internal/bridge/web/secure.js';
 
 // Independent WebCrypto peer. The HTTP E2E suite also tests this SDK against Go.
 const encode = new TextEncoder(), decode = new TextDecoder();
@@ -306,11 +307,11 @@ test('interactive pairing only accepts its own popup, endpoint, nonce and explic
  globalThis.window={location:{origin:peer.origin},open(url){popupURL=url;return popup},addEventListener(type,fn){if(type==='message')listeners.add(fn)},removeEventListener(type,fn){listeners.delete(fn)}};
  const emit=event=>{for(const fn of listeners)fn(event)};
  try{
-  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',logoURL:peer.origin+'/logo.png',requestedPermissions:{automaticApprovals:true}});
+  const pending=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',logoURL:peer.origin+'/logo.png',requestedPermissions:{automaticApprovals:true},userLabel:'Alice Example'});
   const requestId=new URLSearchParams(new URL(popupURL).hash.slice(1)).get('connect-request');
   const event={source:popup,origin:peer.identity.endpoint,data:{requestId,type:'wdc:pairing-ready',connectionReviewVersion:1}};
   emit({...event,source:{}});emit({...event,origin:'https://evil.example'});emit({...event,data:{...event.data,requestId:'bad'}});assert.equal(posted,undefined);
-  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');assert.equal(posted.data.logoURL,peer.origin+'/logo.png');assert.deepEqual(posted.data.requestedPermissions,{automaticApprovals:true});
+  emit(event);assert.equal(posted.origin,peer.identity.endpoint);assert.equal(posted.data.appId,'writer');assert.equal(posted.data.appUser,'alice');assert.equal(posted.data.logoURL,peer.origin+'/logo.png');assert.deepEqual(posted.data.requestedPermissions,{automaticApprovals:true});assert.equal(posted.data.userLabel,'Alice Example');
   emit({...event,data:{requestId,type:'wdc:pairing-approved',invitation:peer.invitation}});
   assert.equal((await pending).pairing.appId,'writer');assert.equal(listeners.size,0);assert.equal(posted.data.type,'wdc:pairing-connected');
   const rejected=BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice'});
@@ -503,4 +504,16 @@ test('file permission and text context APIs reject older desktops before transfe
   await assert.rejects(client.requestPermissions({files:true}),e=>e.code==='desktop_update_required');
   assert.equal(peer.calls.some(c=>['/v2/inputs','/v2/contexts','/v2/permissions'].includes(c.request.path)),false);
  }finally{await client?.close();restore();}
+});
+
+test('an account label is one line of text, and a desktop without label support is told apart from a missing launch',async()=>{
+ for(const userLabel of ['   ','two\nlines','\u202eevil','é'.repeat(201),42])await assert.rejects(BridgeClient.requestPairing({appId:'writer',name:'Writer',appUser:'alice',userLabel}),error=>error.code==='invalid_user_label');
+ const saved=globalThis.fetch;globalThis.fetch=async()=>new Response('{}',{status:400});
+ const keys=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+ const signing={privateKey:keys.privateKey,publicKey:b64(new Uint8Array(65))};
+ const details={requestId:hex(),appId:'writer',name:'Writer',appUser:'alice'};
+ try{
+  await assert.rejects(launchRequest('http://127.0.0.1:47321','https://writer.example',signing,{...details,userLabel:'Alice'}),error=>error.code==='user_label_unsupported');
+  await assert.rejects(launchRequest('http://127.0.0.1:47321','https://writer.example',signing,details),error=>error.code==='launch_required');
+ }finally{globalThis.fetch=saved;}
 });

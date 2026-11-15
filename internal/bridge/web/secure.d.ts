@@ -84,6 +84,7 @@ export declare function launchRequest(endpoint: string, origin: string, keys: {
         automaticApprovals?: boolean;
         files?: boolean;
     };
+    userLabel?: string;
 }, pinned?: RunnerIdentity): Promise<{
     identity: RunnerIdentity;
     status: string;

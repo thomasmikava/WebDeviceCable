@@ -119,7 +119,7 @@ func inspectRelay(ctx context.Context, in relayInput) (relayInfo, error) {
 		return info, fail(400, "invalid_relay", "The relay returned an invalid project identity.")
 	}
 	if err := info.Options.Validate(info.Origin); err != nil {
-		return info, fail(400, "invalid_logo", err.Error())
+		return info, optionsError(err)
 	}
 	return info, nil
 }
@@ -210,7 +210,7 @@ func (a *App) relayRoutes(mux *http.ServeMux, control func(func(http.ResponseWri
 		if len(a.pairingRequests) >= 32 {
 			return fail(429, "pairing_limit", "Too many connection requests. Try again shortly.")
 		}
-		result, e := a.createInvitation(invitationInput{LogoID: in.LogoID, Automatic: automatic, Files: files, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser}, origin)
+		result, e := a.createInvitation(invitationInput{LogoID: in.LogoID, Automatic: automatic, Files: files, AppID: info.AppID, Name: info.Name, Origin: info.Origin, AppUser: info.AppUser, UserLabel: info.UserLabel}, origin)
 		if e != nil {
 			return e
 		}

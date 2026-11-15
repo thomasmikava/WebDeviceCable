@@ -156,8 +156,11 @@ func TestConnectionSuggestionsRequireReviewCapableDesktop(t *testing.T) {
 		s.Handler().ServeHTTP(w, r)
 		return w.Code, w.Body.Bytes()
 	}
-	status, body := request("/relay/v1/enrollments", project.APIKey, map[string]any{"appUser": "alice", "logoURL": project.Project.Origin + "/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}})
+	status, body := request("/relay/v1/enrollments", project.APIKey, map[string]any{"appUser": "alice", "logoURL": project.Project.Origin + "/logo.svg", "requestedPermissions": map[string]bool{"automaticApprovals": true}, "userLabel": "Alice Example"})
 	if status != 201 {
+		t.Fatal(status, string(body))
+	}
+	if status, body := request("/relay/v1/enrollments", project.APIKey, map[string]any{"appUser": "alice", "userLabel": "two\nlines"}); status != 400 || !bytes.Contains(body, []byte("invalid_user_label")) {
 		t.Fatal(status, string(body))
 	}
 	var enrollment struct{ Code string }
@@ -175,7 +178,7 @@ func TestConnectionSuggestionsRequireReviewCapableDesktop(t *testing.T) {
 	}
 	// An unsupported desktop must neither consume the code nor change its suggestions.
 	status, body = request("/connector/v1/inspect", "", map[string]string{"code": enrollment.Code})
-	if status != 200 || !bytes.Contains(body, []byte(`"automaticApprovals":true`)) || !bytes.Contains(body, []byte("/logo.svg")) {
+	if status != 200 || !bytes.Contains(body, []byte(`"automaticApprovals":true`)) || !bytes.Contains(body, []byte("/logo.svg")) || !bytes.Contains(body, []byte(`"userLabel":"Alice Example"`)) {
 		t.Fatal(status, string(body))
 	}
 	inv.ConnectionReviewVersion = 1

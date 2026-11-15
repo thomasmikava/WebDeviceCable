@@ -150,7 +150,7 @@ func (a *App) launchRoutes(mux *http.ServeMux, wrap func(func(http.ResponseWrite
 			return fail(400, "invalid_pairing", err.Error())
 		}
 		if err := in.Options.Validate(in.Origin); err != nil {
-			return fail(400, "invalid_logo", err.Error())
+			return optionsError(err)
 		}
 		request := a.pairingRequests[in.ID]
 		if request == nil {
