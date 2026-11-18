@@ -4,7 +4,7 @@
 //   node scripts/site-build.mjs [--out dist/site] [--release-json FILE] [--site-url URL]
 //
 // Download links are baked into the HTML from the latest stable GitHub release, so the
-// published pages never call the GitHub API. Colours, logo and icons are copied from the
+// published pages never call the GitHub API. Colours, logos and icons are copied from the
 // desktop control panel (internal/bridge/web) so the site cannot drift from the app.
 // Every check runs before anything is written; on any failure the script exits 1 and
 // leaves the output folder untouched.
@@ -38,14 +38,14 @@ const ALT_ARCH = {
 };
 
 // Files copied from the control panel. An explicit list: nothing else from the app ships.
-const PANEL_FILES = ['theme.css', 'logo.svg', 'favicon.svg', 'icons.svg'];
+const PANEL_FILES = ['theme.css', 'logo.svg', 'favicon.svg', 'icons.svg', 'chatgpt-icon.png', 'claude-icon.png'];
 const SITE_ASSETS = ['site.css', 'site.js', 'og.png'];
 
 const PAGES = [
   {
     src: 'index.html',
-    title: 'WebDeviceCable: let websites use the AI tools on your computer',
-    description: 'WebDeviceCable lets websites you approve use the AI tools already on your computer, such as Codex and Claude Code, with no new account or API key. Your sign-in stays on your computer.',
+    title: 'WebDeviceCable: let websites use the AI tools on your device',
+    description: 'WebDeviceCable lets websites you approve use the AI tools already on your device, such as Codex and Claude Code, with no new account or API key. Your sign-in stays on your device.',
   },
   {
     src: 'developers/index.html',

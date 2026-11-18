@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { BuildError, TARGETS, buildSite, extractSdkExample, highlightJs, validateRelease } from './site-build.mjs';
+import { replaceBlock } from './site-art.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturePath = path.join(root, 'scripts/testdata/site-release.json');
@@ -143,6 +144,7 @@ test('the build ships exactly the expected files', () => {
   const { files } = build();
   assert.deepEqual([...files.keys()].sort(), [
     '404.html',
+    'assets/chatgpt-icon.png', 'assets/claude-icon.png',
     'assets/favicon.svg', 'assets/icons.svg', 'assets/logo.svg', 'assets/og.png',
     'assets/site.css', 'assets/site.js', 'assets/theme.css', 'assets/tokens.css',
     'developers/index.html', 'index.html', 'robots.txt', 'sitemap.xml',
@@ -235,32 +237,42 @@ test('the developers page presents both ways to connect', () => {
   assert.match(html, /docs\/relay\.md">Server and relay guide</);
 });
 
-test('the relay diagram shows the user’s computer reaching out to the relay', () => {
+test('the relay illustration shows the user’s device reaching out to the relay', () => {
   const html = text(build().files, 'developers/index.html');
-  const diagram = html.match(/<div class="diagram diagram-3"[\s\S]*?node-user[^<]*<\/span>\s*<\/div>/)?.[0];
-  assert.ok(diagram, 'relay diagram missing');
-  // Boxes left to right: your server, your relay, user's computer. Between the relay and the
-  // computer: the computer asks (to-left), the relay hands over the request (to-right), and
-  // the answer goes back (to-left).
-  const lanes = (part) => [...part.matchAll(/<span class="lane (to-\w+)"><span class="lane-label">([^<]+)</g)].map((m) => `${m[1]} ${m[2]}`);
-  const [server, relay] = diagram.split('<span class="node r-relay">');
-  assert.deepEqual(lanes(server), ['to-right request', 'to-left answer']);
-  assert.deepEqual(lanes(relay), ['to-left asks for work', 'to-right request', 'to-left answer']);
-  assert.doesNotMatch(html, /class="flow"/);
+  const art = html.match(/<div class="art art-flow-relay"[\s\S]*?<p class="diagram-note">/)?.[0];
+  assert.ok(art, 'relay illustration missing');
+  // Top to bottom: your server, your relay, then the user's device with WebDeviceCable.
+  const order = ['"art-node art-server"', '"art-node art-relay"', '"art-computer"', '"art-wdc"'].map((name) => art.indexOf(`class=${name}`));
+  assert.ok(order.every((at, i) => at > (order[i - 1] ?? -1)), `boxes out of order: ${order}`);
+  // The line between the relay and the device carries the device's ask for work.
+  const [, below] = art.split('class="art-node art-relay"');
+  assert.match(below.split('class="art-computer"')[0], /art-ring art-poll/);
+  assert.doesNotMatch(html, /class="(diagram|lane|node)[" ]/);
 });
 
-test('every diagram line carries a message dot with its own animation', () => {
-  const html = text(build().files, 'developers/index.html');
+test('every illustration dot and box has its own animation', () => {
   const css = readFileSync(path.join(root, 'site/site.css'), 'utf8');
-  const lanes = [...html.matchAll(/<span class="lane to-\w+">[\s\S]*?<\/span><\/span>/g)].map((m) => m[0]);
-  assert.equal(lanes.length, 7);
-  for (const lane of lanes) {
-    const name = /<span class="dot[^"]* ([br]-\w+)"><\/span>/.exec(lane)?.[1];
-    assert.ok(name, `no dot in ${lane}`);
-    assert.match(css, new RegExp(`@keyframes ${name} \\{`));
-    assert.match(css, new RegExp(`\\.${name} \\{ animation-name: ${name}; \\}`));
+  const { files } = build();
+  let count = 0;
+  for (const page of ['index.html', 'developers/index.html']) {
+    const html = text(files, page);
+    for (const [art, flow] of html.matchAll(/class="(?:preview )?art art-flow-(\w+)"[\s\S]*?(?=<\/figure>|<p class="diagram-note">|<ul class="option-points">)/g)) {
+      const roles = [...art.matchAll(/class="art-(?:dot|program|node)[^"]* art-([\w-]+)"|class="art-(wdc|ask|done)"/g)].map((m) => m[1] ?? m[2]);
+      assert.ok(roles.length >= 9, `${page} ${flow}: ${roles}`);
+      for (const role of roles) {
+        assert.match(css, new RegExp(`\\.art-flow-${flow} \\.art-${role} \\{ animation: art-${flow}-${role} \\d+s linear infinite; \\}`), `${page} ${flow} ${role}`);
+        assert.match(css, new RegExp(`@keyframes art-${flow}-${role} \\{`));
+        count++;
+      }
+    }
   }
-  assert.match(css, /\.dot \{ display: none;/, 'dots must stay hidden when motion is reduced');
+  assert.ok(count >= 30, `only ${count} animated parts`);
+  assert.match(css, /\.art-dot \{ display: none;/, 'dots must stay hidden when motion is reduced');
+});
+
+test('the illustration animations in site.css are up to date', () => {
+  const css = readFileSync(path.join(root, 'site/site.css'), 'utf8');
+  assert.equal(replaceBlock(css), css, 'run node scripts/site-art.mjs');
 });
 
 test('links work under a project subpath', () => {
@@ -302,7 +314,13 @@ test('pages load nothing from other sites', () => {
     const html = content.toString('utf8');
     assert.doesNotMatch(html, /<(?:script|img|iframe)[^>]+src="https?:/, name);
     assert.doesNotMatch(html, /<link[^>]+rel="(?:stylesheet|preload|icon)"[^>]+href="https?:/, name);
-    assert.doesNotMatch(html, /claude-icon|chatgpt-icon/, name);
+  }
+});
+
+test('the AI program logos are the ones the panel uses', () => {
+  const { files } = build();
+  for (const file of ['chatgpt-icon.png', 'claude-icon.png']) {
+    assert.ok(files.get(`assets/${file}`).equals(readFileSync(path.join(root, 'internal/bridge/web', file))), file);
   }
 });
 
