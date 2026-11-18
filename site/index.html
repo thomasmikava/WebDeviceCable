@@ -8,36 +8,46 @@
   <main id="main">
     <section class="hero wrap">
       <div class="hero-text">
-        <h1>Let websites use the AI tools on your computer.</h1>
-        <p class="lead">WebDeviceCable is a small free app. Websites you approve can use the AI plan you already have, so you need no new account and no API key. Your sign-in stays on your computer.</p>
+        <h1>Let websites use the AI tools on your device.</h1>
+        <p class="lead">WebDeviceCable is a small free app. Websites you approve can use the AI plan you already have, so you need no new account and no API key. Your sign-in stays on your device.</p>
         {{{cta_hero}}}
         <p class="from-site">Came here from a website? Install WebDeviceCable, then go back and click <strong>Connect to WebDeviceCable</strong>.</p>
       </div>
-      <figure class="preview hero-preview" aria-label="Example: the WebDeviceCable window when a website asks to connect">
-        <div class="window">
-          <div class="window-bar">
-            <span class="window-brand"><span class="brand-logo" aria-hidden="true"></span>WebDeviceCable</span>
+      <figure class="preview art art-flow-direct" role="img" aria-label="A website you approve sends an AI request through WebDeviceCable on your device. It runs in Codex or Claude Code, and the answer goes back to the website.">
+        <div class="art-site">
+          <div class="art-bar">
+            <span class="art-dots"><i></i><i></i><i></i></span>
+            <span class="art-url"><svg class="icon"><use href="{{asset icons.svg}}#lock"></use></svg>example.com</span>
           </div>
-          <p class="window-label accent">Connection requests</p>
-          <div class="card card-accent">
-            <div class="card-heading">
-              <span class="app-mark"><svg class="icon" aria-hidden="true"><use href="{{asset icons.svg}}#app"></use></svg></span>
-              <div>
-                <p class="card-title">Writer</p>
-                <p class="card-sub">https://example.com</p>
-              </div>
+          <div class="art-page">
+            <p class="art-page-title">My draft</p>
+            <span class="art-line"></span>
+            <span class="art-line"></span>
+            <span class="art-line"></span>
+            <span class="art-ask">Summarize with AI</span>
+          </div>
+        </div>
+
+        <div class="art-cable">
+          <span class="art-wire"><span class="art-dot art-send"></span><span class="art-dot art-answer art-reply"></span></span>
+        </div>
+
+        <div class="art-computer">
+          <p class="art-computer-label"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Your device</p>
+          <div class="art-wdc"><span class="brand-logo"></span>WebDeviceCable</div>
+          <div class="art-fork">
+            <svg viewBox="0 0 200 24" preserveAspectRatio="none"><path d="M100 0V12M50 12H150M50 12V24M150 12V24"/></svg>
+            <span class="art-branch art-branch-left"><span class="art-dot art-left-send"></span><span class="art-dot art-answer art-left-reply"></span></span>
+            <span class="art-branch art-branch-right"><span class="art-dot art-right-send"></span><span class="art-dot art-answer art-right-reply"></span></span>
+          </div>
+          <div class="art-programs">
+            <div class="art-program art-codex">
+              <span class="provider-mark"><img src="{{asset chatgpt-icon.png}}" alt="" width="25" height="25"></span>
+              <span><span class="art-program-name">Codex</span><span class="art-program-note">Your sign-in</span></span>
             </div>
-            <div class="check-line">
-              <span class="checkbox" aria-hidden="true"></span>
-              <div>
-                <p class="check-title">Approve requests automatically</p>
-                <p class="check-sub">Turn off to review each AI request before it runs.</p>
-              </div>
-            </div>
-            <p class="card-note">Connecting will not share your computer’s folders or give this app permission to run commands.</p>
-            <div class="card-footer">
-              <span class="card-sub">Connection details</span>
-              <span class="card-actions"><span class="button secondary">Decline</span><span class="button primary">Connect</span></span>
+            <div class="art-program art-claude">
+              <span class="provider-mark"><img src="{{asset claude-icon.png}}" alt="" width="25" height="25"></span>
+              <span><span class="art-program-name">Claude Code</span><span class="art-program-note">Your sign-in</span></span>
             </div>
           </div>
         </div>
@@ -49,23 +59,23 @@
       <ol class="steps">
         <li><span class="step-number" aria-hidden="true">1</span><p>Install WebDeviceCable. Sign in to Codex or Claude Code as you normally do.</p></li>
         <li><span class="step-number" aria-hidden="true">2</span><p>On a website that supports it, click <strong>Connect to WebDeviceCable</strong>.</p></li>
-        <li><span class="step-number" aria-hidden="true">3</span><p>Approve the website in WebDeviceCable. Its AI requests now run on your computer.</p></li>
+        <li><span class="step-number" aria-hidden="true">3</span><p>Approve the website in WebDeviceCable. Its AI requests now run on your device.</p></li>
       </ol>
     </section>
 
     <section class="section wrap" aria-labelledby="programs">
       <h2 id="programs">Works with the programs you already use</h2>
-      <p class="section-lead">WebDeviceCable is made for AI tools first. It can run other programs on your computer too, but only the ones you add.</p>
+      <p class="section-lead">WebDeviceCable is made for AI tools first. It can run other programs on your device too, but only the ones you add.</p>
       <ul class="programs">
         <li class="program">
-          <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>
+          <span class="provider-mark large" aria-hidden="true"><img src="{{asset chatgpt-icon.png}}" alt="" width="28" height="28"></span>
           <div>
             <p class="program-name">Codex</p>
             <p class="program-note">Built in. Uses your existing sign-in. Can also create and edit images.</p>
           </div>
         </li>
         <li class="program">
-          <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>
+          <span class="provider-mark large" aria-hidden="true"><img src="{{asset claude-icon.png}}" alt="" width="28" height="28"></span>
           <div>
             <p class="program-name">Claude Code</p>
             <p class="program-note">Built in. Uses your existing sign-in.</p>
@@ -75,7 +85,7 @@
           <span class="app-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#plus"></use></svg></span>
           <div>
             <p class="program-name">Your own programs</p>
-            <p class="program-note">Another AI tool, or any other program on your computer. You add it yourself in WebDeviceCable’s settings file, and a website can run it only if you allow it.</p>
+            <p class="program-note">Another AI tool, or any other program on your device. You add it yourself in WebDeviceCable’s settings file, and a website can run it only if you allow it.</p>
           </div>
         </li>
       </ul>
@@ -113,14 +123,14 @@
 
       <div class="feature">
         <div class="feature-text">
-          <h2>Your sign-in stays on your computer.</h2>
+          <h2>Your sign-in stays on your device.</h2>
           <p>WebDeviceCable uses the Codex or Claude Code you already have. It never reads or copies your login.</p>
         </div>
-        <figure class="preview" aria-label="Example: AI programs found on this computer">
+        <figure class="preview" aria-label="Example: AI programs found on this device">
           <div class="device-strip">
             <span class="device-label">On this device</span>
-            <span class="chip"><span class="chip-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>Claude Code <span class="ready">Ready</span></span>
-            <span class="chip"><span class="chip-mark" aria-hidden="true"><svg class="icon"><use href="{{asset icons.svg}}#terminal"></use></svg></span>Codex <span class="ready">Ready</span></span>
+            <span class="chip"><span class="provider-mark small" aria-hidden="true"><img src="{{asset claude-icon.png}}" alt="" width="17" height="17"></span>Claude Code <span class="ready">Ready</span></span>
+            <span class="chip"><span class="provider-mark small" aria-hidden="true"><img src="{{asset chatgpt-icon.png}}" alt="" width="17" height="17"></span>Codex <span class="ready">Ready</span></span>
           </div>
         </figure>
       </div>
@@ -149,7 +159,7 @@
 
     <section class="section wrap install" id="install" aria-labelledby="install-title">
       <h2 id="install-title">Install</h2>
-      <p class="notice">This is an early release. The installers are not signed by a publisher yet, so your computer will ask you to confirm.</p>
+      <p class="notice">This is an early release. The installers are not signed by a publisher yet, so your device will ask you to confirm.</p>
       <div class="install-grid">
         <div class="install-os" data-os-block="darwin">
           <h3>Mac</h3>

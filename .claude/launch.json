@@ -4,8 +4,21 @@
     {
       "name": "site",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview:site"],
+      "runtimeArgs": [
+        "run",
+        "preview:site"
+      ],
       "port": 4173
+    },
+    {
+      "name": "site-live",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "rm -rf dist/site-live && node scripts/site-build.mjs --out dist/site-live/WebDeviceCable && python3 -m http.server 4174 --bind 127.0.0.1 --directory dist/site-live"
+      ],
+      "port": 4174,
+      "url": "http://localhost:4174"
     }
   ]
 }

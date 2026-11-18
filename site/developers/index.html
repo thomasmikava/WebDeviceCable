@@ -20,14 +20,40 @@
         <article class="card option" id="browser" aria-labelledby="browser-title">
           <p class="option-tag">Option 1 · No server needed</p>
           <h3 id="browser-title">From your web page</h3>
-          <p class="option-what">Your page’s JavaScript talks straight to WebDeviceCable on the user’s computer.</p>
-          <div class="diagram" role="img" aria-label="Your web page sends a request to the user’s computer. The computer runs it and sends the answer back to your page.">
-            <span class="node b-page">Your web page</span>
-            <span class="link">
-              <span class="lane to-right"><span class="lane-label">request</span><span class="dot b-send"></span></span>
-              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer b-reply"></span></span>
-            </span>
-            <span class="node node-user b-pc">User’s computer</span>
+          <p class="option-what">Your page’s JavaScript talks straight to WebDeviceCable on the user’s device.</p>
+          <div class="art art-flow-direct" role="img" aria-label="Your web page, open in the user’s browser, sends a request straight to WebDeviceCable on the same device. It runs in Codex or Claude Code, and the answer goes back to your page.">
+            <div class="art-computer">
+              <p class="art-computer-label"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>User’s device</p>
+              <div class="art-site">
+                <div class="art-bar">
+                  <span class="art-dots"><i></i><i></i><i></i></span>
+                  <span class="art-url"><svg class="icon"><use href="{{asset icons.svg}}#lock"></use></svg>example.com</span>
+                </div>
+                <div class="art-page art-page-row">
+                  <p class="art-page-title">Your web page</p>
+                  <span class="art-ask">Ask AI</span>
+                </div>
+              </div>
+              <div class="art-cable">
+                <span class="art-wire"><span class="art-dot art-send"></span><span class="art-dot art-answer art-reply"></span></span>
+              </div>
+              <div class="art-wdc"><span class="brand-logo"></span>WebDeviceCable</div>
+              <div class="art-fork">
+                <svg viewBox="0 0 200 24" preserveAspectRatio="none"><path d="M100 0V12M50 12H150M50 12V24M150 12V24"/></svg>
+                <span class="art-branch art-branch-left"><span class="art-dot art-left-send"></span><span class="art-dot art-answer art-left-reply"></span></span>
+                <span class="art-branch art-branch-right"><span class="art-dot art-right-send"></span><span class="art-dot art-answer art-right-reply"></span></span>
+              </div>
+              <div class="art-programs">
+                <div class="art-program art-codex">
+                  <span class="provider-mark"><img src="{{asset chatgpt-icon.png}}" alt="" width="25" height="25"></span>
+                  <span><span class="art-program-name">Codex</span><span class="art-program-note">User’s sign-in</span></span>
+                </div>
+                <div class="art-program art-claude">
+                  <span class="provider-mark"><img src="{{asset claude-icon.png}}" alt="" width="25" height="25"></span>
+                  <span><span class="art-program-name">Claude Code</span><span class="art-program-note">User’s sign-in</span></span>
+                </div>
+              </div>
+            </div>
           </div>
           <ul class="option-points">
             <li>Nothing to host. Add one npm package to your front end.</li>
@@ -40,21 +66,36 @@
           <p class="option-tag">Option 2 · You run a small server</p>
           <h3 id="server-title">From your server</h3>
           <p class="option-what">Your backend sends requests through a <strong>relay</strong>: a small server you host that passes encrypted messages between your backend and WebDeviceCable.</p>
-          <div class="diagram diagram-3" role="img" aria-label="The user’s computer asks your relay for work. Your server sends a request to the relay, and the relay hands it to the computer. The computer runs it and sends the answer to the relay, which passes it back to your server.">
-            <span class="node r-server">Your server</span>
-            <span class="link">
-              <span class="lane to-right"><span class="lane-label">request</span><span class="dot r-send"></span></span>
-              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer r-reply"></span></span>
-            </span>
-            <span class="node r-relay">Your relay</span>
-            <span class="link">
-              <span class="lane to-left"><span class="lane-label">asks for work</span><span class="dot dot-ask r-ask"></span></span>
-              <span class="lane to-right"><span class="lane-label">request</span><span class="dot r-deliver"></span></span>
-              <span class="lane to-left"><span class="lane-label">answer</span><span class="dot dot-answer r-return"></span></span>
-            </span>
-            <span class="node node-user r-pc">User’s computer</span>
+          <div class="art art-flow-relay" role="img" aria-label="WebDeviceCable on the user’s device asks your relay for work. Your server sends a request to the relay, and the relay hands it to the device. It runs in Codex or Claude Code, and the answer goes back through the relay to your server.">
+            <div class="art-node art-server"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>Your server</div>
+            <div class="art-cable">
+              <span class="art-wire"><span class="art-dot art-send-1"></span><span class="art-dot art-answer art-reply-1"></span></span>
+            </div>
+            <div class="art-node art-relay"><svg class="icon" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3"/></svg><span>WebDeviceCable relay <span class="art-node-note">hosted by you</span></span></div>
+            <div class="art-cable">
+              <span class="art-wire"><span class="art-dot art-ring art-poll"></span><span class="art-dot art-send-2"></span><span class="art-dot art-answer art-reply-2"></span></span>
+            </div>
+            <div class="art-computer">
+              <p class="art-computer-label"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>User’s device</p>
+              <div class="art-wdc"><span class="brand-logo"></span>WebDeviceCable</div>
+              <div class="art-fork">
+                <svg viewBox="0 0 200 24" preserveAspectRatio="none"><path d="M100 0V12M50 12H150M50 12V24M150 12V24"/></svg>
+                <span class="art-branch art-branch-left"><span class="art-dot art-left-send"></span><span class="art-dot art-answer art-left-reply"></span></span>
+                <span class="art-branch art-branch-right"><span class="art-dot art-right-send"></span><span class="art-dot art-answer art-right-reply"></span></span>
+              </div>
+              <div class="art-programs">
+                <div class="art-program art-codex">
+                  <span class="provider-mark"><img src="{{asset chatgpt-icon.png}}" alt="" width="25" height="25"></span>
+                  <span><span class="art-program-name">Codex</span><span class="art-program-note">User’s sign-in</span></span>
+                </div>
+                <div class="art-program art-claude">
+                  <span class="provider-mark"><img src="{{asset claude-icon.png}}" alt="" width="25" height="25"></span>
+                  <span><span class="art-program-name">Claude Code</span><span class="art-program-note">User’s sign-in</span></span>
+                </div>
+              </div>
+            </div>
           </div>
-          <p class="diagram-note">The user’s computer reaches out to your relay to ask for work and to send back answers. The relay never connects to the user’s computer, so nothing there is opened to the internet.</p>
+          <p class="diagram-note">The grey ring is the user’s device asking your relay for work. The device also sends its answers to the relay. The relay never connects to the user’s device, so nothing there is opened to the internet.</p>
           <ul class="option-points">
             <li>Requests can run while your website is closed, for example from background jobs.</li>
             <li>You run the relay yourself, with Docker.</li>
@@ -70,7 +111,7 @@
       <h2 id="example">Examples</h2>
       <div class="example" id="example-browser">
         <h3>From your web page</h3>
-        <p class="section-lead">Call this when the user clicks your Connect button. WebDeviceCable asks them to approve your site, then runs the request on their computer.</p>
+        <p class="section-lead">Call this when the user clicks your Connect button. WebDeviceCable asks them to approve your site, then runs the request on their device.</p>
         <pre class="code"><code>{{{sdk_example}}}</code></pre>
       </div>
       <div class="example" id="example-server">
@@ -95,7 +136,7 @@
 
     <section class="section wrap closing" aria-labelledby="users">
       <h2 id="users">Your users install WebDeviceCable once.</h2>
-      <p class="section-lead">Send them to the home page. It picks the right download for their computer.</p>
+      <p class="section-lead">Send them to the home page. It picks the right download for their device.</p>
       <p><a class="button secondary large" href="{{home}}">Go to the download page</a></p>
     </section>
   </main>
