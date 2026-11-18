@@ -46,11 +46,18 @@ function deviceTrip(t, program) {
 }
 
 // A website talks straight to WebDeviceCable: the home page hero and the developers page's
-// "From your web page" option. 6s per trip; the first runs in Claude Code, the second in Codex.
+// "From your web page" option. 7.5s per trip; the first runs in Claude Code, the second in Codex.
+// The answer stays on the page until the next trip starts: the button stays green and, on the
+// home page, "Summarized" shows beside it.
 function directTrip(t, program) {
   const device = deviceTrip(t + 1.65, program);
   return {
-    boxes: [['ask', t + 0.3, t + 0.75, 'blue'], ...device.boxes, ['ask', t + 5.35, t + 5.85, 'green']],
+    boxes: [
+      ['ask', t + 0.3, t + 0.75, 'blue'],
+      ...device.boxes,
+      ['ask', t + 5.35, t + 7.35, 'green'],
+      ['done', t + 5.45, t + 7.35, 'green'],
+    ],
     dots: [
       ['send', { from: t + 0.8, to: t + 1.6, points: DOWN, ease: true }],
       ...device.dots,
@@ -83,9 +90,11 @@ function relayTrip(t, program) {
   };
 }
 
-// Boxes rest on their own background. `text` boxes also change their text colour.
+// Boxes rest on their own background. `text` boxes also change their text colour; `shown`
+// parts are hidden at rest and appear while their interval lasts.
 const BOXES = {
   ask: { rest: 'var(--surface-raised)', text: true },
+  done: { shown: true },
   wdc: { rest: 'var(--surface)' },
   claude: { rest: 'var(--surface)' },
   codex: { rest: 'var(--surface)' },
@@ -94,7 +103,7 @@ const BOXES = {
 };
 
 export const FLOWS = [
-  { name: 'direct', length: 12, trips: [directTrip(0, 'claude'), directTrip(6, 'codex')] },
+  { name: 'direct', length: 15, trips: [directTrip(0, 'claude'), directTrip(7.5, 'codex')] },
   { name: 'relay', length: 16, trips: [relayTrip(0, 'claude'), relayTrip(8, 'codex')] },
 ];
 
@@ -102,6 +111,7 @@ const pct = (t, length) => `${+(t / length * 100).toFixed(3)}%`;
 
 function boxStyle(role, state) {
   const box = BOXES[role];
+  if (box.shown) return `opacity: ${state ? 1 : 0};`;
   const look = state ? STATE[state] : { border: 'var(--border)', background: box.rest, text: 'var(--text)' };
   return `border-color: ${look.border}; background-color: ${look.background};${box.text ? ` color: ${look.text};` : ''}`;
 }

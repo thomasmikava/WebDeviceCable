@@ -257,7 +257,7 @@ test('every illustration dot and box has its own animation', () => {
   for (const page of ['index.html', 'developers/index.html']) {
     const html = text(files, page);
     for (const [art, flow] of html.matchAll(/class="(?:preview )?art art-flow-(\w+)"[\s\S]*?(?=<\/figure>|<p class="diagram-note">|<ul class="option-points">)/g)) {
-      const roles = [...art.matchAll(/class="art-(?:dot|program|node)[^"]* art-([\w-]+)"|class="art-(wdc|ask)"/g)].map((m) => m[1] ?? m[2]);
+      const roles = [...art.matchAll(/class="art-(?:dot|program|node)[^"]* art-([\w-]+)"|class="art-(wdc|ask|done)"/g)].map((m) => m[1] ?? m[2]);
       assert.ok(roles.length >= 9, `${page} ${flow}: ${roles}`);
       for (const role of roles) {
         assert.match(css, new RegExp(`\\.art-flow-${flow} \\.art-${role} \\{ animation: art-${flow}-${role} \\d+s linear infinite; \\}`), `${page} ${flow} ${role}`);
